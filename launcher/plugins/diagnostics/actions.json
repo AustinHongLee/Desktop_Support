@@ -1,0 +1,44 @@
+{
+  "actions": [
+    {
+      "id": "diagnostics.echo_context",
+      "title": "顯示目前 Context",
+      "category": "診斷",
+      "description": "透過 worker pipeline 顯示目前 launcher context。",
+      "icon": "info",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.diagnostics.echo_context",
+        "entry": "echo_context"
+      }
+    },
+    {
+      "id": "diagnostics.wait_cancel",
+      "title": "測試取消：等待 30 秒",
+      "category": "診斷",
+      "description": "用來測試工作紀錄視窗的取消按鈕。",
+      "icon": "timer",
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.diagnostics.echo_context",
+        "entry": "wait_30_seconds"
+      }
+    },
+    {
+      "id": "diagnostics.wait_timeout",
+      "title": "測試逾時：2 秒停止",
+      "category": "診斷",
+      "description": "用來測試 runner timeout，會啟動 30 秒工作並在 2 秒後停止。",
+      "icon": "timer",
+      "timeout_seconds": 2,
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.diagnostics.echo_context",
+        "entry": "wait_30_seconds"
+      }
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "actions": [
+    {
+      "id": "copy.selection",
+      "title": "複製選取項目",
+      "category": "剪貼簿",
+      "description": "依模式複製選取項目的完整路徑、檔名或不含副檔名檔名。",
+      "icon": "copy",
+      "accepts": {
+        "min_files": 1
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.copy_utils.copy_paths",
+        "entry": "copy_selection"
+      }
+    },
+    {
+      "id": "copy.folder_path",
+      "title": "複製目前資料夾",
+      "category": "剪貼簿",
+      "description": "將目前 context 的資料夾複製到剪貼簿。",
+      "icon": "folder",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.copy_utils.copy_paths",
+        "entry": "copy_folder_path"
+      }
+    },
+    {
+      "id": "copy.folder_listing",
+      "title": "複製資料夾清單",
+      "category": "剪貼簿",
+      "description": "複製目前資料夾內的項目或檔案清單，可選完整路徑、檔名或不含副檔名。",
+      "icon": "list",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.copy_utils.copy_paths",
+        "entry": "copy_folder_listing"
+      }
+    }
+  ]
+}

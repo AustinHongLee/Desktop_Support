@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<title>UI 強化視覺原型 — Dock / Palette / JobMonitor</title>
+<style>
+  /* ======================================================================
+     DESIGN TOKENS (Theme A — Graphite Light)
+  ====================================================================== */
+  :root {
+    /* Surface */
+    --bg-app: #f5f6f8;
+    --bg-surface: #ffffff;
+    --bg-surface-alt: #f0f2f5;
+    --bg-subtle: #e7eaee;
+
+    /* Text */
+    --text-primary: #0c1320;
+    --text-secondary: #3f4855;
+    --text-muted: #6b7280;
+    --text-inverse: #ffffff;
+
+    /* Border */
+    --border-subtle: #e3e6ea;
+    --border-default: #cbd0d6;
+    --border-strong: #9aa0a8;
+
+    /* Accent */
+    --accent-primary: #4f46e5;
+    --accent-primary-hover: #4338ca;
+    --accent-primary-soft: #e0e7ff;
+    --accent-primary-fg: #312e81;
+
+    /* Status */
+    --success-fg: #15803d;
+    --success-bg: #bbf7d0;
+    --success-border: #86efac;
+    --warning-fg: #b45309;
+    --warning-bg: #fde68a;
+    --warning-border: #fcd34d;
+    --danger-fg: #b91c1c;
+    --danger-bg: #fecaca;
+    --danger-border: #fca5a5;
+    --info-fg: #1e40af;
+    --info-bg: #dbeafe;
+
+    /* Shadow */
+    --shadow-sm: 0 1px 2px rgba(15, 23, 42, .06);
+    --shadow-md: 0 4px 12px rgba(15, 23, 42, .08);
+    --shadow-lg: 0 12px 32px rgba(15, 23, 42, .14);
+
+    /* Spacing */
+    --s1: 4px;  --s2: 8px;  --s3: 12px;
+    --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px;
+
+    /* Radius */
+    --r-sm: 4px;  --r-md: 6px;  --r-lg: 10px;  --r-full: 9999px;
+
+    /* Type */
+    --font-sans: "Segoe UI Variable Text", "Microsoft JhengHei UI", "Segoe UI", -apple-system, "Helvetica Neue", sans-serif;
+    --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, "SF Mono", monospace;
+  }
+
+  /* OLD theme tokens (for comparison panels) */
+  .old-theme {
+    --bg-app: #eef4f8;
+    --bg-surface: #ffffff;
+    --bg-surface-alt: #f7fafc;
+    --bg-subtle: #ecedef;
+    --text-primary: #102033;
+    --text-secondary: #4e6072;
+    --text-muted: #6b7280;
+    --border-subtle: #c8d4df;
+    --border-default: #b5c7d6;
+    --border-strong: #8399ad;
+    --accent-primary: #1f6feb;
+    --accent-primary-hover: #1b5fca;
+    --accent-primary-soft: #dbeafe;
+    --success-fg: #166534;
+    --success-bg: #e7f6ef;
+    --warning-fg: #8a4b11;
+    --warning-bg: #fff4df;
+    --danger-fg: #8a1f17;
+    --danger-bg: #ffe9e6;
+    --info-bg: #dbeafe;
+  }
+
+  /* ======================================================================
+     PAGE LAYOUT
+  ====================================================================== */
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: var(--font-sans);
+    background: #ecedef;
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .page {
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 32px 48px 96px;
+  }
+  header.page-head {
+    margin-bottom: 32px;
+  }
+  header.page-head h1 {
+    font-size: 28px; font-weight: 800; margin: 0 0 4px; letter-spacing: -0.02em;
+  }
+  header.page-head .sub {
+    color: var(--text-muted); font-size: 14px;
+  }
+  .nav-tabs {
+    display: flex; gap: 4px; margin-top: 24px;
+    border-bottom: 1px solid var(--border-default);
+    padding-bottom: 0;
+  }
+  .nav-tabs a {
+    padding: 10px 16px; font-size: 13px; color: var(--text-secondary);
+    text-decoration: none; border-bottom: 2px solid transparent;
+    margin-bottom: -1px; font-weight: 500;
+  }
+  .nav-tabs a:hover { color: var(--text-primary); background: rgba(0,0,0,.02); }
+
+  section {
+    margin-top: 56px;
+    padding-top: 8px;
+  }
+  section h2 {
+    font-size: 22px; font-weight: 800; margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  section h2 .num {
+    display: inline-block; width: 28px; height: 28px; border-radius: 50%;
+    background: var(--accent-primary); color: white; font-size: 14px; font-weight: 700;
+    text-align: center; line-height: 28px; margin-right: 12px; vertical-align: middle;
+  }
+  section h2 + p.hint {
+    color: var(--text-muted); margin: 0 0 24px; font-size: 14px;
+  }
+
+  .compare {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    align-items: stretch;
+  }
+  .compare > .col {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    padding: 20px;
+    box-shadow: var(--shadow-sm);
+    display: flex; flex-direction: column;
+  }
+  .compare > .col .title {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .compare > .col .title h3 {
+    margin: 0; font-size: 14px; font-weight: 600;
+    color: var(--text-secondary); text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .badge-old { background: #f3f4f6; color: #6b7280; padding: 3px 10px; border-radius: var(--r-full); font-size: 11px; font-weight: 600; }
+  .badge-new { background: var(--accent-primary-soft); color: var(--accent-primary-fg); padding: 3px 10px; border-radius: var(--r-full); font-size: 11px; font-weight: 600; }
+
+  .stage {
+    background: #d4d6da;
+    border-radius: var(--r-md);
+    padding: 28px;
+    flex-grow: 1;
+    display: flex; flex-direction: column; gap: 18px;
+    align-items: center; justify-content: center;
+  }
+  .stage.dark { background: #2c3038; }
+
+  /* ======================================================================
+     DOCK MOCKUP (qt widget approximation)
+  ====================================================================== */
+  .qt-dock {
+    background: var(--bg-app);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    border-radius: 6px;
+    box-shadow: var(--shadow-md);
+    display: flex; align-items: center;
+    padding: 4px 10px; gap: 6px;
+    height: 40px;
+    width: 100%;
+    max-width: 720px;
+  }
+  .qt-dock-new {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    padding: 4px 8px; gap: 4px;
+    height: 44px;
+    box-shadow: var(--shadow-md);
+  }
+
+  /* OLD button style (mimic current QSS) */
+  .qt-btn-old {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    padding: 0 8px;
+    height: 30px;
+    font-size: 13px;
+    font-weight: 400;
+    font-family: inherit;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 4px;
+    white-space: nowrap;
+  }
+  .qt-btn-old:hover {
+    background: #e5eef7;
+    border-color: var(--accent-primary);
+  }
+  .qt-btn-old.primary {
+    background: var(--accent-primary); color: white; border-color: var(--accent-primary); font-weight: 700;
+  }
+  .qt-label-old {
+    color: var(--text-primary); font-size: 13px; padding: 0 4px;
+  }
+  .qt-context-old {
+    color: var(--text-primary); font-size: 13px; padding: 0 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 240px;
+  }
+  .qt-tail-old {
+    background: var(--accent-primary); color: white; border-radius: 4px;
+    width: 130px; height: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* NEW button style */
+  .btn {
+    height: 26px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: inherit;
+    transition: background 120ms, border-color 120ms, color 120ms;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: var(--accent-primary);
+    color: var(--text-inverse);
+    border: 1px solid var(--accent-primary);
+    font-weight: 600;
+    box-shadow: var(--shadow-sm);
+  }
+  .btn-primary:hover { background: var(--accent-primary-hover); border-color: var(--accent-primary-hover); }
+  .btn-secondary {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+  }
+  .btn-secondary:hover { background: var(--bg-subtle); border-color: var(--border-strong); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid transparent;
+    padding: 0 8px;
+  }
+  .btn-ghost:hover { background: var(--bg-subtle); color: var(--text-primary); }
+  .btn-icon {
+    width: 26px; padding: 0;
+    justify-content: center;
+  }
+  .btn .kbd {
+    margin-left: 6px;
+    padding: 1px 6px;
+    font-size: 11px; font-weight: 500;
+    background: rgba(255,255,255,.18);
+    border-radius: 3px; font-family: var(--font-mono);
+  }
+  .btn-secondary .kbd, .btn-ghost .kbd {
+    background: var(--bg-subtle); color: var(--text-muted);
+  }
+  .btn .caret { font-size: 10px; opacity: .65; margin-left: 2px; }
+
+  /* Context chip */
+  .context-chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    height: 26px;
+    padding: 0 10px 0 8px;
+    background: var(--bg-surface-alt);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    font-size: 12px; color: var(--text-primary);
+    cursor: pointer;
+    max-width: 320px;
+  }
+  .context-chip .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--success-fg);
+    box-shadow: 0 0 0 2px var(--success-bg);
+    flex-shrink: 0;
+  }
+  .context-chip .src {
+    font-weight: 600; font-size: 11px;
+    color: var(--text-secondary);
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .context-chip .path {
+    color: var(--text-secondary);
+    font-family: var(--font-mono); font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .context-chip .caret { color: var(--text-muted); }
+
+  /* New tail */
+  .qt-tail-new {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md);
+    border-top: 2px solid var(--accent-primary);
+    width: 168px; height: 22px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 10px;
+    font-size: 11px; font-weight: 500;
+    box-shadow: var(--shadow-md);
+  }
+  .qt-tail-new .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--success-fg);
+  }
+  .qt-tail-new .label { color: var(--text-secondary); }
+  .qt-tail-new .kbd {
+    margin-left: auto;
+    padding: 0 4px; font-size: 10px;
+    background: var(--bg-subtle); border-radius: 2px; color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+  .qt-tail-new .jobs {
+    background: var(--info-bg); color: var(--info-fg);
+    padding: 1px 6px; font-size: 10px; font-weight: 700;
+    border-radius: var(--r-full);
+  }
+
+  .label-tag {
+    color: var(--text-muted); font-size: 11px;
+    margin-top: 8px; text-transform: uppercase; letter-spacing: 0.06em;
+    font-weight: 600;
+  }
+
+  /* ======================================================================
+     COMMAND PALETTE
+  ====================================================================== */
+  .qt-palette {
+    background: var(--bg-app);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    box-shadow: var(--shadow-lg);
+    width: 100%; max-width: 620px;
+    padding: 12px;
+    display: flex; flex-direction: column; gap: 10px;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .qt-palette input.search-old {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 9px 10px;
+    font-size: 13px; font-family: inherit;
+  }
+  .qt-palette input.search-old:focus { outline: 2px solid var(--accent-primary); }
+  .qt-palette .ctx-line-old {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 0 2px;
+  }
+  .qt-palette .list-old {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    padding: 4px;
+    height: 280px;
+    overflow: hidden;
+  }
+  .qt-palette .list-old .header-old {
+    padding: 8px;
+    color: #506070; font-size: 12px;
+  }
+  .qt-palette .list-old .item-old {
+    padding: 8px; font-size: 13px;
+    color: var(--text-primary);
+  }
+  .qt-palette .list-old .item-old.selected {
+    background: var(--accent-primary-soft);
+    border-radius: 3px;
+  }
+
+  /* NEW palette */
+  .qt-palette-new {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-lg);
+    width: 100%; max-width: 720px;
+    overflow: hidden;
+    color: var(--text-primary);
+    display: flex; flex-direction: column;
+  }
+  .palette-search {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex; align-items: center; gap: 12px;
+  }
+  .palette-search .icon {
+    color: var(--text-muted); font-size: 16px;
+  }
+  .palette-search input {
+    flex: 1;
+    border: none; outline: none;
+    font-size: 16px; font-family: inherit;
+    background: transparent;
+    color: var(--text-primary);
+  }
+  .palette-search input::placeholder { color: var(--text-muted); font-weight: 400; }
+  .palette-search .kbd {
+    padding: 3px 8px; background: var(--bg-subtle); color: var(--text-muted);
+    border: 1px solid var(--border-subtle); border-radius: var(--r-sm);
+    font-size: 11px; font-family: var(--font-mono); font-weight: 600;
+  }
+  .palette-ctx {
+    padding: 8px 16px;
+    background: var(--bg-surface-alt);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 11px; color: var(--text-secondary);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .palette-ctx .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--success-fg);
+  }
+  .palette-body {
+    display: grid;
+    grid-template-columns: 1fr 240px;
+    height: 320px;
+  }
+  .palette-list {
+    overflow-y: auto;
+    padding: 6px 0;
+    border-right: 1px solid var(--border-subtle);
+  }
+  .palette-group-header {
+    padding: 8px 16px 4px;
+    font-size: 10px; font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.08em;
+    background: var(--bg-surface-alt);
+    border-bottom: 1px solid var(--border-subtle);
+    margin-top: 4px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .palette-group-header .count {
+    background: var(--bg-subtle); color: var(--text-muted);
+    padding: 1px 6px; font-size: 10px; font-weight: 600;
+    border-radius: var(--r-full);
+  }
+  .palette-item {
+    padding: 7px 16px;
+    display: flex; align-items: center; gap: 10px;
+    cursor: pointer; border-left: 2px solid transparent;
+  }
+  .palette-item:hover { background: var(--bg-surface-alt); }
+  .palette-item.selected {
+    background: var(--accent-primary-soft);
+    border-left-color: var(--accent-primary);
+  }
+  .palette-item .icon {
+    width: 22px; height: 22px;
+    background: var(--bg-subtle);
+    border-radius: var(--r-sm);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; flex-shrink: 0;
+  }
+  .palette-item .title {
+    flex: 1; font-size: 13px; font-weight: 500;
+  }
+  .palette-item .cat-chip {
+    padding: 1px 7px;
+    background: var(--bg-subtle); color: var(--text-secondary);
+    font-size: 10px; font-weight: 600;
+    border-radius: var(--r-full);
+  }
+  .palette-item .cat-chip.pdf { background: #fee9e2; color: #9a3412; }
+  .palette-item .cat-chip.sys { background: #d8e8d8; color: #15803d; }
+  .palette-item .kbd {
+    padding: 1px 6px; background: var(--bg-subtle); color: var(--text-muted);
+    border: 1px solid var(--border-subtle); border-radius: 3px;
+    font-size: 10px; font-family: var(--font-mono);
+  }
+  .palette-preview {
+    padding: 16px;
+    background: var(--bg-surface-alt);
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .palette-preview h4 {
+    margin: 0; font-size: 14px; font-weight: 700;
+  }
+  .palette-preview .desc {
+    font-size: 12px; color: var(--text-secondary); line-height: 1.55;
+  }
+  .palette-preview .meta-line {
+    font-size: 11px; color: var(--text-muted);
+    display: flex; gap: 6px; align-items: center;
+  }
+  .palette-preview .meta-line .dot { width: 3px; height: 3px; background: var(--text-muted); border-radius: 50%; }
+  .palette-preview .actions {
+    margin-top: auto; padding-top: 12px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 11px; color: var(--text-muted);
+    display: flex; gap: 12px;
+  }
+  .palette-preview .actions .kbd {
+    padding: 1px 5px; background: var(--bg-surface); color: var(--text-secondary);
+    border: 1px solid var(--border-subtle); border-radius: 3px;
+    font-size: 10px; font-family: var(--font-mono);
+  }
+
+  /* ======================================================================
+     JOB MONITOR
+  ====================================================================== */
+  .qt-monitor {
+    background: var(--bg-app);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    box-shadow: var(--shadow-lg);
+    width: 100%; max-width: 720px;
+    padding: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+  }
+  .qt-monitor .header-row-old {
+    display: flex; align-items: center; gap: 8px;
+  }
+  .qt-monitor .status-old {
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 5px 10px; font-weight: 700;
+    background: var(--bg-surface-alt);
+  }
+  .qt-monitor .status-old.running {
+    background: var(--bg-subtle);
+  }
+  .qt-monitor .status-old.ok {
+    background: var(--success-bg); color: var(--success-fg); border-color: var(--success-fg);
+  }
+  .qt-monitor .status-old.err {
+    background: var(--danger-bg); color: var(--danger-fg); border-color: var(--danger-fg);
+  }
+  .qt-monitor .summary-old {
+    flex: 1; padding: 0 4px;
+  }
+  .qt-monitor .tab-bar-old {
+    display: flex; gap: 2px;
+    margin-top: 8px;
+  }
+  .qt-monitor .tab-bar-old .tab {
+    background: #dfe9f1;
+    border: 1px solid var(--border-subtle);
+    border-bottom: none;
+    padding: 7px 14px;
+    font-size: 12px;
+    border-top-left-radius: 4px; border-top-right-radius: 4px;
+  }
+  .qt-monitor .tab-bar-old .tab.selected {
+    background: var(--bg-surface); font-weight: 700;
+  }
+  .qt-monitor .tab-content-old {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: 0 0 4px 4px;
+    padding: 8px;
+    height: 220px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+
+  /* New monitor */
+  .monitor-new {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-lg);
+    width: 100%; max-width: 720px;
+    overflow: hidden;
+  }
+  .monitor-hero {
+    background: var(--bg-surface-alt);
+    padding: 16px 20px;
+    border-bottom: 4px solid var(--info-bg);
+    position: relative;
+  }
+  .monitor-hero.running {
+    border-bottom-color: var(--info-fg);
+    background: linear-gradient(180deg, #eef4ff 0%, var(--bg-surface-alt) 100%);
+  }
+  .monitor-hero.ok {
+    border-bottom-color: var(--success-fg);
+    background: linear-gradient(180deg, #ecfdf3 0%, var(--bg-surface-alt) 100%);
+  }
+  .monitor-hero.err {
+    border-bottom-color: var(--danger-fg);
+    background: linear-gradient(180deg, #fef2f2 0%, var(--bg-surface-alt) 100%);
+  }
+  .monitor-hero .top-line {
+    display: flex; align-items: center; gap: 12px;
+  }
+  .monitor-hero .icon {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .monitor-hero.running .icon {
+    background: var(--info-bg); color: var(--info-fg);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  .monitor-hero.ok .icon {
+    background: var(--success-bg); color: var(--success-fg);
+  }
+  .monitor-hero.err .icon {
+    background: var(--danger-bg); color: var(--danger-fg);
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.08); opacity: .8; }
+  }
+  .monitor-hero .title {
+    font-size: 16px; font-weight: 700; flex: 1;
+  }
+  .monitor-hero .timer {
+    font-family: var(--font-mono); font-size: 14px;
+    color: var(--text-secondary); font-weight: 600;
+  }
+  .monitor-hero .sub {
+    font-size: 12px; color: var(--text-secondary);
+    margin: 4px 0 12px 44px;
+  }
+  .monitor-progress {
+    height: 6px; background: var(--bg-subtle);
+    border-radius: var(--r-full);
+    overflow: hidden;
+    margin: 0 0 0 44px;
+  }
+  .monitor-progress .bar {
+    height: 100%; background: var(--info-fg);
+    width: 33%;
+    border-radius: var(--r-full);
+    transition: width 240ms;
+  }
+  .monitor-progress.indeterminate .bar {
+    width: 30%;
+    background: linear-gradient(90deg, var(--info-fg) 0%, #93c5fd 50%, var(--info-fg) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s linear infinite;
+  }
+  @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  .monitor-tabs {
+    display: flex; gap: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    padding: 0 20px;
+  }
+  .monitor-tab {
+    padding: 12px 16px;
+    font-size: 13px; font-weight: 500;
+    color: var(--text-secondary);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .monitor-tab:hover { color: var(--text-primary); }
+  .monitor-tab.active {
+    color: var(--accent-primary);
+    border-bottom-color: var(--accent-primary);
+    font-weight: 600;
+  }
+  .monitor-tab .badge {
+    padding: 0 6px; height: 16px;
+    border-radius: var(--r-full);
+    font-size: 10px; font-weight: 700;
+    display: inline-flex; align-items: center;
+    background: var(--bg-subtle); color: var(--text-muted);
+  }
+  .monitor-tab .badge.danger { background: var(--danger-bg); color: var(--danger-fg); }
+  .monitor-tab .badge.info { background: var(--info-bg); color: var(--info-fg); }
+  .monitor-log {
+    height: 200px;
+    padding: 8px 20px;
+    overflow-y: auto;
+    font-family: var(--font-mono); font-size: 12px;
+    line-height: 1.65;
+  }
+  .monitor-log .row {
+    display: grid;
+    grid-template-columns: 70px 56px 1fr;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid transparent;
+  }
+  .monitor-log .row:hover { background: var(--bg-surface-alt); }
+  .monitor-log .ts { color: var(--text-muted); }
+  .monitor-log .lvl {
+    text-align: center; padding: 1px 4px;
+    border-radius: 3px; font-size: 10px; font-weight: 700;
+    height: 16px; line-height: 14px;
+  }
+  .monitor-log .lvl.info { background: var(--info-bg); color: var(--info-fg); }
+  .monitor-log .lvl.warn { background: var(--warning-bg); color: var(--warning-fg); }
+  .monitor-log .lvl.err  { background: var(--danger-bg); color: var(--danger-fg); }
+  .monitor-log .lvl.art  { background: var(--success-bg); color: var(--success-fg); }
+  .monitor-log .msg { color: var(--text-primary); }
+  .monitor-actions {
+    border-top: 1px solid var(--border-subtle);
+    padding: 12px 20px;
+    display: flex; gap: 8px; align-items: center;
+    background: var(--bg-surface-alt);
+  }
+  .monitor-actions .spacer { flex: 1; }
+
+  /* ======================================================================
+     TOKEN SAMPLES
+  ====================================================================== */
+  .token-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+  }
+  .token-card {
+    background: var(--bg-surface); border: 1px solid var(--border-subtle);
+    border-radius: var(--r-md); padding: 14px;
+    box-shadow: var(--shadow-sm);
+  }
+  .swatch {
+    height: 44px; border-radius: var(--r-sm);
+    margin-bottom: 8px; border: 1px solid var(--border-subtle);
+  }
+  .token-card .name {
+    font-size: 11px; color: var(--text-muted);
+    font-family: var(--font-mono);
+  }
+  .token-card .val {
+    font-size: 12px; color: var(--text-primary);
+    font-family: var(--font-mono); font-weight: 600;
+  }
+
+  .type-row {
+    display: flex; align-items: baseline; gap: 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .type-row:last-child { border-bottom: none; }
+  .type-row .label {
+    width: 96px; font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-muted);
+  }
+  .type-row .sample { color: var(--text-primary); }
+
+  .button-grid {
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+  }
+
+  .chip-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 10px; border-radius: var(--r-full);
+    font-size: 11px; font-weight: 600;
+    border: 1px solid;
+  }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .chip.success { background: var(--success-bg); color: var(--success-fg); border-color: var(--success-border); }
+  .chip.success .dot { background: var(--success-fg); }
+  .chip.warning { background: var(--warning-bg); color: var(--warning-fg); border-color: var(--warning-border); }
+  .chip.warning .dot { background: var(--warning-fg); }
+  .chip.danger  { background: var(--danger-bg);  color: var(--danger-fg);  border-color: var(--danger-border); }
+  .chip.danger .dot  { background: var(--danger-fg); }
+  .chip.info    { background: var(--info-bg);    color: var(--info-fg);    border-color: #93c5fd; }
+  .chip.info .dot    { background: var(--info-fg); }
+  .chip.neutral { background: var(--bg-subtle); color: var(--text-secondary); border-color: var(--border-subtle); }
+  .chip.neutral .dot { background: var(--text-muted); }
+
+  /* Section spacing */
+  .section-divider {
+    height: 1px; background: var(--border-subtle); margin: 64px 0 0;
+  }
+
+  .vertical-dock {
+    width: 118px;
+    background: var(--bg-app);
+    border: 1px solid var(--border-default);
+    border-radius: 6px;
+    padding: 10px 6px;
+    display: flex; flex-direction: column; gap: 8px;
+    align-items: stretch;
+    height: 360px;
+  }
+  .vertical-dock-old .qt-btn-old {
+    width: 100%; height: 46px;
+    flex-direction: column; gap: 2px;
+    font-size: 11px;
+  }
+  .vertical-dock-new {
+    border-radius: var(--r-lg);
+    border-color: var(--border-subtle);
+    background: var(--bg-surface);
+    padding: 10px;
+    width: 132px;
+    box-shadow: var(--shadow-md);
+  }
+  .vertical-dock-new .v-context {
+    background: var(--bg-surface-alt);
+    border: 1px solid var(--border-subtle);
+    border-top: 2px solid var(--success-fg);
+    border-radius: var(--r-md);
+    padding: 8px;
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-secondary);
+  }
+  .vertical-dock-new .v-context .src {
+    font-weight: 700; color: var(--success-fg);
+    font-size: 10px; letter-spacing: 0.06em;
+  }
+  .vertical-dock-new .v-context .path {
+    font-family: var(--font-mono); margin-top: 4px;
+    overflow: hidden; text-overflow: ellipsis;
+    color: var(--text-secondary);
+  }
+  .vertical-dock-new .v-btn {
+    height: 56px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px; border-radius: var(--r-md);
+    font-size: 11px; font-weight: 500;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: var(--bg-surface);
+    color: var(--text-primary);
+  }
+  .vertical-dock-new .v-btn:hover { background: var(--bg-subtle); }
+  .vertical-dock-new .v-btn .ico { font-size: 16px; }
+  .vertical-dock-new .v-btn.primary {
+    background: var(--accent-primary); color: white; border-color: var(--accent-primary);
+    font-weight: 600;
+  }
+  .vertical-dock-new .v-btn .kbd {
+    font-size: 9px; font-family: var(--font-mono); opacity: .7;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="page-head">
+  <h1>UI 強化視覺原型 v0.1</h1>
+  <div class="sub">桌面輔助系統 · Dock / Command Palette / Job Monitor · 目前 vs 提案 對照</div>
+  <nav class="nav-tabs">
+    <a href="#tokens">Design Tokens</a>
+    <a href="#components">Components</a>
+    <a href="#dock">Dock</a>
+    <a href="#palette">Command Palette</a>
+    <a href="#monitor">Job Monitor</a>
+  </nav>
+</header>
+
+<!-- ============================================================
+     SECTION 1 — TOKENS
+============================================================ -->
+<section id="tokens">
+  <h2><span class="num">1</span>Design Tokens — Theme A (Graphite Light)</h2>
+  <p class="hint">所有顏色集中於 <code>theme.py</code>;三個視窗都吃同一套。下面這些色票就是 PR 1 要寫進去的值。</p>
+
+  <h3 style="margin-top: 24px;">色彩</h3>
+  <div class="token-grid">
+    <div class="token-card"><div class="swatch" style="background: var(--bg-app)"></div><div class="name">bg.app</div><div class="val">#f5f6f8</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--bg-surface)"></div><div class="name">bg.surface</div><div class="val">#ffffff</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--bg-surface-alt)"></div><div class="name">bg.surfaceAlt</div><div class="val">#f0f2f5</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--bg-subtle)"></div><div class="name">bg.subtle</div><div class="val">#e7eaee</div></div>
+
+    <div class="token-card"><div class="swatch" style="background: var(--accent-primary)"></div><div class="name">accent.primary</div><div class="val">#4f46e5</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--accent-primary-hover)"></div><div class="name">accent.primaryHover</div><div class="val">#4338ca</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--accent-primary-soft)"></div><div class="name">accent.primarySoft</div><div class="val">#e0e7ff</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--text-primary)"></div><div class="name">text.primary</div><div class="val" style="color: white">#0c1320</div></div>
+
+    <div class="token-card"><div class="swatch" style="background: var(--success-fg)"></div><div class="name">success.fg</div><div class="val" style="color:white">#15803d</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--success-bg)"></div><div class="name">success.bg</div><div class="val">#bbf7d0</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--warning-fg)"></div><div class="name">warning.fg</div><div class="val" style="color:white">#b45309</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--warning-bg)"></div><div class="name">warning.bg</div><div class="val">#fde68a</div></div>
+
+    <div class="token-card"><div class="swatch" style="background: var(--danger-fg)"></div><div class="name">danger.fg</div><div class="val" style="color:white">#b91c1c</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--danger-bg)"></div><div class="name">danger.bg</div><div class="val">#fecaca</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--info-fg)"></div><div class="name">info.fg</div><div class="val" style="color:white">#1e40af</div></div>
+    <div class="token-card"><div class="swatch" style="background: var(--info-bg)"></div><div class="name">info.bg</div><div class="val">#dbeafe</div></div>
+  </div>
+
+  <h3 style="margin-top: 32px;">字型 (Type Scale)</h3>
+  <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--r-md); padding: 16px 20px;">
+    <div class="type-row"><div class="label">text.xs · 11/500</div><div class="sample" style="font-size: 11px; font-weight: 500;">caption / 鍵盤提示 — Caption text</div></div>
+    <div class="type-row"><div class="label">text.sm · 12/500</div><div class="sample" style="font-size: 12px; font-weight: 500;">chip / status — Status chip text</div></div>
+    <div class="type-row"><div class="label">text.base · 13/400</div><div class="sample" style="font-size: 13px; font-weight: 400;">body — 命名表內文字 12345</div></div>
+    <div class="type-row"><div class="label">text.bodyBold · 13/600</div><div class="sample" style="font-size: 13px; font-weight: 600;">body bold — 強調 body</div></div>
+    <div class="type-row"><div class="label">text.md · 14/600</div><div class="sample" style="font-size: 14px; font-weight: 600;">段落標題 — Section Heading</div></div>
+    <div class="type-row"><div class="label">text.lg · 16/700</div><div class="sample" style="font-size: 16px; font-weight: 700;">視窗標題 — Window Title</div></div>
+    <div class="type-row"><div class="label">text.xl · 18/700</div><div class="sample" style="font-size: 18px; font-weight: 700;">Dialog 主標題 — Primary Heading</div></div>
+    <div class="type-row"><div class="label">font.mono</div><div class="sample" style="font-family: var(--font-mono); font-size: 12px;">PDF\samples\sample-001.pdf · 0.92 · 16:42:01</div></div>
+  </div>
+
+  <h3 style="margin-top: 32px;">與舊色票的對比</h3>
+  <div class="compare">
+    <div class="col old-theme">
+      <div class="title"><h3>目前</h3><span class="badge-old">CURRENT</span></div>
+      <div class="stage">
+        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+          <div style="background: var(--bg-app); padding: 16px 20px; border: 1px solid var(--border-default); border-radius: 6px; color: var(--text-primary); font-weight: 600;">bg.app #eef4f8</div>
+          <div style="background: var(--accent-primary); padding: 16px 20px; border-radius: 6px; color: white; font-weight: 600;">accent #1f6feb</div>
+          <div style="background: var(--success-bg); padding: 16px 20px; border: 1px solid var(--success-fg); border-radius: 6px; color: var(--success-fg); font-weight: 600;">success bg</div>
+          <div style="background: var(--danger-bg); padding: 16px 20px; border: 1px solid var(--danger-fg); border-radius: 6px; color: var(--danger-fg); font-weight: 600;">danger bg</div>
+        </div>
+        <div style="font-size: 12px; color: white; opacity: .8;">飽和度低、藍偏冷、狀態色弱</div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="title"><h3>提案</h3><span class="badge-new">NEW</span></div>
+      <div class="stage">
+        <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+          <div style="background: var(--bg-app); padding: 16px 20px; border: 1px solid var(--border-subtle); border-radius: var(--r-md); color: var(--text-primary); font-weight: 600;">bg.app #f5f6f8</div>
+          <div style="background: var(--accent-primary); padding: 16px 20px; border-radius: var(--r-md); color: white; font-weight: 600; box-shadow: var(--shadow-sm);">accent #4f46e5</div>
+          <div style="background: var(--success-bg); padding: 16px 20px; border: 1px solid var(--success-border); border-radius: var(--r-md); color: var(--success-fg); font-weight: 600;">success bg</div>
+          <div style="background: var(--danger-bg); padding: 16px 20px; border: 1px solid var(--danger-border); border-radius: var(--r-md); color: var(--danger-fg); font-weight: 600;">danger bg</div>
+        </div>
+        <div style="font-size: 12px; color: white; opacity: .8;">中性灰底 + 飽和靛藍 + 強烈狀態色</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 2 — COMPONENTS
+============================================================ -->
+<section id="components">
+  <h2><span class="num">2</span>元件 — Buttons / Chips / Status</h2>
+  <p class="hint">所有按鈕、chip、狀態指示燈的標準樣式。Dock / Palette / JobMonitor 全部複用。</p>
+
+  <h3 style="margin-top: 24px;">按鈕系統</h3>
+  <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--r-md); padding: 24px;">
+    <div class="button-grid" style="margin-bottom: 12px;">
+      <button class="btn btn-primary">執行 <span class="kbd">⌘ ⏎</span></button>
+      <button class="btn btn-secondary">指令 <span class="kbd">⌘ K</span></button>
+      <button class="btn btn-secondary">最近 <span class="caret">▾</span></button>
+      <button class="btn btn-ghost">⋯</button>
+      <button class="btn btn-icon btn-secondary">⚙</button>
+      <button class="btn" style="background: var(--danger-bg); color: var(--danger-fg); border: 1px solid var(--danger-border); height: 26px; padding: 0 10px;">取消任務</button>
+    </div>
+    <div style="font-size: 11px; color: var(--text-muted);">primary · secondary · secondary+caret · ghost · icon-only · danger</div>
+  </div>
+
+  <h3 style="margin-top: 32px;">狀態 Chip(用於命名表、context label、tab badge)</h3>
+  <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--r-md); padding: 24px;">
+    <div class="chip-row">
+      <span class="chip success"><span class="dot"></span>可更名</span>
+      <span class="chip success"><span class="dot"></span>已完成</span>
+      <span class="chip warning"><span class="dot"></span>需確認 信心 0.62</span>
+      <span class="chip danger"><span class="dot"></span>ISO List 無此流水號</span>
+      <span class="chip danger"><span class="dot"></span>命名重複</span>
+      <span class="chip info"><span class="dot"></span>OCR 校正</span>
+      <span class="chip neutral"><span class="dot"></span>未變更</span>
+    </div>
+  </div>
+
+  <h3 style="margin-top: 32px;">Context Chip</h3>
+  <div style="background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--r-md); padding: 24px;">
+    <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+      <div class="context-chip"><span class="dot"></span><span class="src">Explorer</span><span class="path">D:\projects\my-project</span><span class="caret">▾</span></div>
+      <div class="context-chip"><span class="dot" style="background: var(--accent-primary); box-shadow: 0 0 0 2px var(--accent-primary-soft);"></span><span class="src">Drop</span><span class="path">12 個檔案</span><span class="caret">▾</span></div>
+      <div class="context-chip"><span class="dot" style="background: var(--warning-fg); box-shadow: 0 0 0 2px var(--warning-bg);"></span><span class="src">Manual</span><span class="path">D:\manual\folder</span><span class="caret">▾</span></div>
+      <div class="context-chip"><span class="dot" style="background: var(--danger-fg); box-shadow: 0 0 0 2px var(--danger-bg);"></span><span class="src">Empty</span><span class="path">尚未選擇 context</span><span class="caret">▾</span></div>
+    </div>
+    <div style="font-size: 11px; color: var(--text-muted); margin-top: 12px;">左側色點即時反映 context 來源,使用者餘光掃過就知道狀態。</div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 3 — DOCK
+============================================================ -->
+<section id="dock">
+  <h2><span class="num">3</span>Dock 工具列</h2>
+  <p class="hint">水平模式按鈕從 10 顆降到 5 顆。<strong>Recent</strong> 三顆合一,<strong>外掛 / 位置 / 偏好 / 關閉</strong> 收進 ⋯ overflow,<strong>Context Chip</strong> 取代 「來源」按鈕 + 路徑 label 兩個元件。</p>
+
+  <div style="font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 12px;">水平模式(展開)</div>
+  <div class="compare">
+    <div class="col old-theme">
+      <div class="title"><h3>目前 — 10 顆按鈕</h3><span class="badge-old">CURRENT</span></div>
+      <div class="stage">
+        <div class="qt-dock">
+          <button class="qt-btn-old">工具列</button>
+          <span class="qt-label-old" style="font-weight: 600;">工程工具</span>
+          <button class="qt-btn-old primary">📋 指令</button>
+          <button class="qt-btn-old">最近指令 ▾</button>
+          <button class="qt-btn-old">最近檔案 ▾</button>
+          <button class="qt-btn-old">最近資料夾 ▾</button>
+          <button class="qt-btn-old">來源 ▾</button>
+          <span class="qt-context-old">Explorer:D:\projects\my-project</span>
+          <button class="qt-btn-old">外掛 ▾</button>
+          <button class="qt-btn-old">位置 ▾</button>
+          <button class="qt-btn-old">✕</button>
+        </div>
+        <div style="font-size: 11px; color: white; opacity: .85;">擠;沒有主次;掃描需要讀字</div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="title"><h3>提案 — 5 個元件</h3><span class="badge-new">NEW</span></div>
+      <div class="stage">
+        <div class="qt-dock qt-dock-new">
+          <button class="btn btn-icon btn-ghost" style="height: 30px; width: 30px; font-size: 16px;">☰</button>
+          <button class="btn btn-primary" style="height: 30px;">指令 <span class="kbd">⌘K</span></button>
+          <button class="btn btn-secondary" style="height: 30px;">Recent <span class="caret">▾</span></button>
+          <div class="context-chip" style="height: 30px;"><span class="dot"></span><span class="src">Explorer</span><span class="path">my-project</span><span class="caret">▾</span></div>
+          <div style="flex:1"></div>
+          <button class="btn btn-icon btn-ghost" style="height: 30px; width: 30px; font-size: 18px; line-height: 1;">⋯</button>
+        </div>
+        <div style="font-size: 11px; color: white; opacity: .85;">主動作明確、Context 可視化、其他收 overflow</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="font-size: 13px; color: var(--text-secondary); font-weight: 600; margin: 32px 0 12px;">收合 Tail 模式</div>
+  <div class="compare">
+    <div class="col old-theme">
+      <div class="title"><h3>目前 — 純藍方塊</h3><span class="badge-old">CURRENT</span></div>
+      <div class="stage">
+        <div class="qt-tail-old">工具列</div>
+        <div style="font-size: 11px; color: white; opacity: .85;">無資訊;不知道有沒有 job 在跑</div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="title"><h3>提案 — Status bar 帶資訊</h3><span class="badge-new">NEW</span></div>
+      <div class="stage">
+        <div class="qt-tail-new">
+          <span class="dot"></span>
+          <span class="label">工具</span>
+          <span class="jobs">3 jobs</span>
+          <span class="kbd">⌘K</span>
+        </div>
+        <div style="font-size: 11px; color: white; opacity: .85;">Context 狀態色點 + 進行中 job 數量 + 鍵盤提示</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="font-size: 13px; color: var(--text-secondary); font-weight: 600; margin: 32px 0 12px;">垂直模式</div>
+  <div class="compare">
+    <div class="col old-theme">
+      <div class="title"><h3>目前</h3><span class="badge-old">CURRENT</span></div>
+      <div class="stage">
+        <div class="vertical-dock vertical-dock-old">
+          <button class="qt-btn-old">工具列</button>
+          <button class="qt-btn-old primary">📋<br>指令</button>
+          <button class="qt-btn-old">最近<br>指令 ▾</button>
+          <button class="qt-btn-old">最近<br>檔案 ▾</button>
+          <button class="qt-btn-old">最近<br>資料夾 ▾</button>
+          <button class="qt-btn-old">來源 ▾</button>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="title"><h3>提案</h3><span class="badge-new">NEW</span></div>
+      <div class="stage">
+        <div class="vertical-dock vertical-dock-new">
+          <div class="v-context">
+            <div class="src">EXPLORER</div>
+            <div class="path">my-project</div>
+          </div>
+          <div class="v-btn primary">
+            <div class="ico">⌘</div>
+            <div>指令</div>
+            <div class="kbd">Ctrl K</div>
+          </div>
+          <div class="v-btn">
+            <div class="ico">⏱</div>
+            <div>Recent</div>
+          </div>
+          <div class="v-btn" style="margin-top: auto;">
+            <div class="ico">⋯</div>
+            <div>更多</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 4 — PALETTE
+============================================================ -->
+<section id="palette">
+  <h2><span class="num">4</span>Command Palette</h2>
+  <p class="hint">兩欄(列表 60% + 預覽 40%)、群組 header 強化、Recent 不靠文字而靠位置 + icon 區分。</p>
+
+  <div class="compare" style="grid-template-columns: 1fr 1.2fr;">
+    <div class="col old-theme">
+      <div class="title"><h3>目前 — 純單欄 + 字串前綴</h3><span class="badge-old">CURRENT</span></div>
+      <div class="stage">
+        <div class="qt-palette">
+          <input class="search-old" placeholder="輸入指令名稱,例如:複製、PowerShell、VS Code、檔案清單">
+          <div class="ctx-line-old">目前 context:explorer.foreground,12 個檔案</div>
+          <div class="list-old">
+            <div class="header-old">系統</div>
+            <div class="item-old selected">Ctrl+1  複製檔名 最近   [系統]</div>
+            <div class="item-old">Ctrl+2  PDF 拆頁   [PDF]</div>
+            <div class="header-old">PDF 工具</div>
+            <div class="item-old">Ctrl+3  PDF 拆頁   [PDF]</div>
+            <div class="item-old">Ctrl+4  ISO 命名工作台   [PDF]</div>
+            <div class="item-old">Ctrl+5  PDF 合併   [PDF]</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="title"><h3>提案 — 列表 + 預覽兩欄</h3><span class="badge-new">NEW</span></div>
+      <div class="stage">
+        <div class="qt-palette-new">
+          <div class="palette-search">
+            <span class="icon">🔍</span>
+            <input placeholder="搜尋指令…">
+            <span class="kbd">⌘ K</span>
+          </div>
+          <div class="palette-ctx"><span class="dot"></span>EXPLORER · my-project · 12 個檔案</div>
+          <div class="palette-body">
+            <div class="palette-list">
+              <div class="palette-group-header">⏱ Recent <span class="count">2</span></div>
+              <div class="palette-item selected">
+                <div class="icon">📋</div>
+                <div class="title">複製檔名</div>
+                <span class="cat-chip sys">系統</span>
+                <span class="kbd">Ctrl 1</span>
+              </div>
+              <div class="palette-item">
+                <div class="icon">📄</div>
+                <div class="title">PDF 拆頁</div>
+                <span class="cat-chip pdf">PDF</span>
+                <span class="kbd">Ctrl 2</span>
+              </div>
+              <div class="palette-group-header">📄 PDF 工具 <span class="count">3</span></div>
+              <div class="palette-item">
+                <div class="icon">📄</div>
+                <div class="title">PDF 拆頁</div>
+                <span class="cat-chip pdf">PDF</span>
+                <span class="kbd">Ctrl 3</span>
+              </div>
+              <div class="palette-item">
+                <div class="icon">🏷</div>
+                <div class="title">ISO 命名工作台</div>
+                <span class="cat-chip pdf">PDF</span>
+                <span class="kbd">Ctrl 4</span>
+              </div>
+              <div class="palette-item">
+                <div class="icon">📑</div>
+                <div class="title">PDF 合併</div>
+                <span class="cat-chip pdf">PDF</span>
+                <span class="kbd">Ctrl 5</span>
+              </div>
+            </div>
+            <div class="palette-preview">
+              <h4>複製檔名</h4>
+              <div class="desc">將選取檔案的檔名(不含副檔名)複製到剪貼簿,使用 \n 連接多個檔案。</div>
+              <div class="meta-line"><span>上次使用</span><span class="dot"></span><span>5 分鐘前</span></div>
+              <div class="meta-line"><span>條件</span><span class="dot"></span><span>≥ 1 個檔案</span></div>
+              <div class="meta-line"><span>類別</span><span class="dot"></span><span>系統</span></div>
+              <div class="actions">
+                <span><span class="kbd">⏎</span> 執行</span>
+                <span><span class="kbd">Esc</span> 關閉</span>
+                <span><span class="kbd">→</span> 詳情</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     SECTION 5 — JOB MONITOR
+============================================================ -->
+<section id="monitor">
+  <h2><span class="num">5</span>Job Monitor</h2>
+  <p class="hint">Status Hero 大圖示 + live timer、進度條(determinate 或 indeterminate)、Tab 加 count badge、Log entry 結構化(timestamp + level chip + message)。</p>
+
+  <div style="font-size: 13px; color: var(--text-secondary); font-weight: 600; margin-bottom: 12px;">執行中</div>
+  <div class="compare">
+    <div class="col old-theme">
+      <div class="title"><h3>目前</h3><span class="badge-old">CURRENT</span></div>
+      <div class="stage">
+        <div class="qt-monitor">
+          <div class="header-row-old">
+            <div class="status-old running">執行中</div>
+            <div class="summary-old">PDF 拆頁</div>
+            <button class="qt-btn-old">取消</button>
+            <button class="qt-btn-old">複製紀錄</button>
+          </div>
+          <div class="tab-bar-old">
+            <div class="tab selected">全部</div>
+            <div class="tab">錯誤</div>
+            <div class="tab">產出</div>
+          </div>
+          <div class="tab-content-old">[開始] PDF 拆頁<br>[訊息] 開始處理 sample-08.pdf<br>[訊息] 寫出 sample-08-out.pdf<br>[訊息] 開始處理 sample-09.pdf</div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="title"><h3>提案</h3><span class="badge-new">NEW</span></div>
+      <div class="stage">
+        <div class="monitor-new">
+          <div class="monitor-hero running">
+            <div class="top-line">
+              <div class="icon">⏳</div>
+              <div class="title">PDF 拆頁</div>
+              <div class="timer">00:00:12</div>
+            </div>
+            <div class="sub">執行中 · 第 8 頁 / 24 頁</div>
+            <div class="monitor-progress"><div class="bar"></div></div>
+          </div>
+          <div class="monitor-tabs">
+            <div class="monitor-tab active">全部 <span class="badge">24</span></div>
+            <div class="monitor-tab">錯誤</div>
+            <div class="monitor-tab">產出 <span class="badge info">3</span></div>
+          </div>
+          <div class="monitor-log">
+            <div class="row"><span class="ts">16:42:01</span><span class="lvl info">INFO</span><span class="msg">開始處理 sample-08.pdf</span></div>
+            <div class="row"><span class="ts">16:42:03</span><span class="lvl art">ART</span><span class="msg">寫出 sample-08-out.pdf (240 KB)</span></div>
+            <div class="row"><span class="ts">16:42:04</span><span class="lvl warn">WARN</span><span class="msg">第 9 頁無內容,跳過</span></div>
+            <div class="row"><span class="ts">16:42:05</span><span class="lvl info">INFO</span><span class="msg">開始處理 sample-09.pdf</span></div>
+          </div>
+          <div class="monitor-actions">
+            <button class="btn btn-secondary" style="height: 28px;">複製紀錄</button>
+            <div class="spacer"></div>
+            <button class="btn btn-secondary" style="height: 28px; background: var(--danger-bg); color: var(--danger-fg); border-color: var(--danger-border);">取消</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="font-size: 13px; color: var(--text-secondary); font-weight: 600; margin: 32px 0 12px;">完成 / 失敗</div>
+  <div class="compare">
+    <div class="col">
+      <div class="title"><h3>提案 — 完成</h3><span class="badge-new">NEW · OK</span></div>
+      <div class="stage">
+        <div class="monitor-new">
+          <div class="monitor-hero ok">
+            <div class="top-line">
+              <div class="icon">✓</div>
+              <div class="title">PDF 拆頁 完成</div>
+              <div class="timer">00:00:34</div>
+            </div>
+            <div class="sub">已處理 24 頁 · 產出 3 個檔案 · 無錯誤</div>
+          </div>
+          <div class="monitor-tabs">
+            <div class="monitor-tab active">全部 <span class="badge">28</span></div>
+            <div class="monitor-tab">產出 <span class="badge info">3</span></div>
+          </div>
+          <div class="monitor-log">
+            <div class="row"><span class="ts">16:42:34</span><span class="lvl art">ART</span><span class="msg">寫出 sample-24-out.pdf (180 KB)</span></div>
+            <div class="row"><span class="ts">16:42:34</span><span class="lvl info">DONE</span><span class="msg">完成,共 34.2 秒</span></div>
+          </div>
+          <div class="monitor-actions">
+            <button class="btn btn-secondary" style="height: 28px;">複製紀錄</button>
+            <button class="btn btn-secondary" style="height: 28px;">儲存到檔案</button>
+            <div class="spacer"></div>
+            <button class="btn btn-primary" style="height: 28px;">關閉</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="title"><h3>提案 — 失敗</h3><span class="badge-new">NEW · ERROR</span></div>
+      <div class="stage">
+        <div class="monitor-new">
+          <div class="monitor-hero err">
+            <div class="top-line">
+              <div class="icon">✗</div>
+              <div class="title">PDF 拆頁 失敗</div>
+              <div class="timer">00:00:03</div>
+            </div>
+            <div class="sub">worker 非正常結束 (exit code 1)</div>
+          </div>
+          <div class="monitor-tabs">
+            <div class="monitor-tab">全部 <span class="badge">5</span></div>
+            <div class="monitor-tab active">錯誤 <span class="badge danger">1</span></div>
+            <div class="monitor-tab">產出</div>
+          </div>
+          <div class="monitor-log">
+            <div class="row"><span class="ts">16:42:01</span><span class="lvl info">INFO</span><span class="msg">開始處理 sample-01.pdf</span></div>
+            <div class="row"><span class="ts">16:42:03</span><span class="lvl err">ERR</span><span class="msg">PdfReadError: invalid pdf header</span></div>
+          </div>
+          <div class="monitor-actions">
+            <button class="btn btn-secondary" style="height: 28px;">複製錯誤</button>
+            <button class="btn btn-secondary" style="height: 28px;">打開 log</button>
+            <div class="spacer"></div>
+            <button class="btn btn-primary" style="height: 28px;">關閉</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+<p style="margin-top: 24px; color: var(--text-muted); font-size: 12px;">
+  視覺原型 v0.1 · 用瀏覽器渲染模擬 Qt widget,實際 QSS 結果會略有差異(antialiasing、字型 fallback、border-radius 細節),但色票、間距、層次與互動意圖完全等同。 ·
+  對應提案文件:<code>docs/ui_uplift_proposal_v0.1.md</code>
+</p>
+
+</div>
+</body>
+</html>

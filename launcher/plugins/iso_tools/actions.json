@@ -1,0 +1,19 @@
+{
+  "actions": [
+    {
+      "id": "iso.pdf_page_naming",
+      "title": "ISO PDF 拆頁命名",
+      "category": "ISO",
+      "description": "將 combine PDF 拆頁後，依 ISO list 的流水號與管線號碼產生命名並套用。",
+      "icon": "file-stack",
+      "risk": "high",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "ui_iso_pdf_rename_dialog"
+      }
+    }
+  ]
+}
+

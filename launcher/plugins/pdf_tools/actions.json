@@ -1,0 +1,21 @@
+{
+  "actions": [
+    {
+      "id": "pdf.split_pages",
+      "title": "PDF 依頁分割",
+      "category": "PDF",
+      "description": "將選取 PDF 依頁數輸出成單頁 PDF，檔名自動加 p001, p002。",
+      "icon": "file-stack",
+      "accepts": {
+        "extensions": [".pdf"],
+        "min_files": 1
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.pdf_tools.pdf_actions",
+        "entry": "split_pdf_pages"
+      }
+    }
+  ]
+}
+

@@ -1,0 +1,95 @@
+{
+  "actions": [
+    {
+      "id": "system.open_folder",
+      "title": "開啟目前資料夾",
+      "category": "常用",
+      "description": "用檔案總管開啟目前 context 資料夾。",
+      "icon": "folder-open",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.system_tools.system_actions",
+        "entry": "open_folder"
+      }
+    },
+    {
+      "id": "system.open_powershell",
+      "title": "在此開啟 PowerShell",
+      "category": "常用",
+      "description": "在目前資料夾開啟 PowerShell。",
+      "icon": "terminal",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.system_tools.system_actions",
+        "entry": "open_powershell"
+      }
+    },
+    {
+      "id": "system.open_vscode",
+      "title": "用 VS Code 開啟",
+      "category": "常用",
+      "description": "用 VS Code 開啟目前資料夾。",
+      "icon": "code",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.system_tools.system_actions",
+        "entry": "open_vscode"
+      }
+    },
+    {
+      "id": "system.reveal_first_file",
+      "title": "定位第一個選取檔案",
+      "category": "檔案",
+      "description": "在檔案總管中定位第一個選取檔案。",
+      "icon": "locate",
+      "accepts": {
+        "min_files": 1
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.system_tools.system_actions",
+        "entry": "reveal_first_file"
+      }
+    },
+    {
+      "id": "system.open_selected_files",
+      "title": "開啟選取檔案",
+      "category": "檔案",
+      "description": "用預設程式開啟目前選取檔案。",
+      "icon": "external-link",
+      "accepts": {
+        "min_files": 1
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.system_tools.system_actions",
+        "entry": "open_selected_files"
+      }
+    },
+    {
+      "id": "system.write_file_list",
+      "title": "產生檔案清單 TXT",
+      "category": "檔案",
+      "description": "將目前選取檔案或資料夾內容輸出成 TXT 清單。",
+      "icon": "list",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.system_tools.system_actions",
+        "entry": "write_file_list"
+      }
+    }
+  ]
+}
+

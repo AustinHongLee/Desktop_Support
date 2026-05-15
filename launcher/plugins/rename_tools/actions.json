@@ -1,0 +1,66 @@
+{
+  "actions": [
+    {
+      "id": "rename.ui_table",
+      "title": "批次更名（表格）",
+      "category": "更名",
+      "description": "用表格直接編輯並套用檔案更名。",
+      "icon": "table",
+      "risk": "high",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "ui_rename_dialog"
+      }
+    },
+    {
+      "id": "rename.selected_from_clipboard",
+      "title": "用剪貼簿文字更名",
+      "category": "更名",
+      "description": "將第一個選取檔案更名為剪貼簿文字；剪貼簿沒有副檔名時會保留原副檔名。",
+      "icon": "edit",
+      "risk": "medium",
+      "accepts": {
+        "min_files": 1,
+        "max_files": 1
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.rename_tools.rename_actions",
+        "entry": "rename_selected_from_clipboard"
+      }
+    },
+    {
+      "id": "rename.create_plan",
+      "title": "產生批次更名表",
+      "category": "更名",
+      "description": "為選取檔案或目前資料夾檔案產生 rename_plan.csv，編輯後可套用。",
+      "icon": "table",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.rename_tools.rename_actions",
+        "entry": "create_rename_plan"
+      }
+    },
+    {
+      "id": "rename.apply_plan",
+      "title": "套用批次更名表",
+      "category": "更名",
+      "description": "套用目前資料夾 rename_plan.csv；只有 apply 欄為 YES 的列會更名。",
+      "icon": "check",
+      "risk": "high",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "python_module",
+        "module": "launcher.plugins.rename_tools.rename_actions",
+        "entry": "apply_rename_plan"
+      }
+    }
+  ]
+}
