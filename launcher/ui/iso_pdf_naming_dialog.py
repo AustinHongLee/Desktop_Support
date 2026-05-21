@@ -7,6 +7,7 @@ import tempfile
 import traceback
 import uuid
 from datetime import datetime
+from importlib.util import find_spec
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, QTimer, Qt
@@ -148,6 +149,27 @@ class IsoPdfNamingDialog(QDialog):
         self._workflow_vision_chip = _step_chip("3 判讀：未執行")
         self._workflow_review_chip = _step_chip("4 確認：待資料")
         self._workflow_rename_chip = _step_chip("5 更名：待確認")
+        self._autopilot_folder_path = QLineEdit()
+        self._autopilot_folder_path.setReadOnly(True)
+        self._autopilot_folder_path.setPlaceholderText("尚未選擇資料夾")
+        self._autopilot_pdf_value = QLabel("尚未找到 PDF")
+        self._autopilot_pdf_value.setObjectName("AutopilotValue")
+        self._autopilot_pdf_value.setWordWrap(True)
+        self._autopilot_iso_value = QLabel("尚未找到 ISO List")
+        self._autopilot_iso_value.setObjectName("AutopilotValue")
+        self._autopilot_iso_value.setWordWrap(True)
+        self._autopilot_profile_value = QLabel("使用預設圖框設定")
+        self._autopilot_profile_value.setObjectName("AutopilotValue")
+        self._autopilot_profile_value.setWordWrap(True)
+        self._autopilot_summary = QLabel("等待來源檢查")
+        self._autopilot_summary.setObjectName("AutopilotSummary")
+        self._autopilot_summary.setWordWrap(True)
+        self._autopilot_status_rows: dict[str, tuple[QLabel, QLabel]] = {}
+        self._autopilot_run_button = QPushButton("一鍵處理目前資料夾")
+        self._autopilot_run_button.setObjectName("AutopilotRunButton")
+        self._autopilot_run_button.setProperty("primary", True)
+        self._autopilot_run_button.clicked.connect(lambda: self._start_one_click_workflow())
+        self._workspace_tabs: QTabWidget | None = None
         self._pattern = QLineEdit("{serial}--{line}.pdf")
         self._pattern.setToolTip("可用變數：{serial} 流水號、{line} 完整圖號/檔名")
         self._pattern.editingFinished.connect(self._save_current_profile)
@@ -267,12 +289,131 @@ class IsoPdfNamingDialog(QDialog):
         body.setStretchFactor(2, 0)
         body.setSizes([390, 680, 330])
 
-        workspace.addWidget(body)
+        self._workspace_tabs = QTabWidget()
+        self._workspace_tabs.setObjectName("WorkbenchModeTabs")
+        self._workspace_tabs.addTab(self._build_autopilot_page(), "一鍵頁")
+        self._workspace_tabs.addTab(body, "進階工作台")
+
+        workspace.addWidget(self._workspace_tabs)
         workspace.addWidget(self._build_terminal_group())
         workspace.setStretchFactor(0, 1)
         workspace.setStretchFactor(1, 0)
         workspace.setSizes([680, 150])
         return workspace
+
+    def _build_autopilot_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("AutopilotPage")
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(10)
+        columns.addWidget(self._build_autopilot_source_panel(), 1)
+        columns.addWidget(self._build_autopilot_checklist_panel(), 1)
+        layout.addLayout(columns, 1)
+        layout.addWidget(self._build_autopilot_action_panel())
+        return page
+
+    def _build_autopilot_source_panel(self) -> QGroupBox:
+        group = QGroupBox("來源設定")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(10)
+
+        folder_row = QHBoxLayout()
+        choose_folder_button = QPushButton("選擇資料夾")
+        choose_folder_button.clicked.connect(self._choose_autopilot_folder)
+        load_context_button = QPushButton("使用目前來源")
+        load_context_button.clicked.connect(self._load_current_context_and_auto_prepare)
+        folder_row.addWidget(choose_folder_button)
+        folder_row.addWidget(load_context_button)
+
+        pdf_row = QHBoxLayout()
+        choose_pdf_button = QPushButton("選合併 PDF")
+        choose_pdf_button.clicked.connect(self._choose_combine_pdf)
+        split_button = QPushButton("拆頁")
+        split_button.clicked.connect(lambda: self._split_combine_pdf(show_message=True))
+        pdf_row.addWidget(choose_pdf_button)
+        pdf_row.addWidget(split_button)
+
+        iso_row = QHBoxLayout()
+        choose_iso_button = QPushButton("選 ISO List")
+        choose_iso_button.clicked.connect(self._load_iso_list)
+        refresh_iso_button = QPushButton("重新整理 ISO")
+        refresh_iso_button.clicked.connect(self._refresh_iso_naming)
+        iso_row.addWidget(choose_iso_button)
+        iso_row.addWidget(refresh_iso_button)
+
+        advanced_button = QPushButton("工程師調校 / 進階工作台")
+        advanced_button.clicked.connect(self._switch_to_advanced_workbench)
+
+        layout.addWidget(_field_label("目前資料夾"))
+        layout.addWidget(self._autopilot_folder_path)
+        layout.addLayout(folder_row)
+        layout.addWidget(_field_label("PDF 來源"))
+        layout.addWidget(self._autopilot_pdf_value)
+        layout.addLayout(pdf_row)
+        layout.addWidget(_field_label("ISO List"))
+        layout.addWidget(self._autopilot_iso_value)
+        layout.addLayout(iso_row)
+        layout.addWidget(_field_label("Profile / 圖框設定"))
+        layout.addWidget(self._autopilot_profile_value)
+        layout.addWidget(advanced_button)
+        layout.addStretch(1)
+        return group
+
+    def _build_autopilot_checklist_panel(self) -> QGroupBox:
+        group = QGroupBox("起飛前 Checklist")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(14, 18, 14, 14)
+        layout.setSpacing(8)
+        for key, title in (
+            ("folder", "目前資料夾"),
+            ("pdf", "PDF 來源"),
+            ("iso", "ISO List / 欄位"),
+            ("ocr", "OCR / 影像判讀"),
+            ("profile", "圖框 Profile"),
+            ("output", "輸出位置"),
+            ("rename", "命名計畫"),
+        ):
+            layout.addWidget(self._build_checklist_row(key, title))
+        layout.addStretch(1)
+        return group
+
+    def _build_checklist_row(self, key: str, title: str) -> QFrame:
+        row = QFrame()
+        row.setObjectName("ChecklistRow")
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(10)
+        state_label = QLabel("待檢查")
+        state_label.setObjectName("ChecklistState")
+        state_label.setProperty("state", "pending")
+        state_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        state_label.setFixedWidth(58)
+        title_label = QLabel(title)
+        title_label.setObjectName("ChecklistTitle")
+        title_label.setFixedWidth(116)
+        detail_label = QLabel("")
+        detail_label.setObjectName("ChecklistDetail")
+        detail_label.setWordWrap(True)
+        layout.addWidget(state_label)
+        layout.addWidget(title_label)
+        layout.addWidget(detail_label, 1)
+        self._autopilot_status_rows[key] = (state_label, detail_label)
+        return row
+
+    def _build_autopilot_action_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("AutopilotActionPanel")
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(12)
+        layout.addWidget(self._autopilot_run_button)
+        layout.addWidget(self._autopilot_summary, 1)
+        return panel
 
     def _build_control_panel(self) -> QScrollArea:
         scroller = QScrollArea()
@@ -614,6 +755,18 @@ class IsoPdfNamingDialog(QDialog):
         scrollbar = self._terminal.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
         _append_iso_workbench_log(message)
+
+    def _choose_autopilot_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "選擇 ISO PDF 處理資料夾", str(self._context.folder or Path.home()))
+        if not folder:
+            return
+        self._context = LauncherContext(folder=Path(folder), source="autopilot.folder")
+        self._load_context(self._context)
+        self._auto_prepare_from_context()
+
+    def _switch_to_advanced_workbench(self) -> None:
+        if self._workspace_tabs is not None:
+            self._workspace_tabs.setCurrentIndex(1)
 
     def _load_context(self, context: LauncherContext) -> None:
         pdfs = self._resolve_pdfs(context)
@@ -1059,7 +1212,9 @@ class IsoPdfNamingDialog(QDialog):
         except Exception as exc:
             self._one_click_workflow_active = False
             self._one_click_button.setEnabled(True)
+            self._autopilot_run_button.setEnabled(True)
             self._batch_serial_button.setEnabled(True)
+            self._update_workflow_status()
             self._log(f"[流程失敗] 一鍵產生命名草稿發生例外：{exc}")
             self._log(traceback.format_exc())
             QMessageBox.critical(self, "一鍵產生命名草稿", f"流程失敗：{exc}")
@@ -1182,6 +1337,7 @@ class IsoPdfNamingDialog(QDialog):
         self._one_click_workflow_active = workflow
         self._batch_serial_button.setEnabled(False)
         self._one_click_button.setEnabled(False)
+        self._autopilot_run_button.setEnabled(False)
         self._preview_tabs.setCurrentIndex(0)
         self._set_serial_vision_result("", 0.0, f"影像判讀流水號：批次判讀中 0 / {total}")
 
@@ -1311,6 +1467,7 @@ class IsoPdfNamingDialog(QDialog):
             self._one_click_workflow_active = False
             self._batch_serial_button.setEnabled(True)
             self._one_click_button.setEnabled(True)
+            self._autopilot_run_button.setEnabled(True)
             if self._batch_progress is not None:
                 self._batch_progress.close()
                 self._batch_progress = None
@@ -1330,6 +1487,7 @@ class IsoPdfNamingDialog(QDialog):
         self._batch_thread = None
         self._batch_serial_button.setEnabled(True)
         self._one_click_button.setEnabled(True)
+        self._autopilot_run_button.setEnabled(True)
         self._regenerate_names()
         self._update_workflow_status()
 
@@ -2037,6 +2195,153 @@ class IsoPdfNamingDialog(QDialog):
             self._set_step_chip(self._workflow_rename_chip, f"5 更名：{checked_count} 筆", "ready")
         else:
             self._set_step_chip(self._workflow_rename_chip, "5 更名：無勾選", "empty")
+        self._update_autopilot_status()
+
+    def _update_autopilot_status(self) -> None:
+        if not self._autopilot_status_rows:
+            return
+        folder = self._profile_folder()
+        self._autopilot_folder_path.setText(str(folder or ""))
+        self._autopilot_folder_path.setToolTip(str(folder or ""))
+        self._autopilot_pdf_value.setText(_autopilot_pdf_text(self._combine_pdf, self._page_folder, self._pdfs))
+        self._autopilot_iso_value.setText(_autopilot_iso_text(self._iso_list_path, self._iso_table, self._records))
+        self._autopilot_profile_value.setText(self._autopilot_profile_text())
+
+        checks = self._autopilot_checks()
+        blocked = 0
+        warnings = 0
+        pending = 0
+        for key, state, detail in checks:
+            if state == "blocked":
+                blocked += 1
+            elif state == "warn":
+                warnings += 1
+            elif state == "pending":
+                pending += 1
+            self._set_autopilot_check(key, state, detail)
+
+        running = self._batch_thread is not None and self._batch_thread.isRunning()
+        if running:
+            self._autopilot_run_button.setEnabled(False)
+            self._autopilot_run_button.setText("處理中...")
+            summary = "批次判讀正在執行，請等待 Checklist 更新。"
+            state = "running"
+        elif blocked:
+            self._autopilot_run_button.setEnabled(False)
+            self._autopilot_run_button.setText("請先處理紅色項目")
+            summary = f"{blocked} 個紅色阻擋項目，尚不能啟動一鍵流程。"
+            state = "blocked"
+        elif warnings:
+            self._autopilot_run_button.setEnabled(True)
+            self._autopilot_run_button.setText("一鍵處理（含注意項）")
+            summary = f"可啟動，但有 {warnings} 個注意項；流程完成後會停在確認頁。"
+            state = "warn"
+        elif pending:
+            self._autopilot_run_button.setEnabled(True)
+            self._autopilot_run_button.setText("一鍵處理目前資料夾")
+            summary = "來源檢查可用，尚有項目會在流程中產生。"
+            state = "pending"
+        else:
+            self._autopilot_run_button.setEnabled(True)
+            self._autopilot_run_button.setText("一鍵處理目前資料夾")
+            summary = "Checklist 全綠，可產生命名草稿。"
+            state = "ready"
+        self._autopilot_summary.setText(summary)
+        self._autopilot_summary.setProperty("state", state)
+        self._autopilot_summary.style().unpolish(self._autopilot_summary)
+        self._autopilot_summary.style().polish(self._autopilot_summary)
+
+    def _autopilot_checks(self) -> list[tuple[str, str, str]]:
+        folder = self._profile_folder()
+        checks: list[tuple[str, str, str]] = []
+        if folder is not None and folder.exists():
+            checks.append(("folder", "ready", str(folder)))
+        else:
+            checks.append(("folder", "blocked", "請先選擇含 PDF / ISO List 的資料夾"))
+
+        if self._combine_pdf is not None and self._pdfs == [self._combine_pdf]:
+            checks.append(("pdf", "warn", f"找到合併 PDF，啟動後會拆頁：{self._combine_pdf.name}"))
+        elif self._pdfs:
+            checks.append(("pdf", "ready", f"已載入 {len(self._pdfs)} 個頁面 PDF"))
+        elif self._combine_pdf is not None:
+            checks.append(("pdf", "warn", f"已選合併 PDF：{self._combine_pdf.name}"))
+        else:
+            checks.append(("pdf", "blocked", "找不到可處理的 PDF"))
+
+        iso_candidate = self._auto_xlsx_candidate()
+        if self._records:
+            checks.append(("iso", "ready", f"已套用 {len(self._records)} 筆 ISO 對照資料"))
+        elif self._iso_table is not None:
+            checks.append(("iso", "warn", "已讀取 Sheet，欄位尚未套用"))
+        elif self._iso_list_path is not None:
+            checks.append(("iso", "warn", f"已選 ISO List，尚未讀取：{self._iso_list_path.name}"))
+        elif iso_candidate is not None:
+            checks.append(("iso", "warn", f"找到候選 ISO List，啟動後會自動載入：{iso_candidate.name}"))
+        else:
+            checks.append(("iso", "blocked", "找不到 .xlsx / .csv ISO List"))
+
+        checks.append(("ocr", *self._ocr_check_state()))
+        checks.append(("profile", *self._profile_check_state()))
+
+        if folder is None:
+            checks.append(("output", "pending", "等待資料夾"))
+        elif os.access(folder, os.W_OK):
+            checks.append(("output", "ready", "輸出資料夾可寫入"))
+        else:
+            checks.append(("output", "blocked", "輸出資料夾不可寫入"))
+
+        blocking_renames = self._blocking_rename_problem_count()
+        checked_count = self._checked_rename_count()
+        if blocking_renames:
+            checks.append(("rename", "blocked", f"{blocking_renames} 個命名阻擋項目"))
+        elif self._problem_row_count:
+            checks.append(("rename", "warn", f"{self._problem_row_count} 列需要人工確認"))
+        elif checked_count:
+            checks.append(("rename", "ready", f"{checked_count} 個 PDF 可更名"))
+        elif self._pdfs:
+            checks.append(("rename", "pending", "尚未產生命名計畫"))
+        else:
+            checks.append(("rename", "pending", "等待 PDF 來源"))
+        return checks
+
+    def _set_autopilot_check(self, key: str, state: str, detail: str) -> None:
+        row = self._autopilot_status_rows.get(key)
+        if row is None:
+            return
+        state_label, detail_label = row
+        state_label.setText(_check_state_text(state))
+        state_label.setProperty("state", state)
+        state_label.style().unpolish(state_label)
+        state_label.style().polish(state_label)
+        detail_label.setText(detail)
+
+    def _autopilot_profile_text(self) -> str:
+        if self._serial_region() != DEFAULT_SERIAL_REGION or self._drawing_region() != DEFAULT_DRAWING_REGION:
+            return f"已套用圖框設定；流水號區 {self._serial_region_text()}"
+        return "使用預設圖框設定；建議由工程師針對常用圖框調校一次"
+
+    def _profile_check_state(self) -> tuple[str, str]:
+        if self._serial_region() != DEFAULT_SERIAL_REGION or self._drawing_region() != DEFAULT_DRAWING_REGION:
+            return "ready", "已載入圖框 / ROI profile"
+        return "warn", "使用預設判讀區，首次專案建議先調校"
+
+    def _ocr_check_state(self) -> tuple[str, str]:
+        has_cv2 = find_spec("cv2") is not None
+        has_rapidocr = find_spec("rapidocr_onnxruntime") is not None
+        if has_cv2 and has_rapidocr:
+            return "ready", "OpenCV + RapidOCR 可用"
+        if has_cv2:
+            return "warn", "OpenCV 可用；RapidOCR 未安裝，判讀穩定度會下降"
+        return "blocked", "OpenCV 未安裝，無法執行影像判讀"
+
+    def _blocking_rename_problem_count(self) -> int:
+        blockers = ("命名重複", "目標已存在", "來源不存在", "缺少命名")
+        count = 0
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 6)
+            if item is not None and any(blocker in item.text() for blocker in blockers):
+                count += 1
+        return count
 
     def _set_step_chip(self, label: QLabel, text: str, state: str) -> None:
         label.setText(text)
@@ -2198,6 +2503,38 @@ def _review_issue_kind(reason: str) -> str:
     if "未判讀" in reason or "找不到" in reason or "缺少" in reason:
         return "missing"
     return "review"
+
+
+def _check_state_text(state: str) -> str:
+    return {
+        "ready": "OK",
+        "warn": "注意",
+        "blocked": "阻擋",
+        "running": "執行中",
+        "pending": "待檢查",
+    }.get(state, state)
+
+
+def _autopilot_pdf_text(combine_pdf: Path | None, page_folder: Path | None, pdfs: list[Path]) -> str:
+    if combine_pdf is not None and pdfs == [combine_pdf]:
+        return f"合併 PDF：{combine_pdf.name}\n單頁資料夾：{page_folder or combine_pdf.with_name(f'{combine_pdf.stem}_pages')}"
+    if pdfs:
+        parent = page_folder or pdfs[0].parent
+        return f"頁面 PDF：{len(pdfs)} 個\n來源：{parent}"
+    if combine_pdf is not None:
+        return f"合併 PDF：{combine_pdf.name}"
+    return "尚未找到 PDF"
+
+
+def _autopilot_iso_text(iso_list_path: Path | None, iso_table: IsoTable | None, records: list[IsoRecord]) -> str:
+    if records:
+        sheet = f"，Sheet={iso_table.sheet_name}" if iso_table is not None else ""
+        return f"已套用 ISO List：{iso_list_path.name if iso_list_path else '未命名'}{sheet}\n有效資料：{len(records)} 筆"
+    if iso_table is not None:
+        return f"已讀取 Sheet：{iso_table.sheet_name}，尚未套用欄位"
+    if iso_list_path is not None:
+        return f"已選 ISO List：{iso_list_path.name}"
+    return "尚未找到 ISO List"
 
 
 def _image_on_white(image: QImage) -> QImage:

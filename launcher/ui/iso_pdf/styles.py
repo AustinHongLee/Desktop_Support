@@ -167,6 +167,102 @@ def workbench_stylesheet() -> str:
         background: #ffffff;
         color: #102033;
     }
+    QWidget#AutopilotPage {
+        background: transparent;
+    }
+    QLabel#AutopilotValue {
+        background: #f5f8fb;
+        color: #263746;
+        border: 1px solid #d0dbe5;
+        border-radius: 4px;
+        padding: 8px;
+        min-height: 44px;
+        font-weight: 600;
+    }
+    QFrame#AutopilotActionPanel {
+        background: #ffffff;
+        border: 1px solid #c8d4df;
+        border-radius: 6px;
+    }
+    QPushButton#AutopilotRunButton {
+        min-width: 260px;
+        min-height: 40px;
+        font-size: 15px;
+        font-weight: 800;
+    }
+    QPushButton#AutopilotRunButton:disabled {
+        background: #d8dde3;
+        color: #6b7280;
+        border-color: #c7ced6;
+    }
+    QLabel#AutopilotSummary {
+        background: #f5f8fb;
+        color: #263746;
+        border: 1px solid #d0dbe5;
+        border-radius: 4px;
+        padding: 8px;
+        font-weight: 700;
+    }
+    QLabel#AutopilotSummary[state="ready"] {
+        background: #dcfce7;
+        color: #166534;
+        border-color: #86efac;
+    }
+    QLabel#AutopilotSummary[state="warn"],
+    QLabel#AutopilotSummary[state="pending"] {
+        background: #fef3c7;
+        color: #92400e;
+        border-color: #fcd34d;
+    }
+    QLabel#AutopilotSummary[state="blocked"] {
+        background: #fee2e2;
+        color: #991b1b;
+        border-color: #fca5a5;
+    }
+    QLabel#AutopilotSummary[state="running"] {
+        background: #e0e7ff;
+        color: #3730a3;
+        border-color: #a5b4fc;
+    }
+    QFrame#ChecklistRow {
+        background: #f8fafc;
+        border: 1px solid #d6e0ea;
+        border-radius: 5px;
+    }
+    QLabel#ChecklistState {
+        border-radius: 4px;
+        padding: 4px 6px;
+        font-size: 12px;
+        font-weight: 800;
+    }
+    QLabel#ChecklistState[state="ready"] {
+        background: #bbf7d0;
+        color: #15803d;
+    }
+    QLabel#ChecklistState[state="warn"] {
+        background: #fde68a;
+        color: #92400e;
+    }
+    QLabel#ChecklistState[state="blocked"] {
+        background: #fecaca;
+        color: #991b1b;
+    }
+    QLabel#ChecklistState[state="running"] {
+        background: #e0e7ff;
+        color: #3730a3;
+    }
+    QLabel#ChecklistState[state="pending"] {
+        background: #e5e7eb;
+        color: #4b5563;
+    }
+    QLabel#ChecklistTitle {
+        color: #17202a;
+        font-weight: 800;
+    }
+    QLabel#ChecklistDetail {
+        color: #455565;
+        font-weight: 600;
+    }
     QTableWidget {
         gridline-color: #d8e1ea;
         selection-background-color: #cfe4f5;
