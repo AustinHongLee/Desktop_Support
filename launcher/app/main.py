@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 
 from launcher.core.context_inbox import ContextInbox
+from launcher.core.paths import project_root
 from launcher.app.self_test import run_self_test
 from launcher.windows.single_instance import SingleInstanceGuard
 
@@ -34,11 +36,15 @@ def main() -> int:
     if args.self_test:
         return run_self_test()
 
+    submitted_context = False
     if args.set_context:
         ContextInbox().submit(args.set_context, source=args.context_source)
+        submitted_context = True
 
-    guard = SingleInstanceGuard("Local\\EngineeringLauncher")
+    guard = SingleInstanceGuard(_instance_mutex_name())
     if guard.already_running:
+        if args.show_existing and not submitted_context:
+            ContextInbox().submit_show()
         print("Engineering Launcher is already running.")
         return 0
 
@@ -55,9 +61,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--start-hidden", action="store_true", help="start in the system tray without showing the dock")
+    parser.add_argument("--show-existing", action="store_true", help="show the existing launcher instance when one is already running")
     parser.add_argument("--set-context", nargs="+", default=[])
     parser.add_argument("--context-source", default="explorer.menu")
     return parser.parse_args(argv)
+
+
+def _instance_mutex_name() -> str:
+    identity = str(project_root().resolve()).casefold()
+    digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
+    return f"Local\\EngineeringLauncher_{digest}"
 
 
 if __name__ == "__main__":

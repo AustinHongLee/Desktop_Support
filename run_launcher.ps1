@@ -1,6 +1,7 @@
 param(
     [switch]$Foreground,
     [switch]$ShowDock,
+    [switch]$Restart,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$LauncherArgsFromCommandLine
 )
@@ -28,6 +29,14 @@ function Resolve-LauncherBackgroundPython {
     return $null
 }
 
+function Stop-ProjectPython {
+    $venvPythonw = Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe"
+    $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+    Get-Process -Name python,pythonw -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -eq $venvPythonw -or $_.Path -eq $venvPython } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
 function Resolve-LauncherPython {
     $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
     if (Test-Path $venvPython) {
@@ -52,10 +61,15 @@ function Resolve-LauncherPython {
     throw "Python was not found. Install Python 3.12+ or create .venv in this project."
 }
 
+if ($Restart) {
+    Stop-ProjectPython
+}
+
 $launcherArgs = @("-m", "launcher.app.main")
 if (-not $ShowDock) {
     $launcherArgs += "--start-hidden"
 }
+$launcherArgs += "--show-existing"
 $launcherArgs += $LauncherArgsFromCommandLine
 
 if (-not $Foreground) {

@@ -859,12 +859,19 @@ class DockWindow(QWidget):
             subprocess.Popen(["powershell.exe", "-NoExit"], cwd=str(folder))
 
     def _poll_context_inbox(self) -> None:
-        context = self._context_inbox.take()
-        if context is None:
+        if hasattr(self._context_inbox, "take_request"):
+            request = self._context_inbox.take_request()
+        else:
+            context = self._context_inbox.take()
+            request = _ContextWakeRequest(command="context", context=context) if context is not None else None
+        if request is None:
             return
-        self._use_context(context, record=True)
+        context = getattr(request, "context", None)
+        if context is not None:
+            self._use_context(context, record=True)
         self.show()
         self.raise_()
+        self.activateWindow()
         if self._state_store.auto_hide_enabled:
             self._set_collapsed(False)
             self._hide_timer.start(1800)
@@ -894,6 +901,12 @@ def _source_label(source: str) -> str:
         "self-test": "測試",
     }
     return labels.get(source, source.replace(".", " "))
+
+
+class _ContextWakeRequest:
+    def __init__(self, *, command: str, context: LauncherContext | None = None) -> None:
+        self.command = command
+        self.context = context
 
 
 def _source_kind(context: LauncherContext) -> str:

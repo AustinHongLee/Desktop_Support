@@ -40,7 +40,32 @@ class ContextInboxTests(unittest.TestCase):
             self.assertEqual(context.folder, folder)
             self.assertEqual(context.files, ())
 
+    def test_submit_show_creates_wake_request_without_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inbox = ContextInbox(root / "request.json")
+
+            inbox.submit_show()
+            request = inbox.take_request()
+
+            self.assertIsNotNone(request)
+            assert request is not None
+            self.assertEqual(request.command, "show")
+            self.assertIsNone(request.context)
+            self.assertIsNone(inbox.take_request())
+
+    def test_take_still_returns_context_for_context_requests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inbox = ContextInbox(root / "request.json")
+
+            inbox.submit([], source="launcher.show")
+            context = inbox.take()
+
+            self.assertIsNotNone(context)
+            assert context is not None
+            self.assertEqual(context.source, "launcher.show")
+
 
 if __name__ == "__main__":
     unittest.main()
-

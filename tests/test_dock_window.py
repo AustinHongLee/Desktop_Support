@@ -133,6 +133,20 @@ class DockWindowTests(unittest.TestCase):
             self.assertTrue(window._drop_hint.isHidden())
             self.assertFalse(window.property("dropTarget"))
 
+    def test_wake_request_shows_collapsed_hidden_window(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            state.set_auto_hide_enabled(True)
+            window = _make_window(state)
+            window.hide()
+            window._set_collapsed(True)
+            window._context_inbox = _WakeInbox()
+
+            window._poll_context_inbox()
+
+            self.assertFalse(window.isHidden())
+            self.assertFalse(window._collapsed)
+
 
 def _make_window(state: AppStateStore) -> DockWindow:
     registry = ActionRegistry(Path("missing-plugins"))
@@ -149,6 +163,16 @@ def _make_window(state: AppStateStore) -> DockWindow:
 class _FixedContextService(ContextService):
     def current_context(self) -> LauncherContext:
         return LauncherContext.empty()
+
+
+class _WakeRequest:
+    command = "show"
+    context = None
+
+
+class _WakeInbox:
+    def take_request(self) -> _WakeRequest:
+        return _WakeRequest()
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import json
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +24,17 @@ class ContextInbox:
 
     def submit(self, paths: list[str | Path], *, source: str = "explorer.menu") -> str:
         context = _context_from_shell_paths(paths, source=source)
+        return self._write_payload({"command": "context", "context": context.to_payload()})
+
+    def submit_show(self) -> str:
+        return self._write_payload({"command": "show"})
+
+    def _write_payload(self, request: dict[str, Any]) -> str:
         request_id = uuid.uuid4().hex
         payload = {
             "id": request_id,
             "created_at": time.time(),
-            "context": context.to_payload(),
+            **request,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(f".{request_id}.tmp")
@@ -36,18 +43,27 @@ class ContextInbox:
         return request_id
 
     def take(self) -> LauncherContext | None:
+        request = self.take_request()
+        if request is None or request.context is None:
+            return None
+        return request.context
+
+    def take_request(self) -> "ContextInboxRequest | None":
         if not self.path.exists():
             return None
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            context = LauncherContext.from_payload(payload["context"])
+            command = str(payload.get("command") or "context")
+            context_payload = payload.get("context")
+            context = LauncherContext.from_payload(context_payload) if isinstance(context_payload, dict) else None
+            request = ContextInboxRequest(command=command, context=context)
         except Exception:
-            context = None
+            request = None
         try:
             self.path.unlink()
         except OSError:
             pass
-        return context
+        return request
 
 
 def _context_from_shell_paths(paths: list[str | Path], *, source: str) -> LauncherContext:
@@ -55,3 +71,9 @@ def _context_from_shell_paths(paths: list[str | Path], *, source: str) -> Launch
     if len(resolved) == 1 and resolved[0].is_dir():
         return LauncherContext(folder=resolved[0], source=source)
     return LauncherContext.from_paths(resolved, source=source)
+
+
+@dataclass(frozen=True)
+class ContextInboxRequest:
+    command: str
+    context: LauncherContext | None = None
