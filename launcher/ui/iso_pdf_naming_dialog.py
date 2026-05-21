@@ -67,6 +67,7 @@ from launcher.plugins.iso_tools.validator import IsoChecklistContext, summarize_
 from launcher.plugins.rename_tools.rename_actions import RenameOperation, _apply_operations, _validate_operations
 from launcher.ui.iso_pdf.batch_detect import BatchDetectThread, detect_serial_from_pdf
 from launcher.ui.iso_pdf.region_selector import RegionSelector
+from launcher.ui.iso_pdf.result_dialog import IsoAutopilotResultDialog, IsoAutopilotResultSummary
 from launcher.ui.iso_pdf.styles import workbench_stylesheet
 from launcher.ui.preview_cache import PdfPreviewCache
 from launcher.ui.rename_plan_dialog import RenamePlanDialog
@@ -1515,36 +1516,97 @@ class IsoPdfNamingDialog(QDialog):
 
     def _finish_one_click_workflow(self, canceled: bool, message: str, detail: str, has_issues: bool) -> None:
         if canceled:
-            QMessageBox.information(self, "ISO PDF 命名工作台", f"{message}\n\n{detail}".strip())
+            self._show_autopilot_result(
+                IsoAutopilotResultSummary(
+                    total_pdfs=len(self._pdfs),
+                    ready_count=0,
+                    warning_count=0,
+                    blocked_count=1,
+                    message=message,
+                    detail=detail,
+                )
+            )
             self._log("[流程] 一鍵產生命名草稿已取消。")
             return
         self._check_renames()
         unresolved = self._unresolved_review_rows()
         if unresolved or has_issues:
             self._problem_only_check.setChecked(True)
-            self._select_next_problem_row()
+            if unresolved:
+                self._select_next_problem_row()
             detail_text = detail or "\n".join(f"第 {row + 1} 列 {path.name}: {reason}" for row, path, reason in unresolved[:8])
-            QMessageBox.warning(
-                self,
-                "一鍵產生命名草稿",
-                f"{message}\n\n仍有需要人工確認的列，已切到問題列。\n\n{detail_text}".strip(),
+            action = self._show_autopilot_result(
+                IsoAutopilotResultSummary(
+                    total_pdfs=len(self._pdfs),
+                    ready_count=self._rename_candidate_count(),
+                    warning_count=max(len(unresolved), 1 if has_issues else 0),
+                    blocked_count=0,
+                    message=f"{message}\n仍有需要人工確認的列。",
+                    detail=detail_text,
+                    can_view_problems=bool(unresolved),
+                )
             )
+            if action == "problems":
+                self._switch_to_advanced_workbench()
             self._log("[流程] 一鍵草稿完成，但仍有問題列需要確認。")
             return
         try:
             operations = self._operations()
             if not operations:
-                QMessageBox.information(self, "一鍵產生命名草稿", "草稿已完成，但沒有需要更名的 PDF。")
+                self._show_autopilot_result(
+                    IsoAutopilotResultSummary(
+                        total_pdfs=len(self._pdfs),
+                        ready_count=0,
+                        warning_count=0,
+                        blocked_count=0,
+                        message="草稿已完成，但沒有需要更名的 PDF。",
+                        detail=detail,
+                    )
+                )
                 self._log("[流程] 草稿完成，沒有需要更名的 PDF。")
                 return
             _validate_operations(operations)
         except Exception as exc:
-            QMessageBox.warning(self, "一鍵產生命名草稿", str(exc))
+            self._show_autopilot_result(
+                IsoAutopilotResultSummary(
+                    total_pdfs=len(self._pdfs),
+                    ready_count=self._rename_candidate_count(),
+                    warning_count=0,
+                    blocked_count=1,
+                    message="草稿已完成，但更名前檢查失敗。",
+                    detail=str(exc),
+                )
+            )
             self._refresh_statuses()
             self._log(f"[流程] 草稿完成，但更名前檢查失敗：{exc}")
             return
-        self._log("[流程] 草稿完成，準備開啟更名確認表。")
-        QTimer.singleShot(200, self._open_one_click_rename_plan)
+        action = self._show_autopilot_result(
+            IsoAutopilotResultSummary(
+                total_pdfs=len(self._pdfs),
+                ready_count=len(operations),
+                warning_count=0,
+                blocked_count=0,
+                message="一鍵命名草稿已完成，可以開啟更名確認。",
+                detail=detail,
+                can_open_rename_plan=True,
+            )
+        )
+        if action == "rename":
+            self._log("[流程] 草稿完成，準備開啟更名確認表。")
+            QTimer.singleShot(200, self._open_one_click_rename_plan)
+        else:
+            self._log("[流程] 草稿完成，使用者暫留結果頁。")
+
+    def _show_autopilot_result(self, summary: IsoAutopilotResultSummary) -> str:
+        dialog = IsoAutopilotResultDialog(summary, self)
+        dialog.exec()
+        return dialog.action
+
+    def _rename_candidate_count(self) -> int:
+        try:
+            return len(self._operations())
+        except Exception:
+            return 0
 
     def _open_one_click_rename_plan(self) -> None:
         if self._closing:

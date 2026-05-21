@@ -155,12 +155,37 @@ class IsoOneClickWorkflowTests(unittest.TestCase):
         with patch.object(dialog, "_operations", return_value=[object()]):
             with patch("launcher.ui.iso_pdf_naming_dialog._validate_operations", return_value=None):
                 with patch.object(dialog, "_execute") as execute:
-                    dialog._finish_one_click_workflow(False, "完成", "", False)
+                    with patch.object(dialog, "_show_autopilot_result", return_value="rename") as result:
+                        dialog._finish_one_click_workflow(False, "完成", "", False)
 
-                    execute.assert_not_called()
-                    QTest.qWait(250)
+                        result.assert_called_once()
+                        execute.assert_not_called()
+                        QTest.qWait(250)
 
         execute.assert_called_once()
+
+    def test_one_click_result_can_focus_problem_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "page_001.pdf"
+            source.write_bytes(b"%PDF-1.4\n")
+            dialog = IsoPdfNamingDialog(LauncherContext.empty())
+            dialog._pdfs = [source]
+            dialog._page_folder = folder
+            with patch.object(dialog, "_show_pdf_preview"):
+                dialog._load_rows()
+            dialog._review_issues[source] = "信心太低 0.62"
+            dialog._refresh_statuses()
+
+            with patch.object(dialog, "_show_autopilot_result", return_value="problems") as result:
+                dialog._finish_one_click_workflow(False, "完成", "", True)
+
+            result.assert_called_once()
+            self.assertTrue(dialog._problem_only_check.isChecked())
+            self.assertIsNotNone(dialog._workspace_tabs)
+            assert dialog._workspace_tabs is not None
+            self.assertEqual(dialog._workspace_tabs.currentIndex(), 1)
+            self.assertEqual(dialog._table.currentRow(), 0)
 
 class _ClosingProgress:
     def __init__(self, dialog: IsoPdfNamingDialog) -> None:

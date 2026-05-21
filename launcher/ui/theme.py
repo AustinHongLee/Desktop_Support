@@ -584,4 +584,34 @@ def preferences_stylesheet(theme: Theme = DEFAULT_LIGHT) -> str:
         border-color: {theme.primary};
         font-weight: 700;
     }}
+    QFrame#ResultMetric {{
+        background: {theme.surface};
+        border: 1px solid {theme.border};
+        border-radius: 8px;
+    }}
+    QFrame#ResultMetric[state="ok"] {{
+        border-color: {theme.success};
+        background: {theme.success_bg};
+    }}
+    QFrame#ResultMetric[state="warn"] {{
+        border-color: {theme.warning};
+        background: {theme.warning_bg};
+    }}
+    QFrame#ResultMetric[state="blocked"] {{
+        border-color: {theme.danger};
+        background: {theme.danger_bg};
+    }}
+    QFrame#ResultMetric[state="info"] {{
+        border-color: {theme.primary};
+        background: {theme.primary_soft};
+    }}
+    QLabel#ResultMetricValue {{
+        font-size: 24px;
+        font-weight: 800;
+        color: {theme.text};
+    }}
+    QLabel#ResultMetricTitle {{
+        color: {theme.muted_text};
+        font-weight: 700;
+    }}
     """
