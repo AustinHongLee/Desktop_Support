@@ -9,17 +9,24 @@ class LauncherTray:
         self._dock = dock
         icon = dock.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
         self._tray = QSystemTrayIcon(icon)
-        self._tray.setToolTip("Engineering Launcher")
+        self._tray.setToolTip("工程工具列")
 
         menu = QMenu()
-        show_action = QAction("Show")
-        show_action.triggered.connect(self._dock.show)
-        palette_action = QAction("Command Palette")
+        show_action = QAction("顯示工具列")
+        show_action.triggered.connect(self._show_dock)
+        hide_action = QAction("隱藏工具列")
+        hide_action.triggered.connect(self._dock.hide)
+        palette_action = QAction("開啟指令面板")
         palette_action.triggered.connect(getattr(self._dock, "open_palette"))
-        quit_action = QAction("Quit")
-        quit_action.triggered.connect(QApplication.instance().quit)
+        iso_action = QAction("開啟 ISO PDF 命名")
+        iso_action.triggered.connect(getattr(self._dock, "open_iso_workbench"))
+        quit_action = QAction("結束工程工具列")
+        quit_action.triggered.connect(self._quit)
         menu.addAction(show_action)
+        menu.addAction(hide_action)
+        menu.addSeparator()
         menu.addAction(palette_action)
+        menu.addAction(iso_action)
         menu.addSeparator()
         menu.addAction(quit_action)
 
@@ -29,7 +36,14 @@ class LauncherTray:
 
     def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self._dock.show()
-            self._dock.raise_()
-            self._dock.activateWindow()
+            self._show_dock()
 
+    def _show_dock(self) -> None:
+        self._dock.show()
+        self._dock.raise_()
+        self._dock.activateWindow()
+
+    def _quit(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()

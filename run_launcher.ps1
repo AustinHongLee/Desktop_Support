@@ -1,6 +1,32 @@
+param(
+    [switch]$Foreground,
+    [switch]$ShowDock,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$LauncherArgsFromCommandLine
+)
+
 $ErrorActionPreference = "Stop"
 
 Set-Location $PSScriptRoot
+
+function Resolve-LauncherBackgroundPython {
+    $venvPythonw = Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe"
+    if (Test-Path $venvPythonw) {
+        return $venvPythonw
+    }
+
+    $pythonw = Get-Command pythonw -ErrorAction SilentlyContinue
+    if ($pythonw) {
+        return $pythonw.Source
+    }
+
+    $codexPythonw = Join-Path $env:USERPROFILE ".cache\codex-runtimes\codex-primary-runtime\dependencies\python\pythonw.exe"
+    if (Test-Path $codexPythonw) {
+        return $codexPythonw
+    }
+
+    return $null
+}
 
 function Resolve-LauncherPython {
     $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
@@ -26,6 +52,23 @@ function Resolve-LauncherPython {
     throw "Python was not found. Install Python 3.12+ or create .venv in this project."
 }
 
-$python = Resolve-LauncherPython
-& $python.Exe @($python.Args) -m launcher.app.main @args
+$launcherArgs = @("-m", "launcher.app.main")
+if (-not $ShowDock) {
+    $launcherArgs += "--start-hidden"
+}
+$launcherArgs += $LauncherArgsFromCommandLine
 
+if (-not $Foreground) {
+    $backgroundPython = Resolve-LauncherBackgroundPython
+    if ($backgroundPython) {
+        Start-Process -FilePath $backgroundPython -ArgumentList $launcherArgs -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
+        return
+    }
+
+    $python = Resolve-LauncherPython
+    Start-Process -FilePath $python.Exe -ArgumentList @(@($python.Args) + $launcherArgs) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
+    return
+}
+
+$python = Resolve-LauncherPython
+& $python.Exe @($python.Args) @launcherArgs

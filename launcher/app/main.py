@@ -8,7 +8,7 @@ from launcher.app.self_test import run_self_test
 from launcher.windows.single_instance import SingleInstanceGuard
 
 
-def _run_pyqt() -> int:
+def _run_pyqt(*, start_hidden: bool = False) -> int:
     from PyQt6.QtWidgets import QApplication
 
     from launcher.app.bootstrap import LauncherBootstrap
@@ -17,7 +17,8 @@ def _run_pyqt() -> int:
     app.setQuitOnLastWindowClosed(False)
 
     dock, _tray = LauncherBootstrap().create()
-    dock.show()
+    if not start_hidden:
+        dock.show()
 
     return app.exec()
 
@@ -42,7 +43,7 @@ def main() -> int:
         return 0
 
     try:
-        return _run_pyqt()
+        return _run_pyqt(start_hidden=args.start_hidden)
     except ModuleNotFoundError as exc:
         if exc.name != "PyQt6":
             raise
@@ -53,6 +54,7 @@ def main() -> int:
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--start-hidden", action="store_true", help="start in the system tray without showing the dock")
     parser.add_argument("--set-context", nargs="+", default=[])
     parser.add_argument("--context-source", default="explorer.menu")
     return parser.parse_args(argv)
