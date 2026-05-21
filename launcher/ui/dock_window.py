@@ -108,8 +108,10 @@ class DockWindow(QWidget):
             self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView),
             "開啟 ISO PDF 一鍵處理",
             self.open_iso_workbench,
-            text="ISO",
+            text="ISO 命名",
         )
+        iso_button.setObjectName("IsoShortcutButton")
+        iso_button.setProperty("role", "iso")
         iso_button.setToolTip("開啟 ISO PDF 一鍵處理 / 命名工作台")
         recent_button = self._menu_button("近期", self._build_recent_menu)
         recent_button.setToolTip("最近指令、最近檔案、最近資料夾")

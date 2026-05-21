@@ -43,7 +43,9 @@ class DockWindowTests(unittest.TestCase):
 
             labels = [button.text() for button in window._toolbar_buttons]
 
-            self.assertIn("ISO", labels)
+            self.assertIn("ISO 命名", labels)
+            iso_button = next(button for button in window._toolbar_buttons if button.text() == "ISO 命名")
+            self.assertEqual(iso_button.property("role"), "iso")
             self.assertIn("近期", labels)
             self.assertIn("更多", labels)
             self.assertNotIn("最近指令", labels)

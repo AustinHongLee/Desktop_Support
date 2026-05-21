@@ -166,6 +166,17 @@ def dock_stylesheet(theme: Theme = DEFAULT_LIGHT) -> str:
         background: {theme.primary_hover};
         border-color: {theme.primary_hover};
     }}
+    QToolButton[role="iso"] {{
+        background: #dcfce7;
+        border-color: #86efac;
+        color: #14532d;
+        font-weight: 800;
+    }}
+    QToolButton[role="iso"]:hover {{
+        background: #bbf7d0;
+        border-color: #22c55e;
+        color: #052e16;
+    }}
     QToolButton#DockTail {{
         background: {theme.surface_alt};
         color: {theme.text};

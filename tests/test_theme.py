@@ -44,6 +44,12 @@ class ThemeTests(unittest.TestCase):
         for source_kind in ["explorer", "manual", "recent", "drop", "empty"]:
             self.assertIn(f'sourceKind="{source_kind}"', stylesheet)
 
+    def test_dock_stylesheet_has_iso_shortcut_state(self) -> None:
+        stylesheet = dock_stylesheet()
+
+        self.assertIn('role="iso"', stylesheet)
+        self.assertIn("#dcfce7", stylesheet)
+
     def test_theme_registry_resolves_supported_themes(self) -> None:
         self.assertIs(theme_by_name("graphite-light"), DEFAULT_LIGHT)
         self.assertIs(theme_by_name("engineering-blue-2"), ENGINEERING_BLUE_LIGHT)
