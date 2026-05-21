@@ -104,6 +104,13 @@ class DockWindow(QWidget):
             text="指令  Ctrl+K",
         )
         palette_button.setProperty("role", "primary")
+        iso_button = self._tool_button(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView),
+            "開啟 ISO PDF 一鍵處理",
+            self.open_iso_workbench,
+            text="ISO",
+        )
+        iso_button.setToolTip("開啟 ISO PDF 一鍵處理 / 命名工作台")
         recent_button = self._menu_button("近期", self._build_recent_menu)
         recent_button.setToolTip("最近指令、最近檔案、最近資料夾")
         overflow_button = self._menu_button("更多", self._build_overflow_menu)
@@ -115,6 +122,7 @@ class DockWindow(QWidget):
         self._layout.addWidget(self._tail_button)
         self._layout.addWidget(self._title_label)
         self._layout.addWidget(palette_button)
+        self._layout.addWidget(iso_button)
         self._layout.addWidget(recent_button)
         self._layout.addWidget(self._context_label)
         self._layout.addWidget(self._drop_hint, 1)
@@ -245,6 +253,15 @@ class DockWindow(QWidget):
         palette.action_requested.connect(self.run_action)
         palette.exec()
 
+    def open_iso_workbench(self) -> None:
+        self._open_iso_workbench("iso.pdf_page_naming", "ISO PDF 拆頁命名", "ISO")
+
+    def _open_iso_workbench(self, action_id: str, title: str, category: str) -> None:
+        self._state_store.record_action(action_id, title, category)
+        self._state_store.record_context(self._context)
+        dialog = IsoPdfNamingDialog(self._context, self, state_store=self._state_store)
+        dialog.exec()
+
     def run_action(self, action: ActionDefinition | ActionRequest) -> None:
         options = {}
         if isinstance(action, ActionRequest):
@@ -257,10 +274,7 @@ class DockWindow(QWidget):
             dialog.exec()
             return
         if action.command.type == "ui_iso_pdf_rename_dialog":
-            self._state_store.record_action(action.id, action.title, action.category)
-            self._state_store.record_context(self._context)
-            dialog = IsoPdfNamingDialog(self._context, self, state_store=self._state_store)
-            dialog.exec()
+            self._open_iso_workbench(action.id, action.title, action.category)
             return
 
         self._state_store.record_action(action.id, action.title, action.category)
