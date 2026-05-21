@@ -62,6 +62,8 @@ from launcher.plugins.iso_tools.rename_plan import build_rename_plan
 from launcher.plugins.iso_tools.serial_correction import correct_result_with_iso_lookup
 from launcher.plugins.iso_tools.serial_vision import DEFAULT_SERIAL_REGION, SerialVisionRegion, SerialVisionResult
 from launcher.plugins.iso_tools.serial_vision import calibrate_serial_region_from_qimage, detect_serial_two_stage_from_qimage, serial_region_bounds
+from launcher.plugins.iso_tools.issues import ChecklistIssue, issue_state_text
+from launcher.plugins.iso_tools.validator import IsoChecklistContext, summarize_checklist, validate_autopilot_checklist
 from launcher.plugins.rename_tools.rename_actions import RenameOperation, _apply_operations, _validate_operations
 from launcher.ui.iso_pdf.batch_detect import BatchDetectThread, detect_serial_from_pdf
 from launcher.ui.iso_pdf.region_selector import RegionSelector
@@ -2208,17 +2210,9 @@ class IsoPdfNamingDialog(QDialog):
         self._autopilot_profile_value.setText(self._autopilot_profile_text())
 
         checks = self._autopilot_checks()
-        blocked = 0
-        warnings = 0
-        pending = 0
-        for key, state, detail in checks:
-            if state == "blocked":
-                blocked += 1
-            elif state == "warn":
-                warnings += 1
-            elif state == "pending":
-                pending += 1
-            self._set_autopilot_check(key, state, detail)
+        summary_counts = summarize_checklist(checks)
+        for issue in checks:
+            self._set_autopilot_check(issue.key, issue.state, issue.detail)
 
         running = self._batch_thread is not None and self._batch_thread.isRunning()
         if running:
@@ -2226,17 +2220,17 @@ class IsoPdfNamingDialog(QDialog):
             self._autopilot_run_button.setText("處理中...")
             summary = "批次判讀正在執行，請等待 Checklist 更新。"
             state = "running"
-        elif blocked:
+        elif summary_counts.blocked:
             self._autopilot_run_button.setEnabled(False)
             self._autopilot_run_button.setText("請先處理紅色項目")
-            summary = f"{blocked} 個紅色阻擋項目，尚不能啟動一鍵流程。"
+            summary = f"{summary_counts.blocked} 個紅色阻擋項目，尚不能啟動一鍵流程。"
             state = "blocked"
-        elif warnings:
+        elif summary_counts.warnings:
             self._autopilot_run_button.setEnabled(True)
             self._autopilot_run_button.setText("一鍵處理（含注意項）")
-            summary = f"可啟動，但有 {warnings} 個注意項；流程完成後會停在確認頁。"
+            summary = f"可啟動，但有 {summary_counts.warnings} 個注意項；流程完成後會停在確認頁。"
             state = "warn"
-        elif pending:
+        elif summary_counts.pending:
             self._autopilot_run_button.setEnabled(True)
             self._autopilot_run_button.setText("一鍵處理目前資料夾")
             summary = "來源檢查可用，尚有項目會在流程中產生。"
@@ -2251,65 +2245,33 @@ class IsoPdfNamingDialog(QDialog):
         self._autopilot_summary.style().unpolish(self._autopilot_summary)
         self._autopilot_summary.style().polish(self._autopilot_summary)
 
-    def _autopilot_checks(self) -> list[tuple[str, str, str]]:
+    def _autopilot_checks(self) -> tuple[ChecklistIssue, ...]:
         folder = self._profile_folder()
-        checks: list[tuple[str, str, str]] = []
-        if folder is not None and folder.exists():
-            checks.append(("folder", "ready", str(folder)))
-        else:
-            checks.append(("folder", "blocked", "請先選擇含 PDF / ISO List 的資料夾"))
-
-        if self._combine_pdf is not None and self._pdfs == [self._combine_pdf]:
-            checks.append(("pdf", "warn", f"找到合併 PDF，啟動後會拆頁：{self._combine_pdf.name}"))
-        elif self._pdfs:
-            checks.append(("pdf", "ready", f"已載入 {len(self._pdfs)} 個頁面 PDF"))
-        elif self._combine_pdf is not None:
-            checks.append(("pdf", "warn", f"已選合併 PDF：{self._combine_pdf.name}"))
-        else:
-            checks.append(("pdf", "blocked", "找不到可處理的 PDF"))
-
-        iso_candidate = self._auto_xlsx_candidate()
-        if self._records:
-            checks.append(("iso", "ready", f"已套用 {len(self._records)} 筆 ISO 對照資料"))
-        elif self._iso_table is not None:
-            checks.append(("iso", "warn", "已讀取 Sheet，欄位尚未套用"))
-        elif self._iso_list_path is not None:
-            checks.append(("iso", "warn", f"已選 ISO List，尚未讀取：{self._iso_list_path.name}"))
-        elif iso_candidate is not None:
-            checks.append(("iso", "warn", f"找到候選 ISO List，啟動後會自動載入：{iso_candidate.name}"))
-        else:
-            checks.append(("iso", "blocked", "找不到 .xlsx / .csv ISO List"))
-
-        checks.append(("ocr", *self._ocr_check_state()))
-        checks.append(("profile", *self._profile_check_state()))
-
-        if folder is None:
-            checks.append(("output", "pending", "等待資料夾"))
-        elif os.access(folder, os.W_OK):
-            checks.append(("output", "ready", "輸出資料夾可寫入"))
-        else:
-            checks.append(("output", "blocked", "輸出資料夾不可寫入"))
-
-        blocking_renames = self._blocking_rename_problem_count()
-        checked_count = self._checked_rename_count()
-        if blocking_renames:
-            checks.append(("rename", "blocked", f"{blocking_renames} 個命名阻擋項目"))
-        elif self._problem_row_count:
-            checks.append(("rename", "warn", f"{self._problem_row_count} 列需要人工確認"))
-        elif checked_count:
-            checks.append(("rename", "ready", f"{checked_count} 個 PDF 可更名"))
-        elif self._pdfs:
-            checks.append(("rename", "pending", "尚未產生命名計畫"))
-        else:
-            checks.append(("rename", "pending", "等待 PDF 來源"))
-        return checks
+        context = IsoChecklistContext(
+            folder=folder,
+            combine_pdf=self._combine_pdf,
+            page_folder=self._page_folder,
+            pdfs=tuple(self._pdfs),
+            iso_list_path=self._iso_list_path,
+            iso_table_loaded=self._iso_table is not None,
+            iso_record_count=len(self._records),
+            iso_candidate=self._auto_xlsx_candidate(),
+            cv2_available=find_spec("cv2") is not None,
+            rapidocr_available=find_spec("rapidocr_onnxruntime") is not None,
+            serial_region_default=self._serial_region() == DEFAULT_SERIAL_REGION,
+            drawing_region_default=self._drawing_region() == DEFAULT_DRAWING_REGION,
+            blocking_rename_count=self._blocking_rename_problem_count(),
+            problem_row_count=self._problem_row_count,
+            checked_rename_count=self._checked_rename_count(),
+        )
+        return validate_autopilot_checklist(context)
 
     def _set_autopilot_check(self, key: str, state: str, detail: str) -> None:
         row = self._autopilot_status_rows.get(key)
         if row is None:
             return
         state_label, detail_label = row
-        state_label.setText(_check_state_text(state))
+        state_label.setText(issue_state_text(state))
         state_label.setProperty("state", state)
         state_label.style().unpolish(state_label)
         state_label.style().polish(state_label)
@@ -2319,20 +2281,6 @@ class IsoPdfNamingDialog(QDialog):
         if self._serial_region() != DEFAULT_SERIAL_REGION or self._drawing_region() != DEFAULT_DRAWING_REGION:
             return f"已套用圖框設定；流水號區 {self._serial_region_text()}"
         return "使用預設圖框設定；建議由工程師針對常用圖框調校一次"
-
-    def _profile_check_state(self) -> tuple[str, str]:
-        if self._serial_region() != DEFAULT_SERIAL_REGION or self._drawing_region() != DEFAULT_DRAWING_REGION:
-            return "ready", "已載入圖框 / ROI profile"
-        return "warn", "使用預設判讀區，首次專案建議先調校"
-
-    def _ocr_check_state(self) -> tuple[str, str]:
-        has_cv2 = find_spec("cv2") is not None
-        has_rapidocr = find_spec("rapidocr_onnxruntime") is not None
-        if has_cv2 and has_rapidocr:
-            return "ready", "OpenCV + RapidOCR 可用"
-        if has_cv2:
-            return "warn", "OpenCV 可用；RapidOCR 未安裝，判讀穩定度會下降"
-        return "blocked", "OpenCV 未安裝，無法執行影像判讀"
 
     def _blocking_rename_problem_count(self) -> int:
         blockers = ("命名重複", "目標已存在", "來源不存在", "缺少命名")
@@ -2503,16 +2451,6 @@ def _review_issue_kind(reason: str) -> str:
     if "未判讀" in reason or "找不到" in reason or "缺少" in reason:
         return "missing"
     return "review"
-
-
-def _check_state_text(state: str) -> str:
-    return {
-        "ready": "OK",
-        "warn": "注意",
-        "blocked": "阻擋",
-        "running": "執行中",
-        "pending": "待檢查",
-    }.get(state, state)
 
 
 def _autopilot_pdf_text(combine_pdf: Path | None, page_folder: Path | None, pdfs: list[Path]) -> str:
