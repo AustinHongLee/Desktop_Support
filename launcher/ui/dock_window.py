@@ -29,6 +29,7 @@ from launcher.core.runner import ActionRunner
 from launcher.core.state_store import AppStateStore
 from launcher.ui.command_palette import ActionRequest, CommandPalette
 from launcher.ui.edge_positioner import EdgePositioner, screen_area_from_qrect
+from launcher.ui.explorer_context_menu_dialog import ExplorerContextMenuDialog
 from launcher.ui.iso_pdf_naming_dialog import IsoPdfNamingDialog
 from launcher.ui.job_monitor import ActionRunThread, JobMonitor
 from launcher.ui.plugin_manager_dialog import PluginManagerDialog
@@ -568,6 +569,9 @@ class DockWindow(QWidget):
             item.triggered.connect(lambda _checked=False, selected=screen.name(): self._set_screen(selected))
             screen_menu.addAction(item)
         menu.addSeparator()
+        context_menu = QAction("右鍵選單管理...", menu)
+        context_menu.triggered.connect(self.open_explorer_context_menu_manager)
+        menu.addAction(context_menu)
         preferences = QAction("偏好設定...", menu)
         preferences.triggered.connect(self.open_preferences)
         menu.addAction(preferences)
@@ -629,6 +633,10 @@ class DockWindow(QWidget):
             developer_mode=preferences.developer_mode,
         )
         self._apply_dock_preferences()
+
+    def open_explorer_context_menu_manager(self) -> None:
+        dialog = ExplorerContextMenuDialog(self)
+        dialog.exec()
 
     def _use_context(self, context: LauncherContext, *, record: bool = True) -> None:
         self._context = context

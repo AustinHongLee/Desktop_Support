@@ -7,7 +7,7 @@ if (-not (Test-Path $Pythonw)) {
     throw "找不到 $Pythonw。請先執行 .\run_launcher.ps1 建立/確認專案 venv。"
 }
 
-$CommandPrefix = "`"$Pythonw`" -m launcher.app.main --context-source explorer.menu --set-context"
+$CommandPrefix = "`"$Pythonw`" -m launcher.app.main --show-existing --context-source explorer.menu --set-context"
 $VerbName = "EngineeringLauncherSetContext"
 $VerbTitle = "送到工程工具列"
 $Root = [Microsoft.Win32.Registry]::CurrentUser
@@ -35,4 +35,3 @@ Set-Verb -BaseSubKey "Software\Classes\Drive\shell" -ArgumentToken "%1"
 
 Write-Host "已安裝 Explorer 右鍵選單：$VerbTitle"
 Write-Host "範圍：檔案、資料夾、資料夾背景、磁碟機"
-

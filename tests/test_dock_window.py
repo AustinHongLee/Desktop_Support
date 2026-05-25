@@ -133,6 +133,16 @@ class DockWindowTests(unittest.TestCase):
             self.assertTrue(window._drop_hint.isHidden())
             self.assertFalse(window.property("dropTarget"))
 
+    def test_edge_menu_exposes_context_menu_manager(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            window = _make_window(state)
+
+            menu = window._build_edge_menu()
+            action_texts = [action.text() for action in menu.actions()]
+
+            self.assertIn("右鍵選單管理...", action_texts)
+
     def test_wake_request_shows_collapsed_hidden_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = AppStateStore(Path(tmp) / "state.json")
