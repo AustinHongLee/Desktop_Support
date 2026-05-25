@@ -8,10 +8,11 @@ from launcher.app.main import _instance_mutex_name, _parse_args, main
 
 class AppMainArgumentTests(unittest.TestCase):
     def test_start_hidden_argument_is_supported(self) -> None:
-        args = _parse_args(["--start-hidden", "--show-existing"])
+        args = _parse_args(["--start-hidden", "--show-existing", "--context-menu-manager"])
 
         self.assertTrue(args.start_hidden)
         self.assertTrue(args.show_existing)
+        self.assertTrue(args.context_menu_manager)
         self.assertFalse(args.self_test)
 
     def test_show_context_arguments_still_parse(self) -> None:

@@ -14,6 +14,8 @@ The launcher is intentionally small:
 
 一般使用者只需要雙擊根目錄的 `START.vbs`。
 
+右鍵登錄管理請雙擊根目錄的 `RIGHT_CLICK_MANAGER.vbs`。它會開啟管理視窗，讓不熟 regedit 的使用者直接安裝、修復或移除 Explorer 右鍵入口。
+
 進階/除錯入口已集中放在 `scripts\launcher\`：
 
 - `scripts\launcher\run_launcher.ps1`：背景啟動

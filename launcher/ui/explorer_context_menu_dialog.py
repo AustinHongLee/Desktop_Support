@@ -10,13 +10,13 @@ from launcher.windows.context_menu_registry import context_menu_status, install_
 class ExplorerContextMenuDialog(QDialog):
     def __init__(self, parent=None) -> None:  # noqa: ANN001
         super().__init__(parent)
-        self.setWindowTitle("右鍵選單管理")
+        self.setWindowTitle("右鍵登錄管理員")
         self.setMinimumSize(720, 460)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
 
-        title = QLabel("Explorer 右鍵選單")
+        title = QLabel("右鍵登錄管理員")
         title.setObjectName("PreferenceTitle")
-        hint = QLabel("管理「送到工程工具列」右鍵入口。此功能寫入 HKCU，不需要系統管理員權限。")
+        hint = QLabel("替目前使用者管理 Explorer 右鍵入口「送到工程工具列」。會寫入 HKCU，不需要打開 regedit，也不需要系統管理員權限。")
         hint.setObjectName("PreferenceHint")
         hint.setWordWrap(True)
 
@@ -28,7 +28,7 @@ class ExplorerContextMenuDialog(QDialog):
 
         refresh_button = QPushButton("重新檢查")
         refresh_button.clicked.connect(self.refresh_status)
-        install_button = QPushButton("安裝 / 更新")
+        install_button = QPushButton("安裝 / 修復右鍵")
         install_button.setDefault(True)
         install_button.clicked.connect(self.install_or_update)
         remove_button = QPushButton("移除右鍵")
@@ -69,11 +69,11 @@ class ExplorerContextMenuDialog(QDialog):
         try:
             status = install_context_menu()
         except Exception as exc:
-            QMessageBox.critical(self, "右鍵選單管理", str(exc))
+            QMessageBox.critical(self, "右鍵登錄管理員", str(exc))
             self.refresh_status()
             return
         self._summary.setText(f"狀態：{status.summary}")
-        self._detail.setPlainText("[完成] 已安裝 / 更新 Explorer 右鍵選單。\n\n" + "\n".join(status_lines(status)))
+        self._detail.setPlainText("[完成] 已安裝 / 修復 Explorer 右鍵選單。\n\n" + "\n".join(status_lines(status)))
 
     def remove_context_menu(self) -> None:
         answer = QMessageBox.question(
@@ -88,7 +88,7 @@ class ExplorerContextMenuDialog(QDialog):
         try:
             status = uninstall_context_menu()
         except Exception as exc:
-            QMessageBox.critical(self, "右鍵選單管理", str(exc))
+            QMessageBox.critical(self, "右鍵登錄管理員", str(exc))
             self.refresh_status()
             return
         self._summary.setText(f"狀態：{status.summary}")

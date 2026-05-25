@@ -33,8 +33,21 @@ def _run_tk() -> int:
     return tk_main()
 
 
+def _run_context_menu_manager() -> int:
+    from PyQt6.QtWidgets import QApplication
+
+    from launcher.ui.explorer_context_menu_dialog import ExplorerContextMenuDialog
+
+    app = QApplication(sys.argv)
+    dialog = ExplorerContextMenuDialog()
+    dialog.show()
+    return app.exec()
+
+
 def main() -> int:
     args = _parse_args(sys.argv[1:])
+    if args.context_menu_manager:
+        return _run_context_menu_manager()
     if args.self_test:
         return run_self_test()
 
@@ -62,6 +75,7 @@ def main() -> int:
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--context-menu-manager", action="store_true", help="open the Explorer right-click registry manager")
     parser.add_argument("--start-hidden", action="store_true", help="start in the system tray without showing the dock")
     parser.add_argument("--show-existing", action="store_true", help="show the existing launcher instance when one is already running")
     parser.add_argument("--set-context", nargs="+", default=[])

@@ -29,6 +29,7 @@ class ExplorerContextMenuDialogTests(unittest.TestCase):
         with patch("launcher.ui.explorer_context_menu_dialog.context_menu_status", return_value=status):
             dialog = ExplorerContextMenuDialog()
 
+        self.assertEqual(dialog.windowTitle(), "右鍵登錄管理員")
         self.assertIn("已安裝", dialog._summary.text())
         self.assertIn("檔案：正確", dialog._detail.toPlainText())
 
