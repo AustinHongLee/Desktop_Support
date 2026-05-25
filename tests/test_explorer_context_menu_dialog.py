@@ -64,6 +64,51 @@ class ExplorerContextMenuDialogTests(unittest.TestCase):
 
         self.assertEqual(resolved, path)
 
+    def test_layer_filter_hides_non_matching_rows(self) -> None:
+        target = CONTEXT_MENU_TARGETS[0]
+        status = ExplorerContextMenuStatus(
+            pythonw=Path("C:/Tool/.venv/Scripts/pythonw.exe"),
+            pythonw_exists=True,
+            targets=(ContextMenuTargetStatus(target, False),),
+        )
+        shell_entry = ContextMenuEntry(
+            id="HKCU|shell|a",
+            label="cmder",
+            key_name="cmder",
+            root_name="HKCU",
+            root_handle=object(),
+            location=ContextMenuLocation("資料夾空白處", "a", "shell"),
+            key_path="a",
+            kind="shell",
+            enabled=True,
+            editable=True,
+            command="cmder.exe",
+        )
+        com_entry = ContextMenuEntry(
+            id="HKLM|shellex|b",
+            label="COM handler",
+            key_name="COM",
+            root_name="HKLM",
+            root_handle=object(),
+            location=ContextMenuLocation("檔案 COM", "b", "shellex"),
+            key_path="b",
+            kind="shellex",
+            enabled=True,
+            editable=False,
+            details="{clsid}",
+        )
+
+        with patch("launcher.ui.explorer_context_menu_dialog.context_menu_status", return_value=status):
+            with patch("launcher.ui.explorer_context_menu_dialog.list_context_menu_entries", return_value=[shell_entry, com_entry]):
+                dialog = ExplorerContextMenuDialog()
+
+        dialog._active_layer_filter = "kind:shellex"
+        dialog._apply_filter()
+
+        self.assertTrue(dialog._table.isRowHidden(0))
+        self.assertFalse(dialog._table.isRowHidden(1))
+        self.assertGreater(dialog._layer_tree.topLevelItemCount(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

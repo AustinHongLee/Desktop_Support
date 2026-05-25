@@ -17,9 +17,13 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QStyle,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from launcher.ui.theme import preferences_stylesheet
@@ -43,6 +47,7 @@ class ExplorerContextMenuDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self._entries: list[ContextMenuEntry] = []
         self._entry_by_id: dict[str, ContextMenuEntry] = {}
+        self._active_layer_filter = "all"
         self._icon_provider = QFileIconProvider()
 
         title = QLabel("右鍵登錄管理員")
@@ -53,6 +58,13 @@ class ExplorerContextMenuDialog(QDialog):
 
         self._summary = QLabel("尚未檢查")
         self._summary.setObjectName("PreferenceHint")
+
+        self._layer_tree = QTreeWidget()
+        self._layer_tree.setHeaderHidden(True)
+        self._layer_tree.setMinimumWidth(210)
+        self._layer_tree.setMaximumWidth(280)
+        self._layer_tree.currentItemChanged.connect(self._set_layer_filter)
+
         self._search = QLineEdit()
         self._search.setPlaceholderText("搜尋名稱、位置、來源、指令")
         self._search.textChanged.connect(self._apply_filter)
@@ -69,6 +81,20 @@ class ExplorerContextMenuDialog(QDialog):
         self._detail = QPlainTextEdit()
         self._detail.setReadOnly(True)
         self._detail.setMinimumHeight(130)
+
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
+        right_layout.addWidget(self._search)
+        right_layout.addWidget(self._table, 1)
+        right_layout.addWidget(self._detail)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self._layer_tree)
+        splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
         refresh_button = QPushButton("重新檢查")
         refresh_button.clicked.connect(self.refresh_status)
@@ -99,9 +125,7 @@ class ExplorerContextMenuDialog(QDialog):
         layout.addWidget(title)
         layout.addWidget(hint)
         layout.addWidget(self._summary)
-        layout.addWidget(self._search)
-        layout.addWidget(self._table, 1)
-        layout.addWidget(self._detail)
+        layout.addWidget(splitter, 1)
         layout.addLayout(buttons)
 
         self.setStyleSheet(preferences_stylesheet())
@@ -121,6 +145,7 @@ class ExplorerContextMenuDialog(QDialog):
             f"工程工具列右鍵：{status.summary}｜掃描 {len(self._entries)} 項｜可停用/恢復 {editable_count} 項｜已停用 {disabled_count} 項"
         )
         self._entry_by_id = {entry.id: entry for entry in self._entries}
+        self._populate_layers()
         self._populate_table(self._entries)
         if self._entries:
             self._update_selection_detail()
@@ -158,6 +183,41 @@ class ExplorerContextMenuDialog(QDialog):
         self._detail.setPlainText("[完成] 已移除 Explorer 右鍵選單。\n\n" + "\n".join(status_lines(status)))
         self.refresh_status()
 
+    def _populate_layers(self) -> None:
+        self._layer_tree.blockSignals(True)
+        self._layer_tree.clear()
+        self._active_layer_filter = "all"
+
+        all_item = _tree_item(f"全部 ({len(self._entries)})", "all")
+        all_item.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogListView))
+        self._layer_tree.addTopLevelItem(all_item)
+
+        status_group = _tree_item("狀態")
+        status_group.addChild(_tree_item(f"可管理 ({_count_entries(self._entries, lambda entry: entry.editable)})", "editable"))
+        status_group.addChild(_tree_item(f"已停用 ({_count_entries(self._entries, lambda entry: not entry.enabled)})", "disabled"))
+        self._layer_tree.addTopLevelItem(status_group)
+
+        kind_group = _tree_item("類型")
+        kind_group.addChild(_tree_item(f"一般 shell ({_count_entries(self._entries, lambda entry: entry.kind == 'shell')})", "kind:shell"))
+        kind_group.addChild(_tree_item(f"COM handler ({_count_entries(self._entries, lambda entry: entry.kind == 'shellex')})", "kind:shellex"))
+        self._layer_tree.addTopLevelItem(kind_group)
+
+        location_group = _tree_item("位置")
+        for location_label in sorted({entry.location.label for entry in self._entries}):
+            count = _count_entries(self._entries, lambda entry, label=location_label: entry.location.label == label)
+            location_group.addChild(_tree_item(f"{location_label} ({count})", f"location:{location_label}"))
+        self._layer_tree.addTopLevelItem(location_group)
+
+        source_group = _tree_item("來源")
+        for root_name in sorted({entry.root_name for entry in self._entries}):
+            count = _count_entries(self._entries, lambda entry, name=root_name: entry.root_name == name)
+            source_group.addChild(_tree_item(f"{root_name} ({count})", f"root:{root_name}"))
+        self._layer_tree.addTopLevelItem(source_group)
+
+        self._layer_tree.expandAll()
+        self._layer_tree.setCurrentItem(all_item)
+        self._layer_tree.blockSignals(False)
+
     def _populate_table(self, entries: list[ContextMenuEntry]) -> None:
         self._table.setRowCount(0)
         for entry in entries:
@@ -188,20 +248,38 @@ class ExplorerContextMenuDialog(QDialog):
         if self._table.rowCount() > 0:
             self._table.selectRow(0)
 
+    def _set_layer_filter(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None = None) -> None:
+        if current is None:
+            return
+        token = current.data(0, Qt.ItemDataRole.UserRole)
+        if not token:
+            return
+        self._active_layer_filter = str(token)
+        self._apply_filter()
+
     def _apply_filter(self) -> None:
         needle = self._search.text().strip().casefold()
         for row in range(self._table.rowCount()):
+            entry = self._entry_for_row(row)
             haystack = " ".join(
                 self._table.item(row, column).text()
                 for column in range(self._table.columnCount())
                 if self._table.item(row, column) is not None
             ).casefold()
-            self._table.setRowHidden(row, bool(needle) and needle not in haystack)
+            hidden_by_search = bool(needle) and needle not in haystack
+            hidden_by_layer = entry is not None and not _entry_matches_layer_filter(entry, self._active_layer_filter)
+            self._table.setRowHidden(row, hidden_by_search or hidden_by_layer)
 
     def _selected_entry(self) -> ContextMenuEntry | None:
         row = self._table.currentRow()
         if row < 0:
             return None
+        item = self._table.item(row, 0)
+        if item is None:
+            return None
+        return self._entry_by_id.get(str(item.data(Qt.ItemDataRole.UserRole)))
+
+    def _entry_for_row(self, row: int) -> ContextMenuEntry | None:
         item = self._table.item(row, 0)
         if item is None:
             return None
@@ -264,3 +342,30 @@ def _resolved_icon_path(value: str) -> Path | None:
         return None
     path = Path(candidate)
     return path if path.exists() else None
+
+
+def _tree_item(label: str, filter_token: str = "") -> QTreeWidgetItem:
+    item = QTreeWidgetItem([label])
+    if filter_token:
+        item.setData(0, Qt.ItemDataRole.UserRole, filter_token)
+    return item
+
+
+def _count_entries(entries: list[ContextMenuEntry], predicate) -> int:  # noqa: ANN001
+    return sum(1 for entry in entries if predicate(entry))
+
+
+def _entry_matches_layer_filter(entry: ContextMenuEntry, token: str) -> bool:
+    if token == "all":
+        return True
+    if token == "editable":
+        return entry.editable
+    if token == "disabled":
+        return not entry.enabled
+    if token.startswith("kind:"):
+        return entry.kind == token.split(":", 1)[1]
+    if token.startswith("root:"):
+        return entry.root_name == token.split(":", 1)[1]
+    if token.startswith("location:"):
+        return entry.location.label == token.split(":", 1)[1]
+    return True
