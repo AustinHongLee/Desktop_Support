@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ except ImportError:  # pragma: no cover - Windows-only integration.
 
 VERB_NAME = "EngineeringLauncherSetContext"
 VERB_TITLE = "送到工程工具列"
+CUSTOM_VERB_PREFIX = "EngineeringLauncherCustom"
 
 
 @dataclass(frozen=True)
@@ -89,10 +91,28 @@ class ContextMenuEntry:
     error: str = ""
 
 
+@dataclass(frozen=True)
+class ContextMenuCreateRequest:
+    label: str
+    target: ContextMenuTarget
+    command: str
+    icon: str = ""
+    key_name: str = ""
+    shift_only: bool = False
+
+
 CONTEXT_MENU_TARGETS = (
     ContextMenuTarget("檔案", r"Software\Classes\*\shell", "%1"),
     ContextMenuTarget("資料夾", r"Software\Classes\Directory\shell", "%1"),
     ContextMenuTarget("資料夾空白處", r"Software\Classes\Directory\Background\shell", "%V"),
+    ContextMenuTarget("磁碟機", r"Software\Classes\Drive\shell", "%1"),
+)
+
+CUSTOM_CONTEXT_MENU_TARGETS = (
+    ContextMenuTarget("檔案", r"Software\Classes\*\shell", "%1"),
+    ContextMenuTarget("資料夾", r"Software\Classes\Directory\shell", "%1"),
+    ContextMenuTarget("資料夾空白處", r"Software\Classes\Directory\Background\shell", "%V"),
+    ContextMenuTarget("桌面空白處", r"Software\Classes\DesktopBackground\Shell", "%V"),
     ContextMenuTarget("磁碟機", r"Software\Classes\Drive\shell", "%1"),
 )
 
@@ -115,6 +135,13 @@ INVENTORY_LOCATIONS = (
 
 def expected_context_menu_command(pythonw: Path, argument_token: str) -> str:
     return f'"{pythonw}" -m launcher.app.main --show-existing --context-source explorer.menu --set-context "{argument_token}"'
+
+
+def expected_iso_workbench_command(pythonw: Path, argument_token: str) -> str:
+    return (
+        f'"{pythonw}" -m launcher.app.main --show-existing --context-source explorer.menu '
+        f'--open-iso-workbench --set-context "{argument_token}"'
+    )
 
 
 def default_pythonw_path(root: Path | None = None) -> Path:
@@ -167,6 +194,80 @@ def set_context_menu_entry_enabled(entry: ContextMenuEntry, enabled: bool) -> No
                 pass
         else:
             winreg.SetValueEx(key, "LegacyDisable", 0, winreg.REG_SZ, "")
+
+
+def create_context_menu_entry(request: ContextMenuCreateRequest) -> ContextMenuEntry:
+    _require_winreg()
+    label = request.label.strip()
+    command = request.command.strip()
+    if not label:
+        raise ValueError("右鍵項目名稱不可空白。")
+    if not command:
+        raise ValueError("右鍵項目指令不可空白。")
+    target = _known_custom_target(request.target)
+    key_name = request.key_name.strip() or _available_custom_key_name(target.base_subkey, label)
+    key_path = rf"{target.base_subkey}\{key_name}"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+        winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, label)
+        winreg.SetValueEx(key, "MultiSelectModel", 0, winreg.REG_SZ, "Player")
+        if request.icon.strip():
+            winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, request.icon.strip())
+        if request.shift_only:
+            winreg.SetValueEx(key, "Extended", 0, winreg.REG_SZ, "")
+        else:
+            try:
+                winreg.DeleteValue(key, "Extended")
+            except FileNotFoundError:
+                pass
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"{key_path}\command") as command_key:
+        winreg.SetValueEx(command_key, "", 0, winreg.REG_SZ, command)
+    location = ContextMenuLocation(target.label, target.base_subkey, "shell")
+    return _entry_from_key("HKCU", winreg.HKEY_CURRENT_USER, location, key_name)
+
+
+def delete_context_menu_entry(entry: ContextMenuEntry) -> None:
+    _require_winreg()
+    if entry.kind != "shell":
+        raise ValueError("COM shell extension 目前只列出，不直接刪除。")
+    if entry.root_name != "HKCU":
+        raise ValueError("目前只允許刪除目前使用者 HKCU 的右鍵項目。")
+    if not is_launcher_managed_entry(entry):
+        raise ValueError("這不是工程工具列建立的項目；為避免誤刪系統右鍵，請先用停用。")
+    _delete_tree(entry.key_path)
+
+
+def is_launcher_managed_entry(entry: ContextMenuEntry) -> bool:
+    return entry.root_name == "HKCU" and entry.kind == "shell" and (
+        entry.key_name == VERB_NAME or entry.key_name.startswith(f"{CUSTOM_VERB_PREFIX}_")
+    )
+
+
+def power_shell_here_command(target: ContextMenuTarget) -> str:
+    token = target.argument_token
+    if token == "%1" and target.label == "檔案":
+        location_expr = f"(Split-Path -LiteralPath '{token}')"
+    else:
+        location_expr = f"'{token}'"
+    return f'powershell.exe -NoExit -Command "Set-Location -LiteralPath {location_expr}"'
+
+
+def open_with_program_command(program_path: str, argument_token: str) -> str:
+    program = program_path.strip().strip('"')
+    if not program:
+        raise ValueError("請先選擇或輸入要啟動的程式。")
+    return f'"{program}" "{argument_token}"'
+
+
+def run_script_command(script_path: str, argument_token: str) -> str:
+    script = script_path.strip().strip('"')
+    if not script:
+        raise ValueError("請先選擇或輸入要執行的腳本。")
+    suffix = Path(script).suffix.casefold()
+    if suffix == ".ps1":
+        return f'powershell.exe -ExecutionPolicy Bypass -File "{script}" "{argument_token}"'
+    if suffix == ".py":
+        return f'python.exe "{script}" "{argument_token}"'
+    return f'"{script}" "{argument_token}"'
 
 
 def status_lines(status: ExplorerContextMenuStatus) -> list[str]:
@@ -364,6 +465,37 @@ def _has_value(key: object, value_name: str) -> bool:
 def _display_label(key_name: str, preferred: str, fallback: str) -> str:
     value = preferred or fallback or key_name
     return value.replace("&", "").strip() or key_name
+
+
+def _known_custom_target(target: ContextMenuTarget) -> ContextMenuTarget:
+    for known in CUSTOM_CONTEXT_MENU_TARGETS:
+        if known.label == target.label and known.base_subkey.casefold() == target.base_subkey.casefold():
+            return known
+    raise ValueError(f"不支援的右鍵位置：{target.label}")
+
+
+def _available_custom_key_name(base_subkey: str, label: str) -> str:
+    base_name = _safe_custom_key_name(label)
+    candidate = base_name
+    index = 2
+    while _subkey_exists(winreg.HKEY_CURRENT_USER, rf"{base_subkey}\{candidate}"):
+        candidate = f"{base_name}_{index}"
+        index += 1
+    return candidate
+
+
+def _safe_custom_key_name(label: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", label.strip())
+    safe = safe.strip("_") or "Action"
+    return f"{CUSTOM_VERB_PREFIX}_{safe[:48]}"
+
+
+def _subkey_exists(root_handle: object, subkey: str) -> bool:
+    try:
+        with winreg.OpenKey(root_handle, subkey, 0, winreg.KEY_READ | _registry_view_flag()):
+            return True
+    except FileNotFoundError:
+        return False
 
 
 def _entry_id(root_name: str, key_path: str, kind: str) -> str:

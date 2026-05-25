@@ -158,6 +158,20 @@ class DockWindowTests(unittest.TestCase):
             self.assertFalse(window._collapsed)
             self.assertFalse(window._hide_timer.isActive())
 
+    def test_open_iso_request_opens_workbench_after_context_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            window = _make_window(state)
+            window._context_inbox = _OpenIsoInbox(Path(tmp))
+            opened: list[bool] = []
+            window.open_iso_workbench = lambda: opened.append(True)  # type: ignore[method-assign]
+
+            window._poll_context_inbox()
+            self._app.processEvents()
+
+            self.assertEqual(window._context.source, "explorer.menu")
+            self.assertEqual(opened, [True])
+
 
 def _make_window(state: AppStateStore) -> DockWindow:
     registry = ActionRegistry(Path("missing-plugins"))
@@ -184,6 +198,21 @@ class _WakeRequest:
 class _WakeInbox:
     def take_request(self) -> _WakeRequest:
         return _WakeRequest()
+
+
+class _OpenIsoRequest:
+    command = "open_iso_workbench"
+
+    def __init__(self, root: Path) -> None:
+        self.context = LauncherContext(folder=root, source="explorer.menu")
+
+
+class _OpenIsoInbox:
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    def take_request(self) -> _OpenIsoRequest:
+        return _OpenIsoRequest(self._root)
 
 
 if __name__ == "__main__":

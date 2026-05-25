@@ -26,12 +26,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from launcher.ui.context_menu_action_dialog import ContextMenuActionDialog
 from launcher.ui.theme import preferences_stylesheet
 from launcher.windows.context_menu_registry import (
     ContextMenuEntry,
     context_menu_status,
+    delete_context_menu_entry,
     entry_detail_lines,
     install_context_menu,
+    is_launcher_managed_entry,
     list_context_menu_entries,
     set_context_menu_entry_enabled,
     status_lines,
@@ -52,7 +55,7 @@ class ExplorerContextMenuDialog(QDialog):
 
         title = QLabel("右鍵登錄管理員")
         title.setObjectName("PreferenceTitle")
-        hint = QLabel("盤點 Explorer 右鍵來源，並管理可安全停用的 shell 選單。COM shell extension 先列出供辨識，不直接改動。")
+        hint = QLabel("用模板建立自己的右鍵快速動作，也能盤點 Explorer 既有右鍵來源。COM shell extension 先列出供辨識，不直接改動。")
         hint.setObjectName("PreferenceHint")
         hint.setWordWrap(True)
 
@@ -98,12 +101,16 @@ class ExplorerContextMenuDialog(QDialog):
 
         refresh_button = QPushButton("重新檢查")
         refresh_button.clicked.connect(self.refresh_status)
+        add_button = QPushButton("新增項目")
+        add_button.setDefault(True)
+        add_button.clicked.connect(self.add_context_menu_entry)
         disable_button = QPushButton("停用選取")
         disable_button.clicked.connect(lambda: self._set_selected_enabled(False))
         enable_button = QPushButton("恢復選取")
         enable_button.clicked.connect(lambda: self._set_selected_enabled(True))
+        delete_button = QPushButton("刪除自建項目")
+        delete_button.clicked.connect(self.delete_selected_entry)
         install_button = QPushButton("安裝 / 修復工程工具列右鍵")
-        install_button.setDefault(True)
         install_button.clicked.connect(self.install_or_update)
         remove_button = QPushButton("移除工程工具列右鍵")
         remove_button.clicked.connect(self.remove_context_menu)
@@ -112,8 +119,10 @@ class ExplorerContextMenuDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addWidget(refresh_button)
+        buttons.addWidget(add_button)
         buttons.addWidget(disable_button)
         buttons.addWidget(enable_button)
+        buttons.addWidget(delete_button)
         buttons.addStretch(1)
         buttons.addWidget(remove_button)
         buttons.addWidget(install_button)
@@ -183,6 +192,40 @@ class ExplorerContextMenuDialog(QDialog):
         self._detail.setPlainText("[完成] 已移除 Explorer 右鍵選單。\n\n" + "\n".join(status_lines(status)))
         self.refresh_status()
 
+    def add_context_menu_entry(self) -> None:
+        dialog = ContextMenuActionDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        created = dialog.created_entry
+        self.refresh_status()
+        if created is not None:
+            self._select_entry(created.id)
+            self._detail.setPlainText("[完成] 已建立右鍵快速動作。\n\n" + "\n".join(entry_detail_lines(created)))
+
+    def delete_selected_entry(self) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            QMessageBox.information(self, "右鍵登錄管理員", "請先選取一個右鍵項目。")
+            return
+        if not is_launcher_managed_entry(entry):
+            QMessageBox.information(self, "右鍵登錄管理員", "目前只允許刪除工程工具列建立的 HKCU 項目；其他項目請先用停用。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "刪除自建右鍵項目",
+            f"確定要刪除「{entry.label}」嗎？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_context_menu_entry(entry)
+        except Exception as exc:
+            QMessageBox.critical(self, "右鍵登錄管理員", str(exc))
+            return
+        self.refresh_status()
+
     def _populate_layers(self) -> None:
         self._layer_tree.blockSignals(True)
         self._layer_tree.clear()
@@ -247,6 +290,14 @@ class ExplorerContextMenuDialog(QDialog):
         self._apply_filter()
         if self._table.rowCount() > 0:
             self._table.selectRow(0)
+
+    def _select_entry(self, entry_id: str) -> None:
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == entry_id:
+                self._table.selectRow(row)
+                self._table.scrollToItem(item)
+                return
 
     def _set_layer_filter(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None = None) -> None:
         if current is None:

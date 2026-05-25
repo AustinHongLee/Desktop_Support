@@ -886,6 +886,8 @@ class DockWindow(QWidget):
                 self._hide_timer.stop()
             else:
                 self._hide_timer.start(1800)
+        if getattr(request, "command", "") == "open_iso_workbench":
+            QTimer.singleShot(0, self.open_iso_workbench)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(dock_stylesheet(self._theme()))

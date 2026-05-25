@@ -29,6 +29,10 @@ class ContextInbox:
     def submit_show(self) -> str:
         return self._write_payload({"command": "show"})
 
+    def submit_open_iso_workbench(self, paths: list[str | Path], *, source: str = "explorer.menu") -> str:
+        context = _context_from_shell_paths(paths, source=source)
+        return self._write_payload({"command": "open_iso_workbench", "context": context.to_payload()})
+
     def _write_payload(self, request: dict[str, Any]) -> str:
         request_id = uuid.uuid4().hex
         payload = {

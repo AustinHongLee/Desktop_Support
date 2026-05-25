@@ -54,6 +54,23 @@ class ContextInboxTests(unittest.TestCase):
             self.assertIsNone(request.context)
             self.assertIsNone(inbox.take_request())
 
+    def test_submit_open_iso_workbench_keeps_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pdf = root / "combine.pdf"
+            pdf.write_text("x", encoding="utf-8")
+            inbox = ContextInbox(root / "request.json")
+
+            inbox.submit_open_iso_workbench([pdf], source="test.menu")
+            request = inbox.take_request()
+
+            self.assertIsNotNone(request)
+            assert request is not None
+            self.assertEqual(request.command, "open_iso_workbench")
+            self.assertIsNotNone(request.context)
+            assert request.context is not None
+            self.assertEqual(request.context.files, (pdf,))
+
     def test_take_still_returns_context_for_context_requests(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
