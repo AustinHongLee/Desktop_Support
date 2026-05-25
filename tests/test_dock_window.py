@@ -156,6 +156,7 @@ class DockWindowTests(unittest.TestCase):
 
             self.assertFalse(window.isHidden())
             self.assertFalse(window._collapsed)
+            self.assertFalse(window._hide_timer.isActive())
 
 
 def _make_window(state: AppStateStore) -> DockWindow:

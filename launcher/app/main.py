@@ -9,6 +9,8 @@ from launcher.core.paths import project_root
 from launcher.app.self_test import run_self_test
 from launcher.windows.single_instance import SingleInstanceGuard
 
+INSTANCE_MUTEX_VERSION = "v2"
+
 
 def _run_pyqt(*, start_hidden: bool = False) -> int:
     from PyQt6.QtWidgets import QApplication
@@ -70,7 +72,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 def _instance_mutex_name() -> str:
     identity = str(project_root().resolve()).casefold()
     digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
-    return f"Local\\EngineeringLauncher_{digest}"
+    return f"Local\\EngineeringLauncher_{INSTANCE_MUTEX_VERSION}_{digest}"
 
 
 if __name__ == "__main__":

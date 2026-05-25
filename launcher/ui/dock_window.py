@@ -882,7 +882,10 @@ class DockWindow(QWidget):
         self.activateWindow()
         if self._state_store.auto_hide_enabled:
             self._set_collapsed(False)
-            self._hide_timer.start(1800)
+            if getattr(request, "command", "") == "show":
+                self._hide_timer.stop()
+            else:
+                self._hide_timer.start(1800)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(dock_stylesheet(self._theme()))

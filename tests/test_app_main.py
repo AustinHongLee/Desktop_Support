@@ -36,8 +36,8 @@ class AppMainArgumentTests(unittest.TestCase):
     def test_instance_mutex_is_project_scoped(self) -> None:
         mutex_name = _instance_mutex_name()
 
-        self.assertTrue(mutex_name.startswith("Local\\EngineeringLauncher_"))
-        self.assertGreater(len(mutex_name), len("Local\\EngineeringLauncher_"))
+        self.assertTrue(mutex_name.startswith("Local\\EngineeringLauncher_v2_"))
+        self.assertGreater(len(mutex_name), len("Local\\EngineeringLauncher_v2_"))
 
 
 if __name__ == "__main__":
