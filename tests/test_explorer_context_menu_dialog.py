@@ -10,7 +10,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from launcher.ui.explorer_context_menu_dialog import ExplorerContextMenuDialog  # noqa: E402
-from launcher.windows.context_menu_registry import CONTEXT_MENU_TARGETS, ContextMenuTargetStatus, ExplorerContextMenuStatus  # noqa: E402
+from launcher.windows.context_menu_registry import (  # noqa: E402
+    CONTEXT_MENU_TARGETS,
+    ContextMenuEntry,
+    ContextMenuLocation,
+    ContextMenuTargetStatus,
+    ExplorerContextMenuStatus,
+)
 
 
 class ExplorerContextMenuDialogTests(unittest.TestCase):
@@ -25,13 +31,29 @@ class ExplorerContextMenuDialogTests(unittest.TestCase):
             pythonw_exists=True,
             targets=(ContextMenuTargetStatus(target, True, "expected", "expected", True),),
         )
+        entry = ContextMenuEntry(
+            id="HKCU|shell|Software\\Classes\\Directory\\Background\\shell\\Code",
+            label="使用 Visual Studio 開啟",
+            key_name="Code",
+            root_name="HKCU",
+            root_handle=object(),
+            location=ContextMenuLocation("資料夾空白處", "Software\\Classes\\Directory\\Background\\shell", "shell"),
+            key_path="Software\\Classes\\Directory\\Background\\shell\\Code",
+            kind="shell",
+            enabled=True,
+            editable=True,
+            command="code.exe",
+        )
 
         with patch("launcher.ui.explorer_context_menu_dialog.context_menu_status", return_value=status):
-            dialog = ExplorerContextMenuDialog()
+            with patch("launcher.ui.explorer_context_menu_dialog.list_context_menu_entries", return_value=[entry]):
+                dialog = ExplorerContextMenuDialog()
 
         self.assertEqual(dialog.windowTitle(), "右鍵登錄管理員")
-        self.assertIn("已安裝", dialog._summary.text())
-        self.assertIn("檔案：正確", dialog._detail.toPlainText())
+        self.assertIn("掃描 1 項", dialog._summary.text())
+        self.assertEqual(dialog._table.rowCount(), 1)
+        self.assertEqual(dialog._table.item(0, 1).text(), "使用 Visual Studio 開啟")
+        self.assertIn("Command / CLSID：code.exe", dialog._detail.toPlainText())
 
 
 if __name__ == "__main__":

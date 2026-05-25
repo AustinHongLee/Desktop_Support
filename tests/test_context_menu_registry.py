@@ -5,8 +5,11 @@ from pathlib import Path
 
 from launcher.windows.context_menu_registry import (
     CONTEXT_MENU_TARGETS,
+    ContextMenuEntry,
+    ContextMenuLocation,
     ContextMenuTargetStatus,
     ExplorerContextMenuStatus,
+    entry_detail_lines,
     expected_context_menu_command,
     status_lines,
 )
@@ -57,6 +60,27 @@ class ContextMenuRegistryTests(unittest.TestCase):
         self.assertIn("狀態：尚未安裝", lines)
         self.assertIn("Pythonw 存在：否", lines)
         self.assertIn("檔案：未安裝", lines)
+
+    def test_entry_detail_lines_include_registry_identity(self) -> None:
+        entry = ContextMenuEntry(
+            id="HKCU|shell|Software\\Classes\\Directory\\Background\\shell\\Git Bash",
+            label="Git Bash Here",
+            key_name="Git Bash",
+            root_name="HKCU",
+            root_handle=object(),
+            location=ContextMenuLocation("資料夾空白處", "Software\\Classes\\Directory\\Background\\shell", "shell"),
+            key_path="Software\\Classes\\Directory\\Background\\shell\\Git Bash",
+            kind="shell",
+            enabled=True,
+            editable=True,
+            command="git-bash.exe",
+        )
+
+        lines = entry_detail_lines(entry)
+
+        self.assertIn("名稱：Git Bash Here", lines)
+        self.assertIn("來源：HKCU", lines)
+        self.assertIn("Command / CLSID：git-bash.exe", lines)
 
 
 if __name__ == "__main__":
