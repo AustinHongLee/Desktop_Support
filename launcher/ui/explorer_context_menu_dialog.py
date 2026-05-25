@@ -1,15 +1,22 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+import os
+import re
+from pathlib import Path
+
+from PyQt6.QtCore import QFileInfo, Qt
+from PyQt6.QtGui import QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
+    QFileIconProvider,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -36,6 +43,7 @@ class ExplorerContextMenuDialog(QDialog):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self._entries: list[ContextMenuEntry] = []
         self._entry_by_id: dict[str, ContextMenuEntry] = {}
+        self._icon_provider = QFileIconProvider()
 
         title = QLabel("右鍵登錄管理員")
         title.setObjectName("PreferenceTitle")
@@ -167,6 +175,13 @@ class ExplorerContextMenuDialog(QDialog):
                 item = QTableWidgetItem(value)
                 if column == 0:
                     item.setData(Qt.ItemDataRole.UserRole, entry.id)
+                    item.setIcon(self._status_icon(entry))
+                    if not entry.enabled:
+                        item.setForeground(QBrush(QColor("#8a4b00")))
+                if column == 1:
+                    item.setIcon(self._entry_icon(entry))
+                    if not entry.editable:
+                        item.setForeground(QBrush(QColor("#5d6675")))
                 self._table.setItem(row, column, item)
         self._table.resizeColumnsToContents()
         self._apply_filter()
@@ -212,3 +227,40 @@ class ExplorerContextMenuDialog(QDialog):
             QMessageBox.critical(self, "右鍵登錄管理員", str(exc))
             return
         self.refresh_status()
+
+    def _status_icon(self, entry: ContextMenuEntry) -> QIcon:
+        pixmap = QStyle.StandardPixmap.SP_DialogApplyButton if entry.enabled else QStyle.StandardPixmap.SP_DialogCancelButton
+        return self.style().standardIcon(pixmap)
+
+    def _entry_icon(self, entry: ContextMenuEntry) -> QIcon:
+        icon_path = _resolved_icon_path(entry.icon) or _resolved_icon_path(entry.command)
+        if icon_path is not None:
+            icon = self._icon_provider.icon(QFileInfo(str(icon_path)))
+            if not icon.isNull():
+                return icon
+        if entry.kind == "shellex":
+            return self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
+        if "磁碟" in entry.location.label:
+            return self.style().standardIcon(QStyle.StandardPixmap.SP_DriveHDIcon)
+        if "資料夾" in entry.location.label or entry.location.label == "Folder":
+            return self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        return self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
+
+
+def _resolved_icon_path(value: str) -> Path | None:
+    raw = value.strip()
+    if not raw:
+        return None
+    raw = os.path.expandvars(raw)
+    match = re.match(r'^"([^"]+)"', raw)
+    if match:
+        candidate = match.group(1)
+    else:
+        candidate = raw.split()[0]
+    if "," in candidate:
+        candidate = candidate.split(",", 1)[0]
+    candidate = candidate.strip().strip('"')
+    if not candidate:
+        return None
+    path = Path(candidate)
+    return path if path.exists() else None
