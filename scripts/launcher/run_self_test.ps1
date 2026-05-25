@@ -1,9 +1,10 @@
 $ErrorActionPreference = "Stop"
 
-Set-Location $PSScriptRoot
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+Set-Location $ProjectRoot
 
 function Resolve-LauncherPython {
-    $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+    $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
     if (Test-Path $venvPython) {
         return @{ Exe = $venvPython; Args = @() }
     }
@@ -28,4 +29,3 @@ function Resolve-LauncherPython {
 
 $python = Resolve-LauncherPython
 & $python.Exe @($python.Args) -m launcher.app.main --self-test
-

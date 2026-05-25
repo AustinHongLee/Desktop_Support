@@ -8,10 +8,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Set-Location $PSScriptRoot
+$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+Set-Location $ProjectRoot
 
 function Resolve-LauncherBackgroundPython {
-    $venvPythonw = Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe"
+    $venvPythonw = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
     if (Test-Path $venvPythonw) {
         return $venvPythonw
     }
@@ -30,15 +31,15 @@ function Resolve-LauncherBackgroundPython {
 }
 
 function Stop-ProjectPython {
-    $venvPythonw = Join-Path $PSScriptRoot ".venv\Scripts\pythonw.exe"
-    $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+    $venvPythonw = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
+    $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
     Get-Process -Name python,pythonw -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -eq $venvPythonw -or $_.Path -eq $venvPython } |
         Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 function Resolve-LauncherPython {
-    $venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+    $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
     if (Test-Path $venvPython) {
         return @{ Exe = $venvPython; Args = @() }
     }
@@ -75,12 +76,12 @@ $launcherArgs += $LauncherArgsFromCommandLine
 if (-not $Foreground) {
     $backgroundPython = Resolve-LauncherBackgroundPython
     if ($backgroundPython) {
-        Start-Process -FilePath $backgroundPython -ArgumentList $launcherArgs -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
+        Start-Process -FilePath $backgroundPython -ArgumentList $launcherArgs -WorkingDirectory $ProjectRoot -WindowStyle Hidden
         return
     }
 
     $python = Resolve-LauncherPython
-    Start-Process -FilePath $python.Exe -ArgumentList @(@($python.Args) + $launcherArgs) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden
+    Start-Process -FilePath $python.Exe -ArgumentList @(@($python.Args) + $launcherArgs) -WorkingDirectory $ProjectRoot -WindowStyle Hidden
     return
 }
 

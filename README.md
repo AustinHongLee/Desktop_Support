@@ -10,11 +10,16 @@ The launcher is intentionally small:
 - out-of-process workers for heavy tools
 - plugin folders for future DWG, PDF, Weld, Navisworks, Git, and AI workflows
 
-## Run
+## Start
 
-```powershell
-.\run_launcher.ps1
-```
+一般使用者只需要雙擊根目錄的 `START.vbs`。
+
+進階/除錯入口已集中放在 `scripts\launcher\`：
+
+- `scripts\launcher\run_launcher.ps1`：背景啟動
+- `scripts\launcher\run_launcher.ps1 -ShowDock`：背景啟動並顯示工具列
+- `scripts\launcher\run_launcher_debug.ps1 -Restart`：重啟並追蹤 ISO 工作台 log
+- `scripts\launcher\run_self_test.ps1`：無 UI 自測
 
 ## Explorer Right-Click Context
 
@@ -39,7 +44,7 @@ launcher so the core workflow is still usable.
 For a no-GUI smoke test:
 
 ```powershell
-.\run_self_test.ps1
+.\scripts\launcher\run_self_test.ps1
 ```
 
 Optional OCR support for ISO PDF serial detection:

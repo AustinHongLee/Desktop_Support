@@ -779,7 +779,7 @@ def llm_generate_rename_plan(payload):
 ## 收尾 — 整體完成定義 (Definition of Done)
 
 - [ ] `pytest -q` 全綠（含本指令書新增的測試）。
-- [ ] `python -m launcher.app.self_test` 或 `.\run_self_test.ps1` 通過。
+- [ ] `python -m launcher.app.self_test` 或 `.\scripts\launcher\run_self_test.ps1` 通過。
 - [ ] `launcher.core.registry.ActionRegistry.load()` 在啟動時，`RegistryLoadReport.issues` 為空。
 - [ ] 對話框類 UI 改動需在 `tests/` 內補 widget-less 邏輯測試（仿 `palette_search`、`edge_positioner` 的純函式拆法）。
 - [ ] 文件更新：

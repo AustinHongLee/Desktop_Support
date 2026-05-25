@@ -4,7 +4,7 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $Pythonw = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
 
 if (-not (Test-Path $Pythonw)) {
-    throw "找不到 $Pythonw。請先執行 .\run_launcher.ps1 建立/確認專案 venv。"
+    throw "找不到 $Pythonw。請先雙擊 START.vbs 或執行 .\scripts\launcher\run_launcher.ps1 確認專案 venv。"
 }
 
 $CommandPrefix = "`"$Pythonw`" -m launcher.app.main --show-existing --context-source explorer.menu --set-context"
