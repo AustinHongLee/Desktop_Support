@@ -8,6 +8,8 @@ import sys
 import time
 import uuid
 import ctypes
+import hashlib
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +30,7 @@ REGISTRY_LAYER = "registry"
 BLOCKED_LAYER = "blocked"
 
 FILE_KINDS = {"file", "folder", "associated_file", "associated_folder", "install_folder", "shortcut"}
+MANIFEST_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,23 @@ class CleanupApplyResult:
     registry_deleted_count: int
     closed_process_count: int
     state_cleaned: bool
+    errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class QuarantineSession:
+    path: Path
+    manifest_path: Path
+    created_at: float
+    targets: tuple[str, ...]
+    moved_count: int
+    restored_count: int
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class QuarantineRestoreResult:
+    restored_count: int
     errors: tuple[str, ...] = ()
 
 
@@ -146,8 +166,7 @@ def apply_cleanup_plan(
     for item in selected:
         try:
             if item.kind in FILE_KINDS:
-                destination = _move_to_quarantine(Path(item.path), session_dir)
-                moved.append({"item": asdict(item), "destination": str(destination)})
+                moved.append(_move_item_to_quarantine_record(item, session_dir))
             elif item.kind == "state_record":
                 _clean_state_references(Path(item.path), plan.targets)
                 state_cleaned = True
@@ -160,7 +179,9 @@ def apply_cleanup_plan(
         except Exception as exc:  # pragma: no cover - integration error path.
             errors.append(f"{item.label}: {exc}")
     manifest = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "created_at": time.time(),
+        "created_by": "EngineeringLauncher SafeCleanup",
         "targets": [str(path) for path in plan.targets],
         "moved": moved,
         "registry_deleted_count": registry_deleted,
@@ -170,6 +191,7 @@ def apply_cleanup_plan(
     }
     manifest_path = session_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_restore_script(session_dir, moved)
     return CleanupApplyResult(
         quarantine_dir=session_dir,
         manifest_path=manifest_path,
@@ -186,6 +208,85 @@ def default_quarantine_root() -> Path:
     if root:
         return Path(root) / "EngineeringLauncher" / "SafeCleanupQuarantine"
     return Path.home() / ".engineering_launcher" / "SafeCleanupQuarantine"
+
+
+def list_quarantine_sessions(root: Path | None = None) -> list[QuarantineSession]:
+    quarantine_root = root or default_quarantine_root()
+    if not quarantine_root.exists():
+        return []
+    sessions: list[QuarantineSession] = []
+    for session_dir in sorted((path for path in quarantine_root.iterdir() if path.is_dir()), reverse=True):
+        manifest_path = session_dir / "manifest.json"
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = load_quarantine_manifest(session_dir)
+        except Exception:
+            continue
+        moved = _manifest_moved_records(manifest)
+        sessions.append(
+            QuarantineSession(
+                path=session_dir,
+                manifest_path=manifest_path,
+                created_at=float(manifest.get("created_at") or 0.0),
+                targets=tuple(str(target) for target in manifest.get("targets", [])),
+                moved_count=len(moved),
+                restored_count=sum(1 for record in moved if record.get("restored_at")),
+                size_bytes=sum(_record_size(record) for record in moved),
+            )
+        )
+    return sessions
+
+
+def load_quarantine_manifest(session_dir: Path) -> dict[str, Any]:
+    manifest_path = session_dir / "manifest.json"
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def restore_quarantine_items(session_dir: Path, indices: set[int] | None = None) -> QuarantineRestoreResult:
+    manifest = load_quarantine_manifest(session_dir)
+    moved = _manifest_moved_records(manifest)
+    selected = set(range(len(moved))) if indices is None else set(indices)
+    restored = 0
+    errors: list[str] = []
+    for index, record in enumerate(moved):
+        if index not in selected or record.get("restored_at"):
+            continue
+        destination_text = str(record.get("destination") or "")
+        original_text = str(record.get("original_path") or record.get("item", {}).get("path") or "")
+        destination = Path(destination_text) if destination_text else None
+        original = Path(original_text) if original_text else None
+        try:
+            if destination is None:
+                raise ValueError("manifest 缺少隔離位置")
+            if original is None:
+                raise ValueError("manifest 缺少原始路徑")
+            if not destination.exists():
+                raise FileNotFoundError(destination)
+            if original.exists():
+                raise FileExistsError(f"原位置已存在：{original}")
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(destination), str(original))
+            record["restored_at"] = time.time()
+            record["restored_to"] = str(original)
+            restored += 1
+        except Exception as exc:
+            label = original_text or destination_text or f"record {index + 1}"
+            errors.append(f"{index + 1}. {label}: {exc}")
+    manifest["moved"] = moved
+    (session_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return QuarantineRestoreResult(restored_count=restored, errors=tuple(errors))
+
+
+def delete_quarantine_session(session_dir: Path, *, root: Path | None = None) -> None:
+    quarantine_root = (root or default_quarantine_root()).resolve(strict=False)
+    target = session_dir.resolve(strict=False)
+    if not _is_relative_to(target, quarantine_root):
+        raise ValueError("只能刪除隔離區底下的 session。")
+    if not (target / "manifest.json").exists():
+        raise ValueError("找不到 manifest.json，拒絕刪除。")
+    shutil.rmtree(target)
 
 
 def _resolve_targets(context: LauncherContext) -> list[Path]:
@@ -672,6 +773,22 @@ def _close_process(pid: int) -> None:
     if completed.returncode != 0:
         message = (completed.stderr or completed.stdout or "taskkill failed").strip()
         raise RuntimeError(message)
+    _wait_for_process_exit(pid)
+
+
+def _wait_for_process_exit(pid: int, *, timeout_seconds: float = 5.0) -> None:
+    if sys.platform != "win32":
+        return
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    process = kernel32.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE
+    if not process:
+        return
+    try:
+        result = kernel32.WaitForSingleObject(process, int(timeout_seconds * 1000))
+        if result == 0x00000102:  # WAIT_TIMEOUT
+            raise TimeoutError(f"PID {pid} 尚未釋放，請手動關閉後再重試。")
+    finally:
+        kernel32.CloseHandle(process)
 
 
 @dataclass(frozen=True)
@@ -772,15 +889,103 @@ def _move_to_quarantine(source: Path, session_dir: Path) -> Path:
     return Path(shutil.move(str(source), str(destination)))
 
 
+def _move_item_to_quarantine_record(item: CleanupPlanItem, session_dir: Path) -> dict[str, Any]:
+    source = Path(item.path)
+    metadata = _path_metadata(source)
+    moved_at = time.time()
+    destination = _move_to_quarantine(source, session_dir)
+    return {
+        "item": asdict(item),
+        "original_path": str(source),
+        "destination": str(destination),
+        "original_size_bytes": metadata["size_bytes"],
+        "original_mtime": metadata["mtime"],
+        "original_sha256": metadata["sha256"],
+        "moved_at": moved_at,
+    }
+
+
+def _path_metadata(path: Path) -> dict[str, Any]:
+    try:
+        stat = path.stat()
+        size = stat.st_size if path.is_file() else _safe_size(path)
+        mtime = stat.st_mtime
+    except OSError:
+        size = 0
+        mtime = None
+    return {
+        "size_bytes": size,
+        "mtime": mtime,
+        "sha256": _sha256_file(path) if path.is_file() else "",
+    }
+
+
+def _sha256_file(path: Path, *, limit_bytes: int = 1024 * 1024 * 512) -> str:
+    try:
+        if path.stat().st_size > limit_bytes:
+            return ""
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return ""
+
+
+def _write_restore_script(session_dir: Path, moved: list[dict[str, Any]]) -> None:
+    lines = [
+        "$ErrorActionPreference = 'Stop'",
+        "# Generated by Engineering Launcher SafeCleanup.",
+        "",
+    ]
+    for record in moved:
+        destination = str(record.get("destination") or "")
+        original = str(record.get("original_path") or record.get("item", {}).get("path") or "")
+        if not destination or not original:
+            continue
+        lines.extend(
+            [
+                f"$source = '{_ps_escape(destination)}'",
+                f"$target = '{_ps_escape(original)}'",
+                "New-Item -ItemType Directory -Force -Path (Split-Path -LiteralPath $target) | Out-Null",
+                "Move-Item -LiteralPath $source -Destination $target",
+                "",
+            ]
+        )
+    (session_dir / "Restore.ps1").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _ps_escape(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _manifest_moved_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    moved = manifest.get("moved", [])
+    return [record for record in moved if isinstance(record, dict)] if isinstance(moved, list) else []
+
+
+def _record_size(record: dict[str, Any]) -> int:
+    try:
+        return int(record.get("original_size_bytes") or record.get("item", {}).get("size_bytes") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _session_quarantine_dir(root: Path | None = None) -> Path:
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     return (root or default_quarantine_root()) / timestamp
 
 
 def _safe_quarantine_name(path: Path) -> str:
-    drive = path.drive.replace(":", "") or "path"
-    parts = [drive, *path.parts[-4:]]
-    return "__".join(part.strip("\\/") for part in parts if part)
+    digest = hashlib.sha1(str(path.resolve(strict=False)).casefold().encode("utf-8", errors="ignore")).hexdigest()[:8]
+    name = _sanitize_filename(path.name or "item")
+    return f"{digest}__{name}"
+
+
+def _sanitize_filename(value: str) -> str:
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .")
+    return cleaned[:180] or "item"
 
 
 def _safe_size(path: Path) -> int:

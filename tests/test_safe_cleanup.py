@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,9 @@ from launcher.core.safe_cleanup import (
     CleanupPlanItem,
     apply_cleanup_plan,
     build_cleanup_plan,
+    delete_quarantine_session,
+    list_quarantine_sessions,
+    restore_quarantine_items,
 )
 
 
@@ -147,6 +151,47 @@ class SafeCleanupTests(unittest.TestCase):
             self.assertTrue(result.manifest_path.exists())
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["moved"][0]["item"]["label"], "delete_me.txt")
+            self.assertEqual(manifest["schema_version"], 1)
+            self.assertEqual(manifest["moved"][0]["original_path"], str(target))
+            self.assertEqual(manifest["moved"][0]["original_sha256"], hashlib.sha256(b"x").hexdigest())
+            self.assertTrue((result.quarantine_dir / "Restore.ps1").exists())
+
+    def test_restore_quarantine_items_moves_file_back_and_updates_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "restore_me.txt"
+            target.write_text("hello", encoding="utf-8")
+            quarantine = root / "quarantine"
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+            result = apply_cleanup_plan(plan, {plan.items[0].id}, quarantine_root=quarantine)
+
+            restore_result = restore_quarantine_items(result.quarantine_dir)
+
+            self.assertEqual(restore_result.restored_count, 1)
+            self.assertEqual(restore_result.errors, ())
+            self.assertTrue(target.exists())
+            self.assertEqual(target.read_text(encoding="utf-8"), "hello")
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertIn("restored_at", manifest["moved"][0])
+            sessions = list_quarantine_sessions(quarantine)
+            self.assertEqual(sessions[0].restored_count, 1)
+
+    def test_delete_quarantine_session_requires_quarantine_root_and_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "delete_me.txt"
+            target.write_text("x", encoding="utf-8")
+            quarantine = root / "quarantine"
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+            result = apply_cleanup_plan(plan, {plan.items[0].id}, quarantine_root=quarantine)
+
+            delete_quarantine_session(result.quarantine_dir, root=quarantine)
+
+            self.assertFalse(result.quarantine_dir.exists())
 
     def test_state_record_cleanup_removes_matching_recent_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

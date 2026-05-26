@@ -38,6 +38,7 @@ from launcher.core.safe_cleanup import (
     apply_cleanup_plan,
     build_cleanup_plan,
 )
+from launcher.ui.quarantine_browser_dialog import QuarantineBrowserDialog
 from launcher.ui.theme import preferences_stylesheet
 
 
@@ -118,6 +119,8 @@ class SafeCleanupDialog(QDialog):
         apply_button = QPushButton("隔離 / 清理勾選項目")
         apply_button.setDefault(True)
         apply_button.clicked.connect(self.apply_selected)
+        quarantine_button = QPushButton("管理隔離區")
+        quarantine_button.clicked.connect(self.open_quarantine_browser)
         close_button = QPushButton("關閉")
         close_button.clicked.connect(self.accept)
 
@@ -129,6 +132,7 @@ class SafeCleanupDialog(QDialog):
         toggles.addStretch(1)
 
         buttons = QHBoxLayout()
+        buttons.addWidget(quarantine_button)
         buttons.addStretch(1)
         buttons.addWidget(apply_button)
         buttons.addWidget(close_button)
@@ -170,6 +174,10 @@ class SafeCleanupDialog(QDialog):
 
         self.setStyleSheet(preferences_stylesheet())
         self._populate()
+
+    def open_quarantine_browser(self) -> None:
+        dialog = QuarantineBrowserDialog(parent=self)
+        dialog.exec()
 
     def pick_file(self) -> None:
         start = str(_initial_folder(self._context))
