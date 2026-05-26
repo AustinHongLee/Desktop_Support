@@ -42,6 +42,7 @@ FILE_KINDS = {
     "app_footprint_folder",
 }
 MANIFEST_SCHEMA_VERSION = 1
+SUPPORTED_MANIFEST_SCHEMAS = {1}
 
 ScanProgressCallback = Callable[[str, int, int], None]
 ApplyProgressCallback = Callable[[int, int, str], None]
@@ -195,10 +196,12 @@ class CleanupApplyResult:
 class QuarantineSession:
     path: Path
     manifest_path: Path
+    session_id: str
     created_at: float
     targets: tuple[str, ...]
     moved_count: int
     restored_count: int
+    registry_deleted_count: int
     size_bytes: int
 
 
@@ -297,7 +300,8 @@ def apply_cleanup_plan(
     quarantine_root: Path | None = None,
     progress: ApplyProgressCallback | None = None,
 ) -> CleanupApplyResult:
-    session_dir = _session_quarantine_dir(quarantine_root)
+    session_id = uuid.uuid4().hex
+    session_dir = _session_quarantine_dir(quarantine_root, session_id=session_id)
     session_dir.mkdir(parents=True, exist_ok=True)
     moved: list[dict[str, Any]] = []
     registry_deleted_records: list[dict[str, Any]] = []
@@ -326,6 +330,7 @@ def apply_cleanup_plan(
             errors.append(f"{item.label}: {exc}")
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,
+        "session_id": session_id,
         "created_at": time.time(),
         "created_by": "EngineeringLauncher SafeCleanup",
         "targets": [str(path) for path in plan.targets],
@@ -372,14 +377,17 @@ def list_quarantine_sessions(root: Path | None = None) -> list[QuarantineSession
         except Exception:
             continue
         moved = _manifest_moved_records(manifest)
+        registry_deleted = _manifest_registry_records(manifest)
         sessions.append(
             QuarantineSession(
                 path=session_dir,
                 manifest_path=manifest_path,
+                session_id=str(manifest.get("session_id") or session_dir.name),
                 created_at=float(manifest.get("created_at") or 0.0),
                 targets=tuple(str(target) for target in manifest.get("targets", [])),
                 moved_count=len(moved),
                 restored_count=sum(1 for record in moved if record.get("restored_at")),
+                registry_deleted_count=len(registry_deleted),
                 size_bytes=sum(_record_size(record) for record in moved),
             )
         )
@@ -389,7 +397,12 @@ def list_quarantine_sessions(root: Path | None = None) -> list[QuarantineSession
 def load_quarantine_manifest(session_dir: Path) -> dict[str, Any]:
     manifest_path = session_dir / "manifest.json"
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    schema = int(data.get("schema_version") or MANIFEST_SCHEMA_VERSION)
+    if schema not in SUPPORTED_MANIFEST_SCHEMAS:
+        raise ValueError(f"不支援的隔離 manifest schema：{schema}")
+    return data
 
 
 def restore_quarantine_items(
@@ -438,6 +451,37 @@ def restore_quarantine_items(
             label = original_text or destination_text or f"record {index + 1}"
             errors.append(f"{index + 1}. {label}: {exc}")
     manifest["moved"] = moved
+    (session_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return QuarantineRestoreResult(restored_count=restored, errors=tuple(errors))
+
+
+def restore_registry_items(session_dir: Path, indices: set[int] | None = None) -> QuarantineRestoreResult:
+    manifest = load_quarantine_manifest(session_dir)
+    registry_records = _manifest_registry_records(manifest)
+    selected = set(range(len(registry_records))) if indices is None else set(indices)
+    restored = 0
+    errors: list[str] = []
+    for index, record in enumerate(registry_records):
+        if index not in selected or record.get("restored_at"):
+            continue
+        export_text = str(record.get("export_path") or "")
+        try:
+            if not export_text:
+                raise ValueError("manifest 缺少登錄檔備份路徑")
+            export_path = Path(export_text)
+            if not export_path.exists():
+                raise FileNotFoundError(export_path)
+            completed = subprocess.run(["reg.exe", "import", str(export_path)], capture_output=True, text=True, check=False)
+            if completed.returncode != 0:
+                message = (completed.stderr or completed.stdout or "reg import failed").strip()
+                raise RuntimeError(message)
+            record["restored_at"] = time.time()
+            record["restored_to"] = "registry"
+            restored += 1
+        except Exception as exc:
+            label = _registry_record_label(record) or export_text or f"registry record {index + 1}"
+            errors.append(f"{index + 1}. {label}: {exc}")
+    manifest["registry_deleted"] = registry_records
     (session_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return QuarantineRestoreResult(restored_count=restored, errors=tuple(errors))
 
@@ -1548,6 +1592,7 @@ def _write_restore_script(session_dir: Path, moved: list[dict[str, Any]]) -> Non
     lines = [
         "$ErrorActionPreference = 'Stop'",
         "# Generated by Engineering Launcher SafeCleanup.",
+        "# Existing original targets are skipped instead of stopping the whole restore script.",
         "",
     ]
     for record in moved:
@@ -1559,8 +1604,14 @@ def _write_restore_script(session_dir: Path, moved: list[dict[str, Any]]) -> Non
             [
                 f"$source = '{_ps_escape(destination)}'",
                 f"$target = '{_ps_escape(original)}'",
-                "New-Item -ItemType Directory -Force -Path (Split-Path -LiteralPath $target) | Out-Null",
-                "Move-Item -LiteralPath $source -Destination $target",
+                'if (-not (Test-Path -LiteralPath $source)) {',
+                '    Write-Warning ("Skip missing quarantine item: " + $source)',
+                '} elseif (Test-Path -LiteralPath $target) {',
+                '    Write-Warning ("Skip existing target: " + $target)',
+                "} else {",
+                "    New-Item -ItemType Directory -Force -Path (Split-Path -LiteralPath $target) | Out-Null",
+                "    Move-Item -LiteralPath $source -Destination $target",
+                "}",
                 "",
             ]
         )
@@ -1583,8 +1634,11 @@ def _write_registry_restore_script(session_dir: Path, registry_deleted: list[dic
         lines.extend(
             [
                 f"$reg = '{_ps_escape(export_path)}'",
-                'if (-not (Test-Path -LiteralPath $reg)) { throw "Registry backup not found: $reg" }',
-                "reg.exe import $reg",
+                'if (-not (Test-Path -LiteralPath $reg)) {',
+                '    Write-Warning ("Skip missing registry backup: " + $reg)',
+                "} else {",
+                "    reg.exe import $reg",
+                "}",
                 "",
             ]
         )
@@ -1600,6 +1654,20 @@ def _manifest_moved_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return [record for record in moved if isinstance(record, dict)] if isinstance(moved, list) else []
 
 
+def _manifest_registry_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    records = manifest.get("registry_deleted", [])
+    return [record for record in records if isinstance(record, dict)] if isinstance(records, list) else []
+
+
+def _registry_record_label(record: dict[str, Any]) -> str:
+    root = str(record.get("root_name") or "")
+    key = str(record.get("registry_key") or "")
+    value = str(record.get("registry_value_name") or "(Default)")
+    if not key:
+        return ""
+    return f"{root}\\{key}\\{value}" if root else f"{key}\\{value}"
+
+
 def _record_size(record: dict[str, Any]) -> int:
     try:
         return int(record.get("original_size_bytes") or record.get("item", {}).get("size_bytes") or 0)
@@ -1607,8 +1675,9 @@ def _record_size(record: dict[str, Any]) -> int:
         return 0
 
 
-def _session_quarantine_dir(root: Path | None = None) -> Path:
-    timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+def _session_quarantine_dir(root: Path | None = None, *, session_id: str | None = None) -> Path:
+    resolved_session_id = session_id or uuid.uuid4().hex
+    timestamp = f"{time.strftime('%Y%m%d_%H%M%S')}_{resolved_session_id[:6]}"
     return (root or default_quarantine_root()) / timestamp
 
 

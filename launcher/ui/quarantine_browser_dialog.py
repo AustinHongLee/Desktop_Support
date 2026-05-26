@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QStyle,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
     QFileIconProvider,
@@ -33,6 +34,7 @@ from launcher.core.safe_cleanup import (
     list_quarantine_sessions,
     load_quarantine_manifest,
     restore_quarantine_items,
+    restore_registry_items,
 )
 from launcher.ui.theme import preferences_stylesheet
 
@@ -44,6 +46,7 @@ class QuarantineBrowserDialog(QDialog):
         self._sessions: list[QuarantineSession] = []
         self._manifest: dict[str, Any] = {}
         self._records: list[dict[str, Any]] = []
+        self._registry_records: list[dict[str, Any]] = []
         self._icon_provider = QFileIconProvider()
 
         self.setWindowTitle("隔離區管理")
@@ -52,12 +55,12 @@ class QuarantineBrowserDialog(QDialog):
 
         title = QLabel("隔離區管理")
         title.setObjectName("PreferenceTitle")
-        hint = QLabel("這裡管理安全清除工作台搬走的檔案。可先還原、確認無誤後再永久刪除隔離 session。")
+        hint = QLabel("這裡管理安全清除工作台搬走的檔案與備份的 HKCU 登錄值。可先還原、確認無誤後再永久刪除隔離 session。")
         hint.setObjectName("PreferenceHint")
         hint.setWordWrap(True)
 
-        self._session_table = QTableWidget(0, 5)
-        self._session_table.setHorizontalHeaderLabels(["時間", "項目", "已還原", "大小", "目標"])
+        self._session_table = QTableWidget(0, 6)
+        self._session_table.setHorizontalHeaderLabels(["時間", "檔案", "已還原", "登錄值", "大小", "目標"])
         self._session_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._session_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._session_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -69,6 +72,18 @@ class QuarantineBrowserDialog(QDialog):
         self._record_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._record_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._record_table.itemSelectionChanged.connect(self._update_detail)
+
+        self._registry_table = QTableWidget(0, 4)
+        self._registry_table.setHorizontalHeaderLabels(["狀態", "登錄位置", "備份檔", "刪除時間"])
+        self._registry_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._registry_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._registry_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._registry_table.itemSelectionChanged.connect(self._update_detail)
+
+        self._content_tabs = QTabWidget()
+        self._content_tabs.addTab(self._record_table, "檔案")
+        self._content_tabs.addTab(self._registry_table, "登錄檔")
+        self._content_tabs.currentChanged.connect(self._on_content_tab_changed)
 
         self._detail = QPlainTextEdit()
         self._detail.setReadOnly(True)
@@ -111,7 +126,7 @@ class QuarantineBrowserDialog(QDialog):
         record_title = QLabel("此 session 內容")
         record_title.setObjectName("PreferenceTitle")
         record_layout.addWidget(record_title)
-        record_layout.addWidget(self._record_table, 1)
+        record_layout.addWidget(self._content_tabs, 1)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(session_panel)
@@ -157,6 +172,9 @@ class QuarantineBrowserDialog(QDialog):
         session = self._current_session()
         if session is None:
             return
+        if self._is_registry_tab():
+            self._restore_selected_registry(session)
+            return
         indices = self._selected_record_indices()
         if not indices:
             QMessageBox.information(self, "隔離區管理", "請先選取要還原的項目。")
@@ -173,6 +191,9 @@ class QuarantineBrowserDialog(QDialog):
         session = self._current_session()
         if session is None:
             return
+        if self._is_registry_tab():
+            self._restore_all_registry(session)
+            return
         pending = [index for index, record in enumerate(self._records) if not record.get("restored_at")]
         if not pending:
             QMessageBox.information(self, "隔離區管理", "此 session 目前沒有待還原項目。")
@@ -183,6 +204,28 @@ class QuarantineBrowserDialog(QDialog):
             return
         result = restore_quarantine_items(session.path, set(pending), conflict_policy=self._selected_conflict_policy())
         self._show_restore_result(result.restored_count, result.errors)
+        self._refresh_sessions(preselect=session.path)
+
+    def _restore_selected_registry(self, session: QuarantineSession) -> None:
+        indices = self._selected_registry_indices()
+        if not indices:
+            QMessageBox.information(self, "隔離區管理", "請先選取要還原的登錄值。")
+            return
+        if not self._confirm_restore(len(indices), "登錄值"):
+            return
+        result = restore_registry_items(session.path, indices)
+        self._show_restore_result(result.restored_count, result.errors, label="登錄值")
+        self._refresh_sessions(preselect=session.path)
+
+    def _restore_all_registry(self, session: QuarantineSession) -> None:
+        pending = [index for index, record in enumerate(self._registry_records) if not record.get("restored_at")]
+        if not pending:
+            QMessageBox.information(self, "隔離區管理", "此 session 目前沒有待還原登錄值。")
+            return
+        if not self._confirm_restore(len(pending), "登錄值"):
+            return
+        result = restore_registry_items(session.path, set(pending))
+        self._show_restore_result(result.restored_count, result.errors, label="登錄值")
         self._refresh_sessions(preselect=session.path)
 
     def delete_current_session(self) -> None:
@@ -217,6 +260,7 @@ class QuarantineBrowserDialog(QDialog):
                 _format_time(session.created_at, session.path.name),
                 str(session.moved_count),
                 f"{session.restored_count} / {session.moved_count}",
+                str(session.registry_deleted_count),
                 _format_size(session.size_bytes),
                 _targets_text(session.targets),
             ]
@@ -228,7 +272,7 @@ class QuarantineBrowserDialog(QDialog):
                 self._session_table.setItem(row, column, item)
         self._session_table.blockSignals(False)
         self._session_table.resizeColumnsToContents()
-        self._session_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self._session_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         if selected_row >= 0:
             self._session_table.setCurrentCell(selected_row, 0)
             self._load_session(selected_row)
@@ -242,13 +286,18 @@ class QuarantineBrowserDialog(QDialog):
     def _load_session(self, row: int | None) -> None:
         self._manifest = {}
         self._records = []
+        self._registry_records = []
         if row is not None and 0 <= row < len(self._sessions):
             try:
                 self._manifest = load_quarantine_manifest(self._sessions[row].path)
                 self._records = _moved_records(self._manifest)
+                self._registry_records = _registry_records(self._manifest)
             except Exception as exc:
                 self._detail.setPlainText(f"讀取 manifest 失敗：{exc}")
         self._populate_records()
+        self._populate_registry_records()
+        if not self._records and self._registry_records:
+            self._content_tabs.setCurrentWidget(self._registry_table)
         self._update_button_states()
 
     def _populate_records(self) -> None:
@@ -284,10 +333,46 @@ class QuarantineBrowserDialog(QDialog):
         self._record_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         if self._records:
             self._record_table.setCurrentCell(0, 0)
-        else:
+        elif not self._registry_records:
             self._detail.setPlainText("目前沒有隔離紀錄。")
 
+    def _populate_registry_records(self) -> None:
+        self._registry_table.blockSignals(True)
+        self._registry_table.setRowCount(len(self._registry_records))
+        for row, record in enumerate(self._registry_records):
+            restored = bool(record.get("restored_at"))
+            status = "已還原" if restored else "待處理"
+            location = _registry_location(record)
+            export_path = str(record.get("export_path") or "")
+            values = [
+                status,
+                location,
+                export_path,
+                _format_time(float(record.get("deleted_at") or 0), ""),
+            ]
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                if column == 0:
+                    item.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton if restored else QStyle.StandardPixmap.SP_FileDialogDetailedView))
+                if restored:
+                    item.setForeground(QBrush(QColor("#64748b")))
+                self._registry_table.setItem(row, column, item)
+        self._registry_table.blockSignals(False)
+        self._registry_table.resizeColumnsToContents()
+        self._registry_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self._registry_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        if self._registry_records:
+            self._registry_table.setCurrentCell(0, 0)
+
+    def _on_content_tab_changed(self, _index: int) -> None:
+        self._update_button_states()
+        self._update_detail()
+
     def _update_detail(self) -> None:
+        if self._is_registry_tab():
+            self._update_registry_detail()
+            return
         record = self._current_record()
         session = self._current_session()
         if record is None:
@@ -308,14 +393,37 @@ class QuarantineBrowserDialog(QDialog):
         ]
         self._detail.setPlainText("\n".join(lines))
 
+    def _update_registry_detail(self) -> None:
+        record = self._current_registry_record()
+        session = self._current_session()
+        if record is None:
+            if session is None:
+                self._detail.setPlainText("目前沒有隔離 session。")
+            elif not self._registry_records:
+                self._detail.setPlainText("此 session 沒有登錄檔清理紀錄。")
+            return
+        restored_text = _format_time(float(record.get("restored_at") or 0), "") if record.get("restored_at") else "否"
+        lines = [
+            f"項目：{_registry_location(record)}",
+            f"狀態：{'已還原' if record.get('restored_at') else '待處理'}",
+            f"備份檔：{record.get('export_path') or ''}",
+            f"刪除時間：{_format_time(float(record.get('deleted_at') or 0), '')}",
+            f"還原時間：{restored_text}",
+            f"還原目標：{record.get('restored_to') or ''}",
+            f"原始值：{record.get('registry_value_data') or ''}",
+        ]
+        self._detail.setPlainText("\n".join(lines))
+
     def _update_button_states(self) -> None:
         has_session = self._current_session() is not None
-        has_pending = any(not record.get("restored_at") for record in self._records)
+        file_pending = any(not record.get("restored_at") for record in self._records)
+        registry_pending = any(not record.get("restored_at") for record in self._registry_records)
+        has_pending = registry_pending if self._is_registry_tab() else file_pending
         self._open_folder_button.setEnabled(has_session)
         self._restore_selected_button.setEnabled(has_session and has_pending)
         self._restore_all_button.setEnabled(has_session and has_pending)
         self._delete_button.setEnabled(has_session)
-        self._conflict_policy.setEnabled(has_session and has_pending)
+        self._conflict_policy.setEnabled(has_session and file_pending and not self._is_registry_tab())
         self._update_conflict_controls()
 
     def _current_session(self) -> QuarantineSession | None:
@@ -334,6 +442,12 @@ class QuarantineBrowserDialog(QDialog):
             return self._records[row]
         return None
 
+    def _current_registry_record(self) -> dict[str, Any] | None:
+        row = self._registry_table.currentRow()
+        if 0 <= row < len(self._registry_records):
+            return self._registry_records[row]
+        return None
+
     def _selected_record_indices(self) -> set[int]:
         indices: set[int] = set()
         for item in self._record_table.selectedItems():
@@ -342,12 +456,24 @@ class QuarantineBrowserDialog(QDialog):
                 indices.add(value)
         return indices
 
-    def _confirm_restore(self, count: int) -> bool:
+    def _selected_registry_indices(self) -> set[int]:
+        indices: set[int] = set()
+        for item in self._registry_table.selectedItems():
+            value = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(value, int):
+                indices.add(value)
+        return indices
+
+    def _is_registry_tab(self) -> bool:
+        return self._content_tabs.currentWidget() is self._registry_table
+
+    def _confirm_restore(self, count: int, label: str = "項目") -> bool:
         policy_text = self._conflict_policy.currentText()
+        conflict_line = f"\n衝突策略：{policy_text}" if label == "項目" else ""
         answer = QMessageBox.question(
             self,
             "還原隔離項目",
-            f"將還原 {count} 個項目。\n衝突策略：{policy_text}\n\n確定？",
+            f"將還原 {count} 個{label}。{conflict_line}\n\n確定？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -370,8 +496,8 @@ class QuarantineBrowserDialog(QDialog):
         if not overwrite:
             self._overwrite_confirm.setChecked(False)
 
-    def _show_restore_result(self, restored_count: int, errors: tuple[str, ...]) -> None:
-        lines = [f"已還原：{restored_count} 個項目"]
+    def _show_restore_result(self, restored_count: int, errors: tuple[str, ...], *, label: str = "項目") -> None:
+        lines = [f"已還原：{restored_count} 個{label}"]
         if errors:
             lines.append("")
             lines.extend(f"錯誤：{error}" for error in errors)
@@ -381,6 +507,20 @@ class QuarantineBrowserDialog(QDialog):
 def _moved_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     moved = manifest.get("moved", [])
     return [record for record in moved if isinstance(record, dict)] if isinstance(moved, list) else []
+
+
+def _registry_records(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    records = manifest.get("registry_deleted", [])
+    return [record for record in records if isinstance(record, dict)] if isinstance(records, list) else []
+
+
+def _registry_location(record: dict[str, Any]) -> str:
+    root = str(record.get("root_name") or "")
+    key = str(record.get("registry_key") or "")
+    value = str(record.get("registry_value_name") or "(Default)")
+    if not key:
+        return "未記錄"
+    return f"{root}\\{key}\\{value}" if root else f"{key}\\{value}"
 
 
 def _record_size(record: dict[str, Any]) -> int:
