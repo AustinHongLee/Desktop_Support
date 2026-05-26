@@ -20,6 +20,7 @@ from launcher.core.safe_cleanup import (
     CleanupPlan,
     CleanupPlanItem,
     OfficialUninstaller,
+    InstalledApplication,
     ScanCancelToken,
     ScanCancelled,
     apply_cleanup_plan,
@@ -112,6 +113,40 @@ class SafeCleanupTests(unittest.TestCase):
                     plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
 
         self.assertEqual(plan.official_uninstallers, (uninstaller,))
+
+    def test_installed_application_prefers_install_location_for_analysis(self) -> None:
+        app = safe_cleanup_module._installed_application_from_values(
+            "HKLM",
+            r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Tekla",
+            {
+                "DisplayName": "Tekla Structures 2026",
+                "DisplayVersion": "2026.0",
+                "Publisher": "Trimble",
+                "InstallLocation": r"C:\Program Files\Tekla Structures\2026.0",
+                "DisplayIcon": r'"C:\Program Files\Tekla Structures\2026.0\bin\TeklaStructures.exe",0',
+                "UninstallString": r"msiexec.exe /x {GUID}",
+            },
+        )
+
+        self.assertIsInstance(app, InstalledApplication)
+        assert app is not None
+        self.assertEqual(app.analysis_target, r"C:\Program Files\Tekla Structures\2026.0")
+        self.assertEqual(app.publisher, "Trimble")
+
+    def test_installed_application_uses_display_icon_when_location_missing(self) -> None:
+        app = safe_cleanup_module._installed_application_from_values(
+            "HKCU",
+            r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Demo",
+            {
+                "DisplayName": "Demo App",
+                "DisplayIcon": r'"C:\Tools\Demo\Demo.exe",0',
+                "UninstallString": r"msiexec.exe /x {GUID}",
+            },
+        )
+
+        self.assertIsNotNone(app)
+        assert app is not None
+        self.assertEqual(app.analysis_target, r"C:\Tools\Demo\Demo.exe")
 
     def test_plan_includes_app_footprints_from_common_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

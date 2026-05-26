@@ -149,6 +149,24 @@ class OfficialUninstaller:
 
 
 @dataclass(frozen=True)
+class InstalledApplication:
+    id: str
+    root_name: str
+    registry_key: str
+    display_name: str
+    display_version: str = ""
+    publisher: str = ""
+    install_location: str = ""
+    display_icon: str = ""
+    uninstall_command: str = ""
+    quiet_uninstall_command: str = ""
+
+    @property
+    def analysis_target(self) -> str:
+        return self.install_location or _display_icon_path(self.display_icon) or self.display_name
+
+
+@dataclass(frozen=True)
 class CleanupPlanItem:
     id: str
     layer: str
@@ -831,6 +849,61 @@ def _official_uninstallers(targets: list[Path], cancel_token: ScanCancelToken | 
     return sorted(uninstallers, key=lambda item: item.confidence, reverse=True)
 
 
+def list_installed_applications(cancel_token: ScanCancelToken | None = None) -> list[InstalledApplication]:
+    if winreg is None or sys.platform != "win32":
+        return []
+    roots = (
+        ("HKCU", winreg.HKEY_CURRENT_USER, _uninstall_registry_bases("HKCU")),
+        ("HKLM", winreg.HKEY_LOCAL_MACHINE, _uninstall_registry_bases("HKLM")),
+    )
+    applications: list[InstalledApplication] = []
+    seen: set[str] = set()
+    for root_name, root_handle, bases in roots:
+        _check_cancelled(cancel_token)
+        for key_path, values in _iter_uninstall_entries(root_handle, bases, cancel_token):
+            _check_cancelled(cancel_token)
+            app = _installed_application_from_values(root_name, key_path, values)
+            if app is None:
+                continue
+            unique = f"{app.root_name}\\{app.registry_key}".casefold()
+            if unique in seen:
+                continue
+            seen.add(unique)
+            applications.append(app)
+    return sorted(applications, key=lambda item: (item.display_name.casefold(), item.display_version.casefold()))
+
+
+def _installed_application_from_values(root_name: str, key_path: str, values: dict[str, str]) -> InstalledApplication | None:
+    display_name = values.get("DisplayName", "").strip()
+    if not display_name:
+        return None
+    release_type = values.get("ReleaseType", "").casefold()
+    if any(token in release_type for token in ("hotfix", "security update", "update rollup")):
+        return None
+    if values.get("ParentKeyName", "").strip():
+        return None
+    if values.get("SystemComponent", "").strip() == "1" and not (
+        values.get("UninstallString", "").strip()
+        or values.get("QuietUninstallString", "").strip()
+        or values.get("InstallLocation", "").strip()
+    ):
+        return None
+    install_location = _registry_path_value(values.get("InstallLocation", ""))
+    display_icon = _registry_path_value(values.get("DisplayIcon", ""))
+    return InstalledApplication(
+        id=f"installed_app:{root_name}:{key_path}",
+        root_name=root_name,
+        registry_key=key_path,
+        display_name=display_name,
+        display_version=values.get("DisplayVersion", "").strip(),
+        publisher=values.get("Publisher", "").strip(),
+        install_location=install_location,
+        display_icon=display_icon,
+        uninstall_command=values.get("UninstallString", "").strip(),
+        quiet_uninstall_command=values.get("QuietUninstallString", "").strip(),
+    )
+
+
 def _should_scan_uninstallers(targets: list[Path]) -> bool:
     for target in targets:
         if target.suffix.casefold() in {".exe", ".msi"}:
@@ -855,7 +928,7 @@ def _iter_uninstall_entries(root_handle: object, bases: tuple[str, ...], cancel_
             key_path = rf"{base}\{subkey_name}"
             try:
                 with winreg.OpenKey(root_handle, key_path, 0, winreg.KEY_READ | _registry_view_flag()) as subkey:
-                    values = {name: str(data) for name, data in _enum_values(subkey) if isinstance(data, str) and str(data).strip()}
+                    values = {name: str(data) for name, data in _enum_values(subkey) if data is not None and str(data).strip()}
             except OSError:
                 continue
             if values:
@@ -907,6 +980,32 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _registry_path_value(value: str) -> str:
+    text = os.path.expandvars(str(value or "").strip())
+    if not text:
+        return ""
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        text = text[1:-1]
+    return os.path.expandvars(text).strip()
+
+
+def _display_icon_path(value: str) -> str:
+    text = _registry_path_value(value)
+    if not text:
+        return ""
+    if text.startswith('"'):
+        end = text.find('"', 1)
+        candidate = text[1:end] if end > 1 else text.strip('"')
+    else:
+        candidate = re.sub(r",\s*-?\d+\s*$", "", text).strip()
+    if not candidate:
+        return ""
+    executable_name = Path(candidate).name.casefold()
+    if executable_name in {"msiexec.exe", "rundll32.exe", "regsvr32.exe"}:
+        return ""
+    return candidate
 
 
 def _app_footprint_items(

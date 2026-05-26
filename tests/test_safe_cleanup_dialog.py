@@ -11,10 +11,10 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QHeaderView  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QDialog, QHeaderView  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
-from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, OfficialUninstaller  # noqa: E402
+from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, InstalledApplication, OfficialUninstaller  # noqa: E402
 from launcher.ui.safe_cleanup_dialog import SafeCleanupDialog  # noqa: E402
 
 
@@ -251,6 +251,41 @@ class SafeCleanupDialogTests(unittest.TestCase):
 
         self.assertEqual(captured[-1].files, (typed_target,))
         self.assertEqual(dialog._target_path.text(), str(typed_target))
+
+    def test_dialog_can_pick_installed_application_as_analysis_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            initial = root / "initial.txt"
+            initial.write_text("x", encoding="utf-8")
+            app = InstalledApplication(
+                id="installed_app:HKLM:Tekla",
+                root_name="HKLM",
+                registry_key=r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Tekla",
+                display_name="Tekla Structures 2026",
+                install_location=r"C:\Program Files\Tekla Structures\2026.0",
+            )
+
+            dialog = SafeCleanupDialog(LauncherContext.from_paths([initial]))
+            _wait_for_scan(dialog)
+            refreshed: list[bool] = []
+
+            class FakePicker:
+                def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+                    pass
+
+                def exec(self) -> QDialog.DialogCode:
+                    return QDialog.DialogCode.Accepted
+
+                def selected_application(self) -> InstalledApplication:
+                    return app
+
+            with patch("launcher.ui.safe_cleanup_dialog.InstalledApplicationPickerDialog", FakePicker):
+                dialog.refresh_plan = lambda: refreshed.append(True)  # type: ignore[method-assign]
+                dialog.pick_installed_app()
+
+        self.assertEqual(dialog._target_path.text(), r"C:\Program Files\Tekla Structures\2026.0")
+        self.assertEqual(dialog._context.files, (Path(r"C:\Program Files\Tekla Structures\2026.0"),))
+        self.assertEqual(refreshed, [True])
 
     def test_dialog_shows_busy_state_before_background_scan_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

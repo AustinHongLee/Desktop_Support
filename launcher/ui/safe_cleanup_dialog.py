@@ -47,6 +47,7 @@ from launcher.core.safe_cleanup import (
     run_official_uninstaller,
     scan_stage_count,
 )
+from launcher.ui.installed_app_picker_dialog import InstalledApplicationPickerDialog
 from launcher.ui.quarantine_browser_dialog import QuarantineBrowserDialog
 from launcher.ui.theme import preferences_stylesheet
 
@@ -84,6 +85,8 @@ class SafeCleanupDialog(QDialog):
         self._target_path.setPlaceholderText("可輸入舊 exe 路徑、資料夾路徑或產品名稱，例如 Tekla Structures 2026")
         self._target_path.returnPressed.connect(self.analyze_typed_target)
 
+        app_button = QPushButton("選擇應用")
+        app_button.clicked.connect(self.pick_installed_app)
         file_button = QPushButton("選擇檔案")
         file_button.clicked.connect(self.pick_file)
         folder_button = QPushButton("選擇資料夾")
@@ -99,6 +102,7 @@ class SafeCleanupDialog(QDialog):
         target_controls = QHBoxLayout()
         target_controls.addWidget(QLabel("分析目標"))
         target_controls.addWidget(self._target_path, 1)
+        target_controls.addWidget(app_button)
         target_controls.addWidget(file_button)
         target_controls.addWidget(folder_button)
         target_controls.addWidget(typed_button)
@@ -284,6 +288,7 @@ class SafeCleanupDialog(QDialog):
         if not file_path:
             return
         self._context = LauncherContext.from_paths([file_path], source="picker.safe_cleanup")
+        self._target_path.setText(file_path)
         self.refresh_plan()
 
     def pick_folder(self) -> None:
@@ -295,6 +300,22 @@ class SafeCleanupDialog(QDialog):
         if not folder:
             return
         self._context = LauncherContext(folder=Path(folder), source="picker.safe_cleanup")
+        self._target_path.setText(folder)
+        self.refresh_plan()
+
+    def pick_installed_app(self) -> None:
+        if self._apply_active:
+            QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，完成後再切換目標。")
+            return
+        dialog = InstalledApplicationPickerDialog(parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        app = dialog.selected_application()
+        if app is None:
+            return
+        target = app.analysis_target
+        self._context = LauncherContext.from_paths([Path(target)], source="installed_app.safe_cleanup")
+        self._target_path.setText(target)
         self.refresh_plan()
 
     def analyze_typed_target(self) -> None:
