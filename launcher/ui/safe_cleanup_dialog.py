@@ -36,6 +36,7 @@ from launcher.core.safe_cleanup import (
     REGISTRY_LAYER,
     REVIEW_LAYER,
     SAFE_LAYER,
+    CleanupApplyResult,
     CleanupPlan,
     CleanupPlanItem,
     OfficialUninstaller,
@@ -62,6 +63,9 @@ class SafeCleanupDialog(QDialog):
         self._scan_threads: list[QThread] = []
         self._scan_workers: list[_CleanupPlanWorker] = []
         self._scan_token: ScanCancelToken | None = None
+        self._apply_active = False
+        self._apply_threads: list[QThread] = []
+        self._apply_workers: list[_CleanupApplyWorker] = []
 
         self.setWindowTitle("安全清除工作台")
         self.setMinimumSize(1120, 700)
@@ -225,6 +229,9 @@ class SafeCleanupDialog(QDialog):
         if self._scan_active:
             QMessageBox.information(self, "安全清除工作台", "目前仍在分析，請稍候完成後再執行。")
             return
+        if self._apply_active:
+            QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，完成後再執行。")
+            return
         uninstaller = _primary_uninstaller(self._plan)
         if uninstaller is None:
             QMessageBox.information(self, "安全清除工作台", "目前沒有找到可執行的官方解除安裝指令。")
@@ -262,6 +269,9 @@ class SafeCleanupDialog(QDialog):
         QTimer.singleShot(3500, self.refresh_plan)
 
     def pick_file(self) -> None:
+        if self._apply_active:
+            QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，完成後再切換目標。")
+            return
         start = str(_initial_folder(self._context))
         file_path, _selected = QFileDialog.getOpenFileName(self, "選擇要分析的檔案", start, "所有檔案 (*.*)")
         if not file_path:
@@ -270,6 +280,9 @@ class SafeCleanupDialog(QDialog):
         self.refresh_plan()
 
     def pick_folder(self) -> None:
+        if self._apply_active:
+            QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，完成後再切換目標。")
+            return
         start = str(_initial_folder(self._context))
         folder = QFileDialog.getExistingDirectory(self, "選擇要分析的資料夾", start)
         if not folder:
@@ -278,6 +291,9 @@ class SafeCleanupDialog(QDialog):
         self.refresh_plan()
 
     def refresh_plan(self) -> None:
+        if self._apply_active:
+            QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，完成後再重新分析。")
+            return
         self._start_plan_scan()
 
     def cancel_scan(self) -> None:
@@ -294,6 +310,9 @@ class SafeCleanupDialog(QDialog):
     def apply_selected(self) -> None:
         if self._scan_active:
             QMessageBox.information(self, "安全清除工作台", "目前仍在分析，請稍候完成後再執行。")
+            return
+        if self._apply_active:
+            QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，請稍候完成。")
             return
         selected_ids = self._selected_item_ids()
         if not selected_ids:
@@ -328,12 +347,45 @@ class SafeCleanupDialog(QDialog):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        result = apply_cleanup_plan(
+        self._start_apply(selected_ids)
+
+    def _start_apply(self, selected_ids: set[str]) -> None:
+        self._set_apply_controls(True)
+        worker = _CleanupApplyWorker(
             self._plan,
             selected_ids,
             include_registry=self._include_registry.isChecked(),
             include_process_close=self._include_process.isChecked(),
         )
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress_changed.connect(self._on_apply_progress)
+        worker.finished.connect(self._on_apply_finished)
+        worker.failed.connect(self._on_apply_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda thread=thread, worker=worker: self._remove_apply_thread(thread, worker))
+        self._apply_threads.append(thread)
+        self._apply_workers.append(worker)
+        thread.start()
+
+    def _on_apply_progress(self, current: int, total: int, label: str) -> None:
+        total = max(total, 1)
+        self._scan_progress.setRange(0, total)
+        self._scan_progress.setValue(max(0, min(current, total)))
+        self._summary.setText(f"套用中：{current} / {total}｜{label}")
+        self._detail.setPlainText(f"正在套用清理：{label}\n請不要關閉相關檔案或手動移動目標。")
+
+    def _on_apply_finished(self, result: object) -> None:
+        if not isinstance(result, CleanupApplyResult):
+            self._set_apply_controls(False)
+            self._detail.setPlainText("套用完成，但回傳結果格式不正確。")
+            return
+        self._set_apply_controls(False)
         lines = [
             f"隔離資料夾：{result.quarantine_dir}",
             f"Manifest：{result.manifest_path}",
@@ -348,6 +400,17 @@ class SafeCleanupDialog(QDialog):
         self._detail.setPlainText("\n".join(lines))
         QMessageBox.information(self, "安全清除工作台", "\n".join(lines[:5]))
         self.refresh_plan()
+
+    def _on_apply_failed(self, message: str) -> None:
+        self._set_apply_controls(False)
+        self._detail.setPlainText(message)
+        QMessageBox.warning(self, "安全清除工作台", f"套用清理失敗：\n{message.splitlines()[-1] if message.splitlines() else message}")
+
+    def _remove_apply_thread(self, thread: QThread, worker: "_CleanupApplyWorker") -> None:
+        if thread in self._apply_threads:
+            self._apply_threads.remove(thread)
+        if worker in self._apply_workers:
+            self._apply_workers.remove(worker)
 
     def _start_plan_scan(self) -> None:
         self._scan_generation += 1
@@ -429,8 +492,23 @@ class SafeCleanupDialog(QDialog):
             self._scan_progress.setRange(0, scan_stage_count())
             self._scan_progress.setValue(0)
         self._cancel_scan_button.setEnabled(active)
-        self._refresh_button.setEnabled(not active)
-        self._apply_button.setEnabled(not active)
+        self._refresh_button.setEnabled(not active and not self._apply_active)
+        self._apply_button.setEnabled(not active and not self._apply_active)
+
+    def _set_apply_controls(self, active: bool) -> None:
+        self._apply_active = active
+        self._scan_progress.setVisible(active)
+        if active:
+            self._scan_progress.setRange(0, 1)
+            self._scan_progress.setValue(0)
+            self._apply_button.setText("套用中...")
+            self._summary.setText("套用中：準備處理勾選項目")
+        else:
+            self._apply_button.setText("隔離 / 清理勾選項目")
+        self._cancel_scan_button.setEnabled(False)
+        self._refresh_button.setEnabled(not active and not self._scan_active)
+        self._apply_button.setEnabled(not active and not self._scan_active)
+        self._uninstall_button.setEnabled(not active and not self._scan_active)
 
     def _show_scan_placeholder(self) -> None:
         self._tree.blockSignals(True)
@@ -681,6 +759,42 @@ class _CleanupPlanWorker(QObject):
 
     def _emit_stage(self, name: str, index: int, total: int) -> None:
         self.stage_changed.emit(self._generation, name, index, total)
+
+
+class _CleanupApplyWorker(QObject):
+    progress_changed = pyqtSignal(int, int, str)
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        plan: CleanupPlan,
+        selected_ids: set[str],
+        *,
+        include_registry: bool,
+        include_process_close: bool,
+    ) -> None:
+        super().__init__()
+        self._plan = plan
+        self._selected_ids = set(selected_ids)
+        self._include_registry = include_registry
+        self._include_process_close = include_process_close
+
+    def run(self) -> None:
+        try:
+            result = apply_cleanup_plan(
+                self._plan,
+                self._selected_ids,
+                include_registry=self._include_registry,
+                include_process_close=self._include_process_close,
+                progress=self._emit_progress,
+            )
+            self.finished.emit(result)
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+
+    def _emit_progress(self, current: int, total: int, label: str) -> None:
+        self.progress_changed.emit(current, total, label)
 
 
 def _placeholder_plan(context: LauncherContext) -> CleanupPlan:

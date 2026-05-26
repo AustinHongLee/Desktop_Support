@@ -34,6 +34,7 @@ FILE_KINDS = {"file", "folder", "associated_file", "associated_folder", "install
 MANIFEST_SCHEMA_VERSION = 1
 
 ScanProgressCallback = Callable[[str, int, int], None]
+ApplyProgressCallback = Callable[[int, int, str], None]
 
 _SCAN_STAGES = (
     "目標身分",
@@ -231,6 +232,7 @@ def apply_cleanup_plan(
     include_registry: bool = False,
     include_process_close: bool = False,
     quarantine_root: Path | None = None,
+    progress: ApplyProgressCallback | None = None,
 ) -> CleanupApplyResult:
     session_dir = _session_quarantine_dir(quarantine_root)
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -240,7 +242,10 @@ def apply_cleanup_plan(
     closed_processes = 0
     state_cleaned = False
     selected = [item for item in plan.items if item.id in selected_item_ids and item.executable]
-    for item in selected:
+    total = len(selected)
+    for index, item in enumerate(selected, start=1):
+        if progress is not None:
+            progress(index, total, item.label)
         try:
             if item.kind in FILE_KINDS:
                 moved.append(_move_item_to_quarantine_record(item, session_dir))

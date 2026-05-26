@@ -206,13 +206,20 @@ class SafeCleanupTests(unittest.TestCase):
             target = root / "delete_me.txt"
             target.write_text("x", encoding="utf-8")
             quarantine = root / "quarantine"
+            progress: list[tuple[int, int, str]] = []
 
             with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
                 plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
-            result = apply_cleanup_plan(plan, {plan.items[0].id}, quarantine_root=quarantine)
+            result = apply_cleanup_plan(
+                plan,
+                {plan.items[0].id},
+                quarantine_root=quarantine,
+                progress=lambda current, total, label: progress.append((current, total, label)),
+            )
 
             self.assertFalse(target.exists())
             self.assertEqual(result.moved_count, 1)
+            self.assertEqual(progress, [(1, 1, "delete_me.txt")])
             self.assertTrue(result.manifest_path.exists())
             manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["moved"][0]["item"]["label"], "delete_me.txt")

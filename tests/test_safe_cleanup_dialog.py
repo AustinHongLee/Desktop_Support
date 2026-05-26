@@ -211,6 +211,27 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertTrue(dialog._apply_button.isEnabled())
         self.assertIn("安全 1", dialog._summary.text())
 
+    def test_apply_controls_disable_actions_while_running(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "a.txt"
+            target.write_text("x", encoding="utf-8")
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                _wait_for_scan(dialog)
+
+        dialog._set_apply_controls(True)
+
+        self.assertFalse(dialog._apply_button.isEnabled())
+        self.assertFalse(dialog._refresh_button.isEnabled())
+        self.assertFalse(dialog._uninstall_button.isEnabled())
+
+        dialog._set_apply_controls(False)
+
+        self.assertTrue(dialog._apply_button.isEnabled())
+        self.assertTrue(dialog._refresh_button.isEnabled())
+
     def test_cancel_scan_ignores_late_worker_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
