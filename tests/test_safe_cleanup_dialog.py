@@ -235,9 +235,13 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 created_at=time.time(),
             )
 
-            def slow_build(_context) -> CleanupPlan:  # noqa: ANN001
+            def slow_build(_context, *, cancel_token=None, progress=None) -> CleanupPlan:  # noqa: ANN001
                 started.set()
-                release.wait(2)
+                while not release.is_set():
+                    if cancel_token is not None and cancel_token.cancelled():
+                        release.set()
+                        raise RuntimeError("cancelled by token")
+                    time.sleep(0.01)
                 return late_plan
 
             with patch("launcher.ui.safe_cleanup_dialog.build_cleanup_plan", side_effect=slow_build):

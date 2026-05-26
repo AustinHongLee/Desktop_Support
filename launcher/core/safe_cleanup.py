@@ -12,7 +12,8 @@ import hashlib
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from threading import Event
+from typing import Any, Callable
 
 from launcher.core.context_model import LauncherContext
 from launcher.core.state_store import default_state_path
@@ -31,6 +32,34 @@ BLOCKED_LAYER = "blocked"
 
 FILE_KINDS = {"file", "folder", "associated_file", "associated_folder", "install_folder", "shortcut"}
 MANIFEST_SCHEMA_VERSION = 1
+
+ScanProgressCallback = Callable[[str, int, int], None]
+
+_SCAN_STAGES = (
+    "目標身分",
+    "疑似安裝資料夾",
+    "執行中程序",
+    "同名 / 衍生項",
+    "捷徑",
+    "官方解除安裝",
+    "登錄檔候選",
+    "工具列紀錄",
+)
+
+
+class ScanCancelled(RuntimeError):
+    pass
+
+
+class ScanCancelToken:
+    def __init__(self) -> None:
+        self._flag = Event()
+
+    def cancel(self) -> None:
+        self._flag.set()
+
+    def cancelled(self) -> bool:
+        return self._flag.is_set()
 
 
 @dataclass(frozen=True)
@@ -125,17 +154,35 @@ class QuarantineRestoreResult:
     errors: tuple[str, ...] = ()
 
 
-def build_cleanup_plan(context: LauncherContext, *, state_path: Path | None = None) -> CleanupPlan:
+def build_cleanup_plan(
+    context: LauncherContext,
+    *,
+    state_path: Path | None = None,
+    cancel_token: ScanCancelToken | None = None,
+    progress: ScanProgressCallback | None = None,
+) -> CleanupPlan:
+    token = cancel_token or ScanCancelToken()
     targets = _resolve_targets(context)
     items: list[CleanupPlanItem] = []
     seen_paths: set[str] = set()
+    _emit_scan_stage(progress, token, "目標身分", 1)
     for path in targets:
-        items.append(_target_item(path))
+        _check_cancelled(token)
+        items.append(_target_item(path, token))
         seen_paths.add(_path_key(path))
-    items.extend(_install_folder_items(targets, seen_paths))
-    items.extend(_running_process_items(targets))
-    items.extend(_associated_items(targets, seen_paths))
-    items.extend(_shortcut_reference_items(targets, seen_paths))
+    _emit_scan_stage(progress, token, "疑似安裝資料夾", 2)
+    items.extend(_install_folder_items(targets, seen_paths, token))
+    _emit_scan_stage(progress, token, "執行中程序", 3)
+    items.extend(_running_process_items(targets, token))
+    _emit_scan_stage(progress, token, "同名 / 衍生項", 4)
+    items.extend(_associated_items(targets, seen_paths, token))
+    _emit_scan_stage(progress, token, "捷徑", 5)
+    items.extend(_shortcut_reference_items(targets, seen_paths, token))
+    _emit_scan_stage(progress, token, "官方解除安裝", 6)
+    uninstallers = tuple(_official_uninstallers(targets, token))
+    _emit_scan_stage(progress, token, "登錄檔候選", 7)
+    items.extend(_registry_reference_items(targets, token))
+    _emit_scan_stage(progress, token, "工具列紀錄", 8)
     app_state = state_path or default_state_path()
     if _state_mentions_targets(app_state, targets):
         items.append(
@@ -150,8 +197,7 @@ def build_cleanup_plan(context: LauncherContext, *, state_path: Path | None = No
                 path=str(app_state),
             )
         )
-    uninstallers = tuple(_official_uninstallers(targets))
-    items.extend(_registry_reference_items(targets))
+    _check_cancelled(token)
     if not items:
         items.append(
             CleanupPlanItem(
@@ -172,6 +218,10 @@ def run_official_uninstaller(uninstaller: OfficialUninstaller) -> subprocess.Pop
     if not command:
         raise ValueError("官方解除安裝指令是空的。")
     return subprocess.Popen(command, shell=True)
+
+
+def scan_stage_count() -> int:
+    return len(_SCAN_STAGES)
 
 
 def apply_cleanup_plan(
@@ -324,7 +374,8 @@ def _resolve_targets(context: LauncherContext) -> list[Path]:
     return []
 
 
-def _target_item(path: Path) -> CleanupPlanItem:
+def _target_item(path: Path, cancel_token: ScanCancelToken | None = None) -> CleanupPlanItem:
+    _check_cancelled(cancel_token)
     exists = path.exists()
     protected, reason = _is_protected_path(path)
     is_dir = path.is_dir()
@@ -349,13 +400,14 @@ def _target_item(path: Path) -> CleanupPlanItem:
         note=note,
         checked_default=layer == SAFE_LAYER,
         path=str(path),
-        size_bytes=_safe_size(path),
+        size_bytes=_safe_size(path, cancel_token),
     )
 
 
-def _associated_items(targets: list[Path], seen_paths: set[str]) -> list[CleanupPlanItem]:
+def _associated_items(targets: list[Path], seen_paths: set[str], cancel_token: ScanCancelToken | None = None) -> list[CleanupPlanItem]:
     items: list[CleanupPlanItem] = []
     for target in targets:
+        _check_cancelled(cancel_token)
         parent = target.parent
         if not parent.exists() or not parent.is_dir():
             continue
@@ -367,6 +419,7 @@ def _associated_items(targets: list[Path], seen_paths: set[str]) -> list[Cleanup
         except OSError:
             continue
         for child in children:
+            _check_cancelled(cancel_token)
             key = _path_key(child)
             if key in seen_paths or not _looks_associated(stem, child.name):
                 continue
@@ -386,16 +439,17 @@ def _associated_items(targets: list[Path], seen_paths: set[str]) -> list[Cleanup
                     ),
                     checked_default=False,
                     path=str(child),
-                    size_bytes=_safe_size(child),
+                    size_bytes=_safe_size(child, cancel_token),
                 )
             )
             seen_paths.add(key)
     return items
 
 
-def _install_folder_items(targets: list[Path], seen_paths: set[str]) -> list[CleanupPlanItem]:
+def _install_folder_items(targets: list[Path], seen_paths: set[str], cancel_token: ScanCancelToken | None = None) -> list[CleanupPlanItem]:
     items: list[CleanupPlanItem] = []
     for target in targets:
+        _check_cancelled(cancel_token)
         if not target.suffix.casefold() == ".exe" or not target.parent.exists():
             continue
         folder = _probable_install_folder(target)
@@ -419,27 +473,34 @@ def _install_folder_items(targets: list[Path], seen_paths: set[str]) -> list[Cle
                 ),
                 checked_default=False,
                 path=str(folder),
-                size_bytes=_safe_size(folder),
+                size_bytes=_safe_size(folder, cancel_token),
             )
         )
         seen_paths.add(key)
     return items
 
 
-def _shortcut_reference_items(targets: list[Path], seen_paths: set[str]) -> list[CleanupPlanItem]:
+def _shortcut_reference_items(targets: list[Path], seen_paths: set[str], cancel_token: ScanCancelToken | None = None) -> list[CleanupPlanItem]:
     target_keys = {_path_key(path) for path in targets}
     target_stems = {path.stem.casefold() for path in targets if path.stem}
     if not target_keys and not target_stems:
         return []
     items: list[CleanupPlanItem] = []
     for folder in _shortcut_scan_folders():
+        _check_cancelled(cancel_token)
         if not folder.exists():
             continue
+        shortcuts: list[Path] = []
         try:
-            shortcuts = list(folder.rglob("*.lnk"))[:1500]
+            for shortcut in folder.rglob("*.lnk"):
+                _check_cancelled(cancel_token)
+                shortcuts.append(shortcut)
+                if len(shortcuts) >= 1500:
+                    break
         except OSError:
             continue
         for shortcut in shortcuts:
+            _check_cancelled(cancel_token)
             key = _path_key(shortcut)
             if key in seen_paths:
                 continue
@@ -460,7 +521,7 @@ def _shortcut_reference_items(targets: list[Path], seen_paths: set[str]) -> list
                     note=note,
                     checked_default=False,
                     path=str(shortcut),
-                    size_bytes=_safe_size(shortcut),
+                    size_bytes=_safe_size(shortcut, cancel_token),
                 )
             )
             seen_paths.add(key)
@@ -469,13 +530,16 @@ def _shortcut_reference_items(targets: list[Path], seen_paths: set[str]) -> list
     return items
 
 
-def _running_process_items(targets: list[Path]) -> list[CleanupPlanItem]:
+def _running_process_items(targets: list[Path], cancel_token: ScanCancelToken | None = None) -> list[CleanupPlanItem]:
     if sys.platform != "win32":
         return []
     process_by_pid: dict[int, _RunningProcess] = {}
+    _check_cancelled(cancel_token)
     for process in _restart_manager_processes([path for path in targets if path.is_file() and path.exists()]):
+        _check_cancelled(cancel_token)
         process_by_pid[process.pid] = process
-    for process in _matching_running_processes(targets):
+    for process in _matching_running_processes(targets, cancel_token):
+        _check_cancelled(cancel_token)
         existing = process_by_pid.get(process.pid)
         if existing is None:
             process_by_pid[process.pid] = process
@@ -483,6 +547,7 @@ def _running_process_items(targets: list[Path]) -> list[CleanupPlanItem]:
             process_by_pid[process.pid] = process
     items: list[CleanupPlanItem] = []
     for process in sorted(process_by_pid.values(), key=lambda item: (item.name.casefold(), item.pid)):
+        _check_cancelled(cancel_token)
         can_close, close_reason = _can_close_process(process)
         note = process.reason
         if not can_close:
@@ -507,13 +572,14 @@ def _running_process_items(targets: list[Path]) -> list[CleanupPlanItem]:
     return items
 
 
-def _matching_running_processes(targets: list[Path]) -> list["_RunningProcess"]:
+def _matching_running_processes(targets: list[Path], cancel_token: ScanCancelToken | None = None) -> list["_RunningProcess"]:
     exact_files = {_path_key(path) for path in targets if path.is_file() or path.suffix}
     roots = [path for path in targets if path.exists() and path.is_dir()]
     roots.extend(folder for target in targets if (folder := _probable_install_folder(target)) is not None)
     root_keys = {_path_key(root) for root in roots}
     matches: list[_RunningProcess] = []
     for process in _iter_process_image_paths():
+        _check_cancelled(cancel_token)
         path = process.path
         if path is None:
             continue
@@ -528,9 +594,10 @@ def _matching_running_processes(targets: list[Path]) -> list["_RunningProcess"]:
     return matches
 
 
-def _registry_reference_items(targets: list[Path]) -> list[CleanupPlanItem]:
+def _registry_reference_items(targets: list[Path], cancel_token: ScanCancelToken | None = None) -> list[CleanupPlanItem]:
     if winreg is None or sys.platform != "win32":
         return []
+    _check_cancelled(cancel_token)
     needles = _registry_needles(targets)
     if not needles:
         return []
@@ -540,16 +607,19 @@ def _registry_reference_items(targets: list[Path]) -> list[CleanupPlanItem]:
         ("HKLM", winreg.HKEY_LOCAL_MACHINE, _registry_scan_bases("HKLM")),
     )
     for root_name, root_handle, bases in roots:
+        _check_cancelled(cancel_token)
         for base in bases:
-            items.extend(_scan_registry_base(root_name, root_handle, base, needles, limit=max(0, 40 - len(items))))
+            _check_cancelled(cancel_token)
+            items.extend(_scan_registry_base(root_name, root_handle, base, needles, limit=max(0, 40 - len(items)), cancel_token=cancel_token))
             if len(items) >= 40:
                 return items
     return items
 
 
-def _official_uninstallers(targets: list[Path]) -> list[OfficialUninstaller]:
+def _official_uninstallers(targets: list[Path], cancel_token: ScanCancelToken | None = None) -> list[OfficialUninstaller]:
     if winreg is None or sys.platform != "win32":
         return []
+    _check_cancelled(cancel_token)
     if not targets or not _should_scan_uninstallers(targets):
         return []
     uninstallers: list[OfficialUninstaller] = []
@@ -559,7 +629,9 @@ def _official_uninstallers(targets: list[Path]) -> list[OfficialUninstaller]:
     )
     seen: set[str] = set()
     for root_name, root_handle, bases in roots:
-        for key_path, values in _iter_uninstall_entries(root_handle, bases):
+        _check_cancelled(cancel_token)
+        for key_path, values in _iter_uninstall_entries(root_handle, bases, cancel_token):
+            _check_cancelled(cancel_token)
             uninstall_command = values.get("UninstallString", "")
             quiet_command = values.get("QuietUninstallString", "")
             if not uninstall_command and not quiet_command:
@@ -599,14 +671,16 @@ def _should_scan_uninstallers(targets: list[Path]) -> bool:
     return False
 
 
-def _iter_uninstall_entries(root_handle: object, bases: tuple[str, ...]):
+def _iter_uninstall_entries(root_handle: object, bases: tuple[str, ...], cancel_token: ScanCancelToken | None = None):
     for base in bases:
+        _check_cancelled(cancel_token)
         try:
             with winreg.OpenKey(root_handle, base, 0, winreg.KEY_READ | _registry_view_flag()) as key:
                 subkeys = _enum_subkeys(key)
         except OSError:
             continue
         for subkey_name in subkeys:
+            _check_cancelled(cancel_token)
             key_path = rf"{base}\{subkey_name}"
             try:
                 with winreg.OpenKey(root_handle, key_path, 0, winreg.KEY_READ | _registry_view_flag()) as subkey:
@@ -671,11 +745,13 @@ def _scan_registry_base(
     needles: tuple[str, ...],
     *,
     limit: int,
+    cancel_token: ScanCancelToken | None = None,
 ) -> list[CleanupPlanItem]:
     if limit <= 0:
         return []
     matches: list[CleanupPlanItem] = []
-    for key_path, value_name, value_data in _iter_registry_values(root_handle, base, max_depth=5):
+    for key_path, value_name, value_data in _iter_registry_values(root_handle, base, max_depth=5, cancel_token=cancel_token):
+        _check_cancelled(cancel_token)
         text = value_data.casefold()
         if any(needle in text for needle in needles):
             value_label = "(Default)" if value_name == "" else value_name
@@ -705,16 +781,19 @@ def _scan_registry_base(
     return matches
 
 
-def _iter_registry_values(root_handle: object, base: str, *, max_depth: int):
+def _iter_registry_values(root_handle: object, base: str, *, max_depth: int, cancel_token: ScanCancelToken | None = None):
+    _check_cancelled(cancel_token)
     try:
         with winreg.OpenKey(root_handle, base, 0, winreg.KEY_READ | _registry_view_flag()) as key:
             for value_name, value_data in _enum_values(key):
+                _check_cancelled(cancel_token)
                 if isinstance(value_data, str) and value_data:
                     yield base, value_name, value_data
             if max_depth <= 0:
                 return
             for subkey_name in _enum_subkeys(key):
-                yield from _iter_registry_values(root_handle, rf"{base}\{subkey_name}", max_depth=max_depth - 1)
+                _check_cancelled(cancel_token)
+                yield from _iter_registry_values(root_handle, rf"{base}\{subkey_name}", max_depth=max_depth - 1, cancel_token=cancel_token)
     except OSError:
         return
 
@@ -1141,7 +1220,8 @@ def _sanitize_filename(value: str) -> str:
     return cleaned[:180] or "item"
 
 
-def _safe_size(path: Path) -> int:
+def _safe_size(path: Path, cancel_token: ScanCancelToken | None = None) -> int:
+    _check_cancelled(cancel_token)
     try:
         if path.is_file():
             return path.stat().st_size
@@ -1149,6 +1229,7 @@ def _safe_size(path: Path) -> int:
             total = 0
             scanned = 0
             for child in path.rglob("*"):
+                _check_cancelled(cancel_token)
                 if not child.is_file():
                     continue
                 total += child.stat().st_size
@@ -1159,6 +1240,18 @@ def _safe_size(path: Path) -> int:
     except OSError:
         return 0
     return 0
+
+
+def _emit_scan_stage(progress: ScanProgressCallback | None, cancel_token: ScanCancelToken | None, name: str, index: int) -> None:
+    _check_cancelled(cancel_token)
+    if progress is not None:
+        progress(name, index, len(_SCAN_STAGES))
+    _check_cancelled(cancel_token)
+
+
+def _check_cancelled(cancel_token: ScanCancelToken | None) -> None:
+    if cancel_token is not None and cancel_token.cancelled():
+        raise ScanCancelled("safe cleanup scan cancelled")
 
 
 def _looks_associated(stem: str, name: str) -> bool:

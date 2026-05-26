@@ -39,9 +39,12 @@ from launcher.core.safe_cleanup import (
     CleanupPlan,
     CleanupPlanItem,
     OfficialUninstaller,
+    ScanCancelToken,
+    ScanCancelled,
     apply_cleanup_plan,
     build_cleanup_plan,
     run_official_uninstaller,
+    scan_stage_count,
 )
 from launcher.ui.quarantine_browser_dialog import QuarantineBrowserDialog
 from launcher.ui.theme import preferences_stylesheet
@@ -58,6 +61,7 @@ class SafeCleanupDialog(QDialog):
         self._scan_active = False
         self._scan_threads: list[QThread] = []
         self._scan_workers: list[_CleanupPlanWorker] = []
+        self._scan_token: ScanCancelToken | None = None
 
         self.setWindowTitle("安全清除工作台")
         self.setMinimumSize(1120, 700)
@@ -94,7 +98,7 @@ class SafeCleanupDialog(QDialog):
         target_controls.addWidget(self._cancel_scan_button)
 
         self._scan_progress = QProgressBar()
-        self._scan_progress.setRange(0, 0)
+        self._scan_progress.setRange(0, scan_stage_count())
         self._scan_progress.setTextVisible(False)
         self._scan_progress.setFixedHeight(8)
         self._scan_progress.hide()
@@ -280,10 +284,12 @@ class SafeCleanupDialog(QDialog):
         if not self._scan_active:
             return
         self._scan_generation += 1
+        if self._scan_token is not None:
+            self._scan_token.cancel()
         self._scan_active = False
         self._set_scan_controls(False)
         self._summary.setText("分析已取消；可重新分析或重新選擇目標。")
-        self._detail.setPlainText("已取消等待本次分析結果。背景掃描若稍後完成，結果會被忽略。")
+        self._detail.setPlainText("已送出取消訊號；目前掃描會在下一個安全檢查點停止。")
 
     def apply_selected(self) -> None:
         if self._scan_active:
@@ -346,40 +352,66 @@ class SafeCleanupDialog(QDialog):
     def _start_plan_scan(self) -> None:
         self._scan_generation += 1
         generation = self._scan_generation
+        if self._scan_token is not None:
+            self._scan_token.cancel()
+        token = ScanCancelToken()
+        self._scan_token = token
         self._scan_active = True
         self._plan = _placeholder_plan(self._context)
         self._show_scan_placeholder()
         self._set_scan_controls(True)
 
         thread = QThread()
-        worker = _CleanupPlanWorker(self._context, generation)
+        worker = _CleanupPlanWorker(self._context, generation, token)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
+        worker.stage_changed.connect(self._on_scan_stage_changed)
         worker.finished.connect(self._on_scan_finished)
         worker.failed.connect(self._on_scan_failed)
+        worker.cancelled.connect(self._on_scan_cancelled)
         worker.finished.connect(thread.quit)
         worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         worker.failed.connect(worker.deleteLater)
+        worker.cancelled.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda thread=thread, worker=worker: self._remove_scan_thread(thread, worker))
         self._scan_threads.append(thread)
         self._scan_workers.append(worker)
         thread.start()
 
+    def _on_scan_stage_changed(self, generation: int, name: str, index: int, total: int) -> None:
+        if generation != self._scan_generation:
+            return
+        self._summary.setText(f"分析中：{name} ({index} / {total})")
+        self._scan_progress.setRange(0, total)
+        self._scan_progress.setValue(max(0, min(index, total)))
+
     def _on_scan_finished(self, generation: int, plan: CleanupPlan) -> None:
         if generation != self._scan_generation:
             return
         self._scan_active = False
+        self._scan_token = None
         self._plan = plan
         self._set_scan_controls(False)
         self._populate()
         self._detail.setPlainText(f"分析完成：{datetime.fromtimestamp(plan.created_at).strftime('%Y-%m-%d %H:%M:%S')}")
 
+    def _on_scan_cancelled(self, generation: int) -> None:
+        if generation != self._scan_generation:
+            return
+        self._scan_active = False
+        self._scan_token = None
+        self._set_scan_controls(False)
+        self._summary.setText("分析已取消。")
+        self._detail.setPlainText("掃描已停止，沒有套用舊結果。")
+
     def _on_scan_failed(self, generation: int, message: str) -> None:
         if generation != self._scan_generation:
             return
         self._scan_active = False
+        self._scan_token = None
         self._plan = _failed_plan(self._context, message)
         self._set_scan_controls(False)
         self._populate()
@@ -393,6 +425,9 @@ class SafeCleanupDialog(QDialog):
 
     def _set_scan_controls(self, active: bool) -> None:
         self._scan_progress.setVisible(active)
+        if active:
+            self._scan_progress.setRange(0, scan_stage_count())
+            self._scan_progress.setValue(0)
         self._cancel_scan_button.setEnabled(active)
         self._refresh_button.setEnabled(not active)
         self._apply_button.setEnabled(not active)
@@ -625,19 +660,27 @@ class SafeCleanupDialog(QDialog):
 
 
 class _CleanupPlanWorker(QObject):
+    stage_changed = pyqtSignal(int, str, int, int)
     finished = pyqtSignal(int, object)
+    cancelled = pyqtSignal(int)
     failed = pyqtSignal(int, str)
 
-    def __init__(self, context: LauncherContext, generation: int) -> None:
+    def __init__(self, context: LauncherContext, generation: int, cancel_token: ScanCancelToken) -> None:
         super().__init__()
         self._context = context
         self._generation = generation
+        self._cancel_token = cancel_token
 
     def run(self) -> None:
         try:
-            self.finished.emit(self._generation, build_cleanup_plan(self._context))
+            self.finished.emit(self._generation, build_cleanup_plan(self._context, cancel_token=self._cancel_token, progress=self._emit_stage))
+        except ScanCancelled:
+            self.cancelled.emit(self._generation)
         except Exception:
             self.failed.emit(self._generation, traceback.format_exc())
+
+    def _emit_stage(self, name: str, index: int, total: int) -> None:
+        self.stage_changed.emit(self._generation, name, index, total)
 
 
 def _placeholder_plan(context: LauncherContext) -> CleanupPlan:

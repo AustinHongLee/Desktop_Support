@@ -16,6 +16,8 @@ from launcher.core.safe_cleanup import (
     SAFE_LAYER,
     CleanupPlanItem,
     OfficialUninstaller,
+    ScanCancelToken,
+    ScanCancelled,
     apply_cleanup_plan,
     build_cleanup_plan,
     delete_quarantine_session,
@@ -103,6 +105,30 @@ class SafeCleanupTests(unittest.TestCase):
             run_official_uninstaller(uninstaller)
 
         popen.assert_called_once_with("quiet.exe /S", shell=True)
+
+    def test_build_cleanup_plan_reports_scan_stages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "a.txt"
+            target.write_text("x", encoding="utf-8")
+            stages: list[tuple[str, int, int]] = []
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                build_cleanup_plan(
+                    LauncherContext.from_paths([target]),
+                    state_path=root / "state.json",
+                    progress=lambda name, index, total: stages.append((name, index, total)),
+                )
+
+        self.assertEqual(stages[0], ("目標身分", 1, 8))
+        self.assertEqual(stages[-1], ("工具列紀錄", 8, 8))
+
+    def test_build_cleanup_plan_honors_cancel_token(self) -> None:
+        token = ScanCancelToken()
+        token.cancel()
+
+        with self.assertRaises(ScanCancelled):
+            build_cleanup_plan(LauncherContext.from_paths([Path("C:/Temp/a.txt")]), cancel_token=token)
 
     def test_plan_includes_running_process_items(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
