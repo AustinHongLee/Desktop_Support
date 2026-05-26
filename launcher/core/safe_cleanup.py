@@ -1277,11 +1277,11 @@ def _scan_registry_base(
                     layer=layer,
                     kind="registry_value",
                     label=f"{root_name}\\{key_label}\\{value_label}",
-                    action="刪除登錄值" if root_name == "HKCU" else "只列出",
+                    action="刪除登錄值" if root_name == "HKCU" else "唯讀列出",
                     note=(
                         "HKCU 登錄值含有目標路徑/名稱；需勾選高風險確認才會刪除。"
                         if root_name == "HKCU"
-                        else "系統層 HKLM 登錄值只列出，不由第一版自動刪除。"
+                        else "HKLM 是系統層登錄檔證據；工具只把它當線索顯示，不會在一般模式刪除。"
                     ),
                     checked_default=False,
                     root_name=root_name,
@@ -1354,10 +1354,10 @@ def _scan_installer_registry_base(
                 layer=BLOCKED_LAYER,
                 kind="installer_registry_value",
                 label=f"{root_name}\\Installer\\{key_label}\\{_compact_label(value_label)}",
-                action="只列出",
+                action="唯讀列出",
                 note=(
-                    "Windows Installer 殘留候選：登錄值名稱/內容含有目標安裝路徑。"
-                    f"命中：{matched}。HKLM 系統層只列出，不自動刪除。"
+                    "Windows Installer / HKLM 唯讀證據：登錄值名稱或內容含有目標安裝路徑。"
+                    f"命中：{matched}。這類系統層項目只用來判斷殘留，不會自動刪除。"
                 ),
                 checked_default=False,
                 root_name=root_name,
@@ -1458,21 +1458,41 @@ def _registry_needles(targets: list[Path]) -> tuple[str, ...]:
     values: set[str] = set()
     for path in targets:
         text = str(path).casefold()
-        if text:
+        if text and not _weak_registry_needle(text):
             values.add(text)
-        if path.name:
+        if path.name and not _weak_registry_needle(path.name):
             values.add(path.name.casefold())
-        if path.stem and len(path.stem) >= 3:
+        if path.stem and len(path.stem) >= 3 and not _weak_registry_needle(path.stem):
             values.add(path.stem.casefold())
         if path.is_absolute():
             for candidate in (path, *path.parents):
                 candidate_text = str(candidate.resolve(strict=False)).casefold()
-                if candidate_text and len(_app_tokens(candidate_text)) >= 2:
+                if candidate_text and len(_non_version_app_tokens(candidate_text)) >= 2:
                     values.add(candidate_text)
             install_folder = _probable_install_folder(path)
             if install_folder is not None:
                 values.add(str(install_folder.resolve(strict=False)).casefold())
     return tuple(sorted(values, key=len, reverse=True))
+
+
+def _weak_registry_needle(value: str) -> bool:
+    text = str(value or "").strip().strip("\\/")
+    if not text:
+        return True
+    normalized = _normalized_app_text(text)
+    tokens = _app_tokens(text)
+    if not tokens:
+        return True
+    if all(_is_version_token(token) for token in tokens):
+        return True
+    # A single year/version token such as 2026 creates many false positives against InstallDate.
+    if re.fullmatch(r"\d{4}(?:[._-]\d+)*", text) or re.fullmatch(r"\d{4}(?:\s+\d+)*", normalized):
+        return True
+    return False
+
+
+def _non_version_app_tokens(value: str) -> tuple[str, ...]:
+    return tuple(token for token in _app_tokens(value) if not _is_version_token(token))
 
 
 def _probable_install_folder(target: Path) -> Path | None:

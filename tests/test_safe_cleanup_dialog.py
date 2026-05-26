@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QDialog, QHeaderView  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
-from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, InstalledApplication, OfficialUninstaller  # noqa: E402
+from launcher.core.safe_cleanup import BLOCKED_LAYER, PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, InstalledApplication, OfficialUninstaller  # noqa: E402
 from launcher.ui.safe_cleanup_dialog import SafeCleanupDialog  # noqa: E402
 
 
@@ -78,6 +78,38 @@ class SafeCleanupDialogTests(unittest.TestCase):
         dialog._tree.setColumnWidth(3, original_width + 123)
         dialog._populate()
         self.assertEqual(dialog._tree.columnWidth(3), original_width + 123)
+
+    def test_blocked_hklm_evidence_is_collapsed_and_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "app.exe"
+            target.write_text("x", encoding="utf-8")
+            hklm_item = CleanupPlanItem(
+                id="registry:HKLM:Software\\Demo:InstallDate",
+                layer=BLOCKED_LAYER,
+                kind="registry_value",
+                label="HKLM\\Demo\\InstallDate",
+                action="唯讀列出",
+                note="HKLM 是系統層登錄檔證據；工具只把它當線索顯示，不會在一般模式刪除。",
+                checked_default=False,
+                root_name="HKLM",
+                registry_key="Software\\Demo",
+                registry_value_name="InstallDate",
+                registry_value_data=str(target),
+            )
+            plan = CleanupPlan(targets=(target,), items=(hklm_item,), created_at=time.time())
+
+            with patch("launcher.ui.safe_cleanup_dialog.build_cleanup_plan", return_value=plan):
+                dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                _wait_for_scan(dialog)
+
+        group = dialog._tree.topLevelItem(0)
+        child = group.child(0)
+        self.assertIn("系統唯讀證據", group.text(0))
+        self.assertFalse(group.isExpanded())
+        self.assertEqual(child.text(2), "唯讀列出")
+        self.assertFalse(bool(child.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertIn("唯讀證據 1", dialog._summary.text())
 
     def test_dialog_conclusion_identifies_app_executable_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

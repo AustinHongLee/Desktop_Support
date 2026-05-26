@@ -600,7 +600,7 @@ class SafeCleanupDialog(QDialog):
                 child.setCheckState(0, Qt.CheckState.Checked if item.checked_default and item.executable else Qt.CheckState.Unchecked)
                 _apply_row_style(child, item)
                 group.addChild(child)
-        self._tree.expandAll()
+            group.setExpanded(layer != BLOCKED_LAYER)
         self._configure_suggestion_columns()
         self._tree.blockSignals(False)
         self._refresh_item_flags()
@@ -641,7 +641,7 @@ class SafeCleanupDialog(QDialog):
         safety_group.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning))
         self._info_tree.addTopLevelItem(safety_group)
         safety_group.addChild(_info_item("預設策略", "檔案先移到隔離區；不直接永久刪除"))
-        safety_group.addChild(_info_item("系統保護", f"{self._plan.count_by_layer(BLOCKED_LAYER)} 項只列出，不執行"))
+        safety_group.addChild(_info_item("系統唯讀證據", f"{self._plan.count_by_layer(BLOCKED_LAYER)} 項只列出，不執行"))
         safety_group.addChild(_info_item("需人工確認", f"{self._plan.count_by_layer(REVIEW_LAYER)} 項"))
 
         relation_group = QTreeWidgetItem(["關聯資訊", ""])
@@ -760,7 +760,7 @@ class SafeCleanupDialog(QDialog):
             PROCESS_LAYER: QStyle.StandardPixmap.SP_ComputerIcon,
             REVIEW_LAYER: QStyle.StandardPixmap.SP_MessageBoxWarning,
             REGISTRY_LAYER: QStyle.StandardPixmap.SP_FileDialogDetailedView,
-            BLOCKED_LAYER: QStyle.StandardPixmap.SP_MessageBoxCritical,
+            BLOCKED_LAYER: QStyle.StandardPixmap.SP_MessageBoxWarning,
         }.get(layer, QStyle.StandardPixmap.SP_FileIcon)
         return self.style().standardIcon(pixmap)
 
@@ -953,7 +953,7 @@ def _summary_text(plan: CleanupPlan) -> str:
         f"足跡 {_count_kinds(plan, {'app_footprint_file', 'app_footprint_folder'})}｜"
         f"登錄檔 {_count_kinds(plan, {'registry_value', 'installer_registry_value'})}｜"
         f"官方解除安裝 {len(plan.official_uninstallers)}｜"
-        f"Blocked {plan.count_by_layer(BLOCKED_LAYER)}｜"
+        f"唯讀證據 {plan.count_by_layer(BLOCKED_LAYER)}｜"
         f"估計大小 {_format_size(plan.total_size_bytes)}"
     )
 
@@ -972,7 +972,7 @@ def _layer_label(layer: str) -> str:
         PROCESS_LAYER: "執行中 / 可能佔用",
         REVIEW_LAYER: "需要人工確認",
         REGISTRY_LAYER: "登錄檔 HKCU 高風險",
-        BLOCKED_LAYER: "系統保護 / 不執行",
+        BLOCKED_LAYER: "系統唯讀證據 / 不執行",
     }
     return labels.get(layer, layer)
 
@@ -993,7 +993,7 @@ def _apply_row_style(row: QTreeWidgetItem, item: CleanupPlanItem) -> None:
         PROCESS_LAYER: "#1d4ed8",
         REVIEW_LAYER: "#8a4b00",
         REGISTRY_LAYER: "#7c2d12",
-        BLOCKED_LAYER: "#991b1b",
+        BLOCKED_LAYER: "#6b7280",
     }.get(item.layer, "#0c1320")
     for column in range(5):
         row.setForeground(column, QBrush(QColor(color)))

@@ -292,6 +292,37 @@ class SafeCleanupTests(unittest.TestCase):
         self.assertEqual(items[0].layer, BLOCKED_LAYER)
         self.assertIn("Windows Installer", items[0].note)
 
+    def test_registry_needles_ignore_version_only_target_names(self) -> None:
+        target = Path("C:/ProgramData/Trimble/Tekla Structures/2026.0")
+
+        needles = safe_cleanup_module._registry_needles([target])
+
+        self.assertNotIn("2026", needles)
+        self.assertNotIn("2026.0", needles)
+        self.assertIn("c:\\programdata\\trimble\\tekla structures\\2026.0", needles)
+
+    def test_hklm_install_date_does_not_match_year_only_target(self) -> None:
+        target = Path("C:/ProgramData/Trimble/Tekla Structures/2026.0")
+        needles = safe_cleanup_module._registry_needles([target])
+        values = [
+            (
+                r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{GUID}",
+                "InstallDate",
+                "20260526",
+            )
+        ]
+
+        with patch("launcher.core.safe_cleanup._iter_registry_values", return_value=values):
+            items = safe_cleanup_module._scan_registry_base(
+                "HKLM",
+                object(),
+                r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+                needles,
+                limit=10,
+            )
+
+        self.assertEqual(items, [])
+
     def test_run_official_uninstaller_prefers_quiet_command(self) -> None:
         uninstaller = OfficialUninstaller(
             id="uninstaller:HKCU:Demo",
