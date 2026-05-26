@@ -1,23 +1,29 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QFileInfo, Qt
 from PyQt6.QtGui import QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QDialog,
+    QFileDialog,
+    QFileIconProvider,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSplitter,
     QStyle,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from launcher.core.context_model import LauncherContext
@@ -40,26 +46,51 @@ class SafeCleanupDialog(QDialog):
         self._context = context
         self._plan: CleanupPlan = build_cleanup_plan(context)
         self._item_by_id: dict[str, CleanupPlanItem] = {}
+        self._icon_provider = QFileIconProvider()
 
         self.setWindowTitle("安全清除工作台")
-        self.setMinimumSize(980, 650)
+        self.setMinimumSize(1120, 700)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
 
         title = QLabel("安全清除工作台")
         title.setObjectName("PreferenceTitle")
-        hint = QLabel("先產生清除計畫，再用分層、圖示與註解判斷是否執行。預設只移到隔離區，不直接永久刪除。")
+        hint = QLabel("先選一個檔案或資料夾，工作台會顯示目標身分、同名衍生項、工具紀錄與登錄檔候選；確認後才把勾選項目移到隔離區。")
         hint.setObjectName("PreferenceHint")
         hint.setWordWrap(True)
 
         self._summary = QLabel()
         self._summary.setObjectName("PreferenceHint")
-        self._target_label = QLabel()
-        self._target_label.setObjectName("PreferenceHint")
-        self._target_label.setWordWrap(True)
+        self._target_path = QLineEdit()
+        self._target_path.setReadOnly(True)
+        self._target_path.setPlaceholderText("尚未選擇目標")
+
+        file_button = QPushButton("選擇檔案")
+        file_button.clicked.connect(self.pick_file)
+        folder_button = QPushButton("選擇資料夾")
+        folder_button.clicked.connect(self.pick_folder)
+        refresh_button = QPushButton("重新分析")
+        refresh_button.clicked.connect(self.refresh_plan)
+
+        target_controls = QHBoxLayout()
+        target_controls.addWidget(QLabel("分析目標"))
+        target_controls.addWidget(self._target_path, 1)
+        target_controls.addWidget(file_button)
+        target_controls.addWidget(folder_button)
+        target_controls.addWidget(refresh_button)
+
+        self._identity = QLabel()
+        self._identity.setObjectName("PreferenceTitle")
+        self._identity.setWordWrap(True)
+
+        self._info_tree = QTreeWidget()
+        self._info_tree.setColumnCount(2)
+        self._info_tree.setHeaderLabels(["資訊", "內容"])
+        self._info_tree.setMinimumWidth(390)
+        self._info_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
 
         self._tree = QTreeWidget()
         self._tree.setColumnCount(5)
-        self._tree.setHeaderLabels(["套用", "項目", "動作", "判斷註解", "位置 / 登錄檔"])
+        self._tree.setHeaderLabels(["套用", "清除建議", "動作", "判斷註解", "位置 / 登錄檔"])
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.itemSelectionChanged.connect(self._update_detail)
         self._tree.itemChanged.connect(self._on_item_changed)
@@ -77,8 +108,6 @@ class SafeCleanupDialog(QDialog):
         self._system_guard = QCheckBox("我確認沒有勾選系統保護路徑")
         self._system_guard.setToolTip("系統保護路徑仍不會執行；這個確認用來避免使用者忽略 blocked 層警告。")
 
-        refresh_button = QPushButton("重新掃描")
-        refresh_button.clicked.connect(self.refresh_plan)
         apply_button = QPushButton("隔離 / 清理勾選項目")
         apply_button.setDefault(True)
         apply_button.clicked.connect(self.apply_selected)
@@ -92,25 +121,62 @@ class SafeCleanupDialog(QDialog):
         toggles.addStretch(1)
 
         buttons = QHBoxLayout()
-        buttons.addWidget(refresh_button)
         buttons.addStretch(1)
         buttons.addWidget(apply_button)
         buttons.addWidget(close_button)
+
+        info_panel = QWidget()
+        info_layout = QVBoxLayout(info_panel)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(8)
+        info_layout.addWidget(self._identity)
+        info_layout.addWidget(self._info_tree, 1)
+
+        suggestion_panel = QWidget()
+        suggestion_layout = QVBoxLayout(suggestion_panel)
+        suggestion_layout.setContentsMargins(0, 0, 0, 0)
+        suggestion_layout.setSpacing(8)
+        suggestion_title = QLabel("清除建議")
+        suggestion_title.setObjectName("PreferenceTitle")
+        suggestion_layout.addWidget(suggestion_title)
+        suggestion_layout.addWidget(self._summary)
+        suggestion_layout.addWidget(self._tree, 1)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(info_panel)
+        splitter.addWidget(suggestion_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
         layout.addWidget(title)
         layout.addWidget(hint)
-        layout.addWidget(self._target_label)
-        layout.addWidget(self._summary)
-        layout.addWidget(self._tree, 1)
+        layout.addLayout(target_controls)
+        layout.addWidget(splitter, 1)
         layout.addLayout(toggles)
         layout.addWidget(self._detail)
         layout.addLayout(buttons)
 
         self.setStyleSheet(preferences_stylesheet())
         self._populate()
+
+    def pick_file(self) -> None:
+        start = str(_initial_folder(self._context))
+        file_path, _selected = QFileDialog.getOpenFileName(self, "選擇要分析的檔案", start, "所有檔案 (*.*)")
+        if not file_path:
+            return
+        self._context = LauncherContext.from_paths([file_path], source="picker.safe_cleanup")
+        self.refresh_plan()
+
+    def pick_folder(self) -> None:
+        start = str(_initial_folder(self._context))
+        folder = QFileDialog.getExistingDirectory(self, "選擇要分析的資料夾", start)
+        if not folder:
+            return
+        self._context = LauncherContext(folder=Path(folder), source="picker.safe_cleanup")
+        self.refresh_plan()
 
     def refresh_plan(self) -> None:
         self._plan = build_cleanup_plan(self._context)
@@ -165,8 +231,10 @@ class SafeCleanupDialog(QDialog):
         self._tree.blockSignals(True)
         self._tree.clear()
         self._item_by_id = {item.id: item for item in self._plan.items}
-        self._target_label.setText(_target_text(self._plan.targets))
+        self._target_path.setText(_target_path_text(self._plan.targets))
+        self._identity.setText(_identity_text(self._plan))
         self._summary.setText(_summary_text(self._plan))
+        self._populate_info_tree()
         for layer in (SAFE_LAYER, REVIEW_LAYER, REGISTRY_LAYER, BLOCKED_LAYER):
             layer_items = [item for item in self._plan.items if item.layer == layer]
             if not layer_items:
@@ -192,6 +260,52 @@ class SafeCleanupDialog(QDialog):
         self._refresh_item_flags()
         if self._tree.topLevelItemCount() > 0 and self._tree.topLevelItem(0).childCount() > 0:
             self._tree.setCurrentItem(self._tree.topLevelItem(0).child(0))
+
+    def _populate_info_tree(self) -> None:
+        self._info_tree.clear()
+        targets = self._plan.targets
+        target_group = QTreeWidgetItem(["目標身分", ""])
+        target_group.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView))
+        self._info_tree.addTopLevelItem(target_group)
+        if targets:
+            for target in targets:
+                target_group.addChild(_info_item("名稱", target.name or str(target), self._path_icon(target)))
+                target_group.addChild(_info_item("完整路徑", str(target)))
+                target_group.addChild(_info_item("類型", _path_type_text(target)))
+                target_group.addChild(_info_item("存在", "是" if target.exists() else "否"))
+                target_group.addChild(_info_item("大小", _target_size_text(self._plan, target)))
+                target_group.addChild(_info_item("修改時間", _mtime_text(target)))
+        else:
+            target_group.addChild(_info_item("狀態", "尚未選擇目標"))
+
+        safety_group = QTreeWidgetItem(["安全判斷", ""])
+        safety_group.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning))
+        self._info_tree.addTopLevelItem(safety_group)
+        safety_group.addChild(_info_item("預設策略", "檔案先移到隔離區；不直接永久刪除"))
+        safety_group.addChild(_info_item("系統保護", f"{self._plan.count_by_layer(BLOCKED_LAYER)} 項只列出，不執行"))
+        safety_group.addChild(_info_item("需人工確認", f"{self._plan.count_by_layer(REVIEW_LAYER)} 項"))
+
+        relation_group = QTreeWidgetItem(["關聯資訊", ""])
+        relation_group.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirLinkIcon))
+        self._info_tree.addTopLevelItem(relation_group)
+        for title, kinds in (
+            ("同名 / 衍生檔", {"associated_file", "associated_folder"}),
+            ("工具列近期紀錄", {"state_record"}),
+            ("登錄檔候選", {"registry_value"}),
+        ):
+            matches = [item for item in self._plan.items if item.kind in kinds]
+            branch = QTreeWidgetItem([title, f"{len(matches)} 項"])
+            relation_group.addChild(branch)
+            if matches:
+                for item in matches[:20]:
+                    child = _info_item(item.label, item.note)
+                    child.setIcon(0, self._item_icon(item))
+                    branch.addChild(child)
+            else:
+                branch.addChild(_info_item("結果", "未找到"))
+        self._info_tree.expandAll()
+        self._info_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self._info_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
 
     def _refresh_item_flags(self) -> None:
         self._tree.blockSignals(True)
@@ -278,13 +392,30 @@ class SafeCleanupDialog(QDialog):
             return self.style().standardIcon(QStyle.StandardPixmap.SP_DriveFDIcon)
         return self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
 
+    def _path_icon(self, path: Path) -> QIcon:
+        icon = self._icon_provider.icon(QFileInfo(str(path)))
+        if not icon.isNull():
+            return icon
+        return self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon if path.is_dir() else QStyle.StandardPixmap.SP_FileIcon)
 
-def _target_text(targets: tuple[Path, ...]) -> str:
+
+def _target_path_text(targets: tuple[Path, ...]) -> str:
     if not targets:
-        return "目標：目前沒有檔案或資料夾"
+        return ""
     if len(targets) == 1:
-        return f"目標：{targets[0]}"
-    return f"目標：{len(targets)} 個項目，第一個為 {targets[0]}"
+        return str(targets[0])
+    return f"{len(targets)} 個項目，第一個為 {targets[0]}"
+
+
+def _identity_text(plan: CleanupPlan) -> str:
+    if not plan.targets:
+        return "尚未選擇分析目標"
+    target = plan.targets[0]
+    target_item = next((item for item in plan.items if item.id.startswith("target:")), None)
+    layer = _layer_label(target_item.layer) if target_item else "未知"
+    if len(plan.targets) == 1:
+        return f"{target.name or target}｜{_path_type_text(target)}｜{layer}"
+    return f"{len(plan.targets)} 個目標｜第一個：{target.name or target}｜{layer}"
 
 
 def _summary_text(plan: CleanupPlan) -> str:
@@ -337,3 +468,40 @@ def _format_size(size: int) -> str:
             return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
         value /= 1024
     return f"{value:.1f} GB"
+
+
+def _initial_folder(context: LauncherContext) -> Path:
+    if context.files:
+        first = context.files[0]
+        return first.parent if first.parent else Path.home()
+    if context.folder:
+        return context.folder
+    return Path.home()
+
+
+def _info_item(label: str, value: str, icon: QIcon | None = None) -> QTreeWidgetItem:
+    item = QTreeWidgetItem([label, value])
+    if icon is not None:
+        item.setIcon(0, icon)
+    return item
+
+
+def _path_type_text(path: Path) -> str:
+    if not path.exists():
+        return "不存在"
+    if path.is_dir():
+        return "資料夾"
+    suffix = path.suffix.upper().lstrip(".")
+    return f"{suffix} 檔案" if suffix else "檔案"
+
+
+def _target_size_text(plan: CleanupPlan, target: Path) -> str:
+    item = next((entry for entry in plan.items if entry.path == str(target)), None)
+    return _format_size(item.size_bytes) if item else "未知"
+
+
+def _mtime_text(path: Path) -> str:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+    except OSError:
+        return "未知"
