@@ -151,11 +151,11 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertTrue(dialog._locate_button.isEnabled())
         self.assertEqual(captured, [("HKLM", "Software\\Demo")])
 
-    def test_launch_regedit_uses_shell_execute_startfile(self) -> None:
+    def test_launch_regedit_uses_shell_execute_startfile_with_new_instance(self) -> None:
         with patch.object(safe_cleanup_dialog_module.os, "startfile", create=True) as startfile:
             safe_cleanup_dialog_module._launch_regedit()
 
-        startfile.assert_called_once_with("regedit.exe")
+        startfile.assert_called_once_with("regedit.exe", "open", "/m")
 
     def test_dialog_conclusion_identifies_app_executable_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

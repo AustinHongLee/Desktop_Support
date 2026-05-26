@@ -1072,7 +1072,9 @@ def _open_registry_location(root_name: str, registry_key: str) -> None:
 def _launch_regedit() -> None:
     if not hasattr(os, "startfile"):
         raise RuntimeError("目前平台不支援 ShellExecute 啟動 Regedit。")
-    os.startfile("regedit.exe")  # type: ignore[attr-defined]  # noqa: S606 - local desktop action via ShellExecute.
+    # /m opens a separate Regedit instance, which forces Regedit to read LastKey
+    # instead of reusing an existing window that may stay on the old location.
+    os.startfile("regedit.exe", "open", "/m")  # type: ignore[attr-defined]  # noqa: S606 - local desktop action via ShellExecute.
 
 
 def _regedit_root_name(root_name: str) -> str:
