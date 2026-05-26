@@ -15,10 +15,12 @@ from launcher.core.safe_cleanup import (
     REVIEW_LAYER,
     SAFE_LAYER,
     CleanupPlanItem,
+    OfficialUninstaller,
     apply_cleanup_plan,
     build_cleanup_plan,
     delete_quarantine_session,
     list_quarantine_sessions,
+    run_official_uninstaller,
     restore_quarantine_items,
 )
 
@@ -64,6 +66,43 @@ class SafeCleanupTests(unittest.TestCase):
         install_item = next(item for item in plan.items if item.kind == "install_folder")
         self.assertEqual(install_item.layer, REVIEW_LAYER)
         self.assertEqual(Path(install_item.path), app_root)
+
+    def test_plan_includes_official_uninstaller_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "Programs" / "demo" / "Demo.exe"
+            target.parent.mkdir(parents=True)
+            target.write_text("x", encoding="utf-8")
+            uninstaller = OfficialUninstaller(
+                id="uninstaller:HKCU:Demo",
+                root_name="HKCU",
+                registry_key="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo",
+                display_name="Demo App",
+                uninstall_command='"C:\\Demo\\uninstall.exe"',
+                match_reason="DisplayIcon 指向目標路徑",
+                confidence=0.9,
+            )
+
+            with patch("launcher.core.safe_cleanup._official_uninstallers", return_value=[uninstaller]):
+                with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                    plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+
+        self.assertEqual(plan.official_uninstallers, (uninstaller,))
+
+    def test_run_official_uninstaller_prefers_quiet_command(self) -> None:
+        uninstaller = OfficialUninstaller(
+            id="uninstaller:HKCU:Demo",
+            root_name="HKCU",
+            registry_key="Software\\Demo",
+            display_name="Demo App",
+            uninstall_command="normal.exe",
+            quiet_uninstall_command="quiet.exe /S",
+        )
+
+        with patch("launcher.core.safe_cleanup.subprocess.Popen") as popen:
+            run_official_uninstaller(uninstaller)
+
+        popen.assert_called_once_with("quiet.exe /S", shell=True)
 
     def test_plan_includes_running_process_items(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

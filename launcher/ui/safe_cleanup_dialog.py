@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 import traceback
 
-from PyQt6.QtCore import QFileInfo, QObject, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QFileInfo, QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -38,8 +38,10 @@ from launcher.core.safe_cleanup import (
     SAFE_LAYER,
     CleanupPlan,
     CleanupPlanItem,
+    OfficialUninstaller,
     apply_cleanup_plan,
     build_cleanup_plan,
+    run_official_uninstaller,
 )
 from launcher.ui.quarantine_browser_dialog import QuarantineBrowserDialog
 from launcher.ui.theme import preferences_stylesheet
@@ -96,6 +98,22 @@ class SafeCleanupDialog(QDialog):
         self._scan_progress.setTextVisible(False)
         self._scan_progress.setFixedHeight(8)
         self._scan_progress.hide()
+
+        self._uninstall_panel = QWidget()
+        uninstall_layout = QHBoxLayout(self._uninstall_panel)
+        uninstall_layout.setContentsMargins(10, 8, 10, 8)
+        uninstall_layout.setSpacing(10)
+        uninstall_icon = QLabel()
+        uninstall_icon.setPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton).pixmap(18, 18))
+        self._uninstall_label = QLabel()
+        self._uninstall_label.setObjectName("PreferenceHint")
+        self._uninstall_label.setWordWrap(True)
+        self._uninstall_button = QPushButton("執行官方解除安裝")
+        self._uninstall_button.clicked.connect(self.run_detected_uninstaller)
+        uninstall_layout.addWidget(uninstall_icon)
+        uninstall_layout.addWidget(self._uninstall_label, 1)
+        uninstall_layout.addWidget(self._uninstall_button)
+        self._uninstall_panel.hide()
 
         self._identity = QLabel()
         self._identity.setObjectName("PreferenceTitle")
@@ -185,6 +203,7 @@ class SafeCleanupDialog(QDialog):
         layout.addWidget(hint)
         layout.addLayout(target_controls)
         layout.addWidget(self._scan_progress)
+        layout.addWidget(self._uninstall_panel)
         layout.addWidget(splitter, 1)
         layout.addLayout(toggles)
         layout.addWidget(self._detail)
@@ -197,6 +216,46 @@ class SafeCleanupDialog(QDialog):
     def open_quarantine_browser(self) -> None:
         dialog = QuarantineBrowserDialog(parent=self)
         dialog.exec()
+
+    def run_detected_uninstaller(self) -> None:
+        if self._scan_active:
+            QMessageBox.information(self, "安全清除工作台", "目前仍在分析，請稍候完成後再執行。")
+            return
+        uninstaller = _primary_uninstaller(self._plan)
+        if uninstaller is None:
+            QMessageBox.information(self, "安全清除工作台", "目前沒有找到可執行的官方解除安裝指令。")
+            return
+        command = uninstaller.preferred_command
+        answer = QMessageBox.question(
+            self,
+            "執行官方解除安裝",
+            (
+                f"將啟動官方解除安裝程式：\n{uninstaller.display_name}\n\n"
+                f"來源：{uninstaller.root_name}\\{uninstaller.registry_key}\n\n"
+                "啟動後請依解除安裝程式畫面操作；工作台會在數秒後重新分析殘留。確定？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            process = run_official_uninstaller(uninstaller)
+        except Exception as exc:
+            QMessageBox.warning(self, "安全清除工作台", f"啟動失敗：{exc}\n\n指令：{command}")
+            return
+        pid_text = f"PID {process.pid}" if getattr(process, "pid", None) else "已啟動"
+        self._detail.setPlainText(
+            "\n".join(
+                [
+                    f"已啟動官方解除安裝：{uninstaller.display_name}",
+                    f"狀態：{pid_text}",
+                    f"指令：{command}",
+                    "工作台會稍後重新分析；如果解除安裝程式仍在執行，請完成後再按一次重新分析。",
+                ]
+            )
+        )
+        QTimer.singleShot(3500, self.refresh_plan)
 
     def pick_file(self) -> None:
         start = str(_initial_folder(self._context))
@@ -346,6 +405,7 @@ class SafeCleanupDialog(QDialog):
         self._identity.setText("正在分析目標")
         self._conclusion.setText("正在掃描目標、關聯檔、捷徑、執行中程序與登錄檔候選。")
         self._summary.setText("分析中...")
+        self._uninstall_panel.hide()
         item = QTreeWidgetItem(["分析中", "請稍候", "無動作", "背景分析進行中，完成後會自動更新清除建議。", ""])
         item.setFirstColumnSpanned(True)
         self._tree.addTopLevelItem(item)
@@ -361,6 +421,7 @@ class SafeCleanupDialog(QDialog):
         self._identity.setText(_identity_text(self._plan))
         self._conclusion.setText(_analysis_conclusion(self._plan))
         self._summary.setText(_summary_text(self._plan))
+        self._update_uninstaller_panel()
         self._populate_info_tree()
         for layer in (SAFE_LAYER, PROCESS_LAYER, REVIEW_LAYER, REGISTRY_LAYER, BLOCKED_LAYER):
             layer_items = [item for item in self._plan.items if item.layer == layer]
@@ -415,6 +476,15 @@ class SafeCleanupDialog(QDialog):
         relation_group = QTreeWidgetItem(["關聯資訊", ""])
         relation_group.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirLinkIcon))
         self._info_tree.addTopLevelItem(relation_group)
+        uninstall_branch = QTreeWidgetItem(["官方解除安裝", f"{len(self._plan.official_uninstallers)} 項"])
+        relation_group.addChild(uninstall_branch)
+        if self._plan.official_uninstallers:
+            for uninstaller in self._plan.official_uninstallers[:5]:
+                child = _info_item(uninstaller.display_name, uninstaller.match_reason or uninstaller.registry_key)
+                child.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
+                uninstall_branch.addChild(child)
+        else:
+            uninstall_branch.addChild(_info_item("結果", "未找到"))
         for title, kinds in (
             ("疑似安裝資料夾", {"install_folder"}),
             ("執行中 / 可能佔用", {"running_process"}),
@@ -540,6 +610,19 @@ class SafeCleanupDialog(QDialog):
             return icon
         return self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon if path.is_dir() else QStyle.StandardPixmap.SP_FileIcon)
 
+    def _update_uninstaller_panel(self) -> None:
+        uninstaller = _primary_uninstaller(self._plan)
+        if uninstaller is None:
+            self._uninstall_panel.hide()
+            return
+        count = len(self._plan.official_uninstallers)
+        confidence = int(uninstaller.confidence * 100)
+        more_text = f"；另有 {count - 1} 個候選" if count > 1 else ""
+        self._uninstall_label.setText(
+            f"找到官方解除安裝：{uninstaller.display_name}｜信心 {confidence}%｜{uninstaller.match_reason or '登錄檔候選'}{more_text}"
+        )
+        self._uninstall_panel.show()
+
 
 class _CleanupPlanWorker(QObject):
     finished = pyqtSignal(int, object)
@@ -587,6 +670,12 @@ def _context_targets(context: LauncherContext) -> list[Path]:
     return []
 
 
+def _primary_uninstaller(plan: CleanupPlan) -> OfficialUninstaller | None:
+    if not plan.official_uninstallers:
+        return None
+    return plan.official_uninstallers[0]
+
+
 def _target_path_text(targets: tuple[Path, ...]) -> str:
     if not targets:
         return ""
@@ -615,10 +704,11 @@ def _analysis_conclusion(plan: CleanupPlan) -> str:
     process_count = _count_kinds(plan, {"running_process"})
     registry_count = _count_kinds(plan, {"registry_value"})
     associated_count = _count_kinds(plan, {"associated_file", "associated_folder"})
-    if target.suffix.casefold() == ".exe" and (install_count or registry_count or shortcut_count):
+    uninstall_count = len(plan.official_uninstallers)
+    if target.suffix.casefold() == ".exe" and (uninstall_count or install_count or registry_count or shortcut_count):
         return (
-            "判斷：這看起來像一個應用程式執行檔。建議先檢查官方解除安裝資訊；"
-            f"目前找到安裝資料夾 {install_count}、執行中/可能佔用 {process_count}、捷徑 {shortcut_count}、登錄檔候選 {registry_count}。"
+            "判斷：這看起來像一個應用程式執行檔。建議先跑官方解除安裝，再清殘留；"
+            f"目前找到官方解除安裝 {uninstall_count}、安裝資料夾 {install_count}、執行中/可能佔用 {process_count}、捷徑 {shortcut_count}、登錄檔候選 {registry_count}。"
         )
     if process_count:
         return f"判斷：目前找到 {process_count} 個執行中或可能佔用目標的程序；清除前建議先關閉。"
@@ -633,6 +723,7 @@ def _summary_text(plan: CleanupPlan) -> str:
         f"執行中 {plan.count_by_layer(PROCESS_LAYER)}｜"
         f"需確認 {plan.count_by_layer(REVIEW_LAYER)}｜"
         f"登錄檔 {plan.count_by_layer(REGISTRY_LAYER)}｜"
+        f"官方解除安裝 {len(plan.official_uninstallers)}｜"
         f"Blocked {plan.count_by_layer(BLOCKED_LAYER)}｜"
         f"估計大小 {_format_size(plan.total_size_bytes)}"
     )

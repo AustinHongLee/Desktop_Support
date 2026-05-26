@@ -34,6 +34,24 @@ MANIFEST_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
+class OfficialUninstaller:
+    id: str
+    root_name: str
+    registry_key: str
+    display_name: str
+    uninstall_command: str
+    quiet_uninstall_command: str = ""
+    install_location: str = ""
+    display_icon: str = ""
+    match_reason: str = ""
+    confidence: float = 0.0
+
+    @property
+    def preferred_command(self) -> str:
+        return self.quiet_uninstall_command or self.uninstall_command
+
+
+@dataclass(frozen=True)
 class CleanupPlanItem:
     id: str
     layer: str
@@ -69,6 +87,7 @@ class CleanupPlan:
     targets: tuple[Path, ...]
     items: tuple[CleanupPlanItem, ...]
     created_at: float
+    official_uninstallers: tuple[OfficialUninstaller, ...] = ()
 
     def count_by_layer(self, layer: str) -> int:
         return sum(1 for item in self.items if item.layer == layer)
@@ -131,6 +150,7 @@ def build_cleanup_plan(context: LauncherContext, *, state_path: Path | None = No
                 path=str(app_state),
             )
         )
+    uninstallers = tuple(_official_uninstallers(targets))
     items.extend(_registry_reference_items(targets))
     if not items:
         items.append(
@@ -144,7 +164,14 @@ def build_cleanup_plan(context: LauncherContext, *, state_path: Path | None = No
                 checked_default=False,
             )
         )
-    return CleanupPlan(targets=tuple(targets), items=tuple(items), created_at=time.time())
+    return CleanupPlan(targets=tuple(targets), items=tuple(items), created_at=time.time(), official_uninstallers=uninstallers)
+
+
+def run_official_uninstaller(uninstaller: OfficialUninstaller) -> subprocess.Popen:
+    command = uninstaller.preferred_command.strip()
+    if not command:
+        raise ValueError("官方解除安裝指令是空的。")
+    return subprocess.Popen(command, shell=True)
 
 
 def apply_cleanup_plan(
@@ -520,6 +547,123 @@ def _registry_reference_items(targets: list[Path]) -> list[CleanupPlanItem]:
     return items
 
 
+def _official_uninstallers(targets: list[Path]) -> list[OfficialUninstaller]:
+    if winreg is None or sys.platform != "win32":
+        return []
+    if not targets or not _should_scan_uninstallers(targets):
+        return []
+    uninstallers: list[OfficialUninstaller] = []
+    roots = (
+        ("HKCU", winreg.HKEY_CURRENT_USER, _uninstall_registry_bases("HKCU")),
+        ("HKLM", winreg.HKEY_LOCAL_MACHINE, _uninstall_registry_bases("HKLM")),
+    )
+    seen: set[str] = set()
+    for root_name, root_handle, bases in roots:
+        for key_path, values in _iter_uninstall_entries(root_handle, bases):
+            uninstall_command = values.get("UninstallString", "")
+            quiet_command = values.get("QuietUninstallString", "")
+            if not uninstall_command and not quiet_command:
+                continue
+            score, reasons = _uninstaller_match_score(values, targets)
+            if score < 3:
+                continue
+            unique = f"{root_name}\\{key_path}".casefold()
+            if unique in seen:
+                continue
+            seen.add(unique)
+            uninstallers.append(
+                OfficialUninstaller(
+                    id=f"uninstaller:{root_name}:{key_path}",
+                    root_name=root_name,
+                    registry_key=key_path,
+                    display_name=values.get("DisplayName", "") or key_path.rsplit("\\", 1)[-1],
+                    uninstall_command=uninstall_command,
+                    quiet_uninstall_command=quiet_command,
+                    install_location=values.get("InstallLocation", ""),
+                    display_icon=values.get("DisplayIcon", ""),
+                    match_reason="；".join(reasons),
+                    confidence=min(1.0, score / 8),
+                )
+            )
+    return sorted(uninstallers, key=lambda item: item.confidence, reverse=True)
+
+
+def _should_scan_uninstallers(targets: list[Path]) -> bool:
+    for target in targets:
+        if target.suffix.casefold() in {".exe", ".msi"}:
+            return True
+        if target.exists() and target.is_dir():
+            return True
+        if _probable_install_folder(target) is not None:
+            return True
+    return False
+
+
+def _iter_uninstall_entries(root_handle: object, bases: tuple[str, ...]):
+    for base in bases:
+        try:
+            with winreg.OpenKey(root_handle, base, 0, winreg.KEY_READ | _registry_view_flag()) as key:
+                subkeys = _enum_subkeys(key)
+        except OSError:
+            continue
+        for subkey_name in subkeys:
+            key_path = rf"{base}\{subkey_name}"
+            try:
+                with winreg.OpenKey(root_handle, key_path, 0, winreg.KEY_READ | _registry_view_flag()) as subkey:
+                    values = {name: str(data) for name, data in _enum_values(subkey) if isinstance(data, str) and str(data).strip()}
+            except OSError:
+                continue
+            if values:
+                yield key_path, values
+
+
+def _uninstaller_match_score(values: dict[str, str], targets: list[Path]) -> tuple[int, list[str]]:
+    weighted_fields = {
+        "InstallLocation": 4,
+        "DisplayIcon": 4,
+        "UninstallString": 3,
+        "QuietUninstallString": 3,
+        "DisplayName": 1,
+    }
+    score = 0
+    reasons: list[str] = []
+    for target in targets:
+        target_text = str(target.resolve(strict=False)).casefold()
+        target_name = target.name.casefold()
+        target_stem = target.stem.casefold()
+        install_folder = _probable_install_folder(target)
+        folder_text = str(install_folder.resolve(strict=False)).casefold() if install_folder else ""
+        for field, weight in weighted_fields.items():
+            value = values.get(field, "")
+            text = value.casefold()
+            if target_text and target_text in text:
+                score += weight
+                reasons.append(f"{field} 指向目標路徑")
+                continue
+            if folder_text and folder_text in text:
+                score += max(2, weight - 1)
+                reasons.append(f"{field} 指向疑似安裝資料夾")
+                continue
+            if field == "DisplayName" and target_stem and len(target_stem) >= 3 and target_stem in text:
+                score += 1
+                reasons.append("DisplayName 與目標名稱相近")
+            elif field in {"DisplayIcon", "UninstallString", "QuietUninstallString"} and target_name and target_name in text:
+                score += 2
+                reasons.append(f"{field} 含目標檔名")
+    return score, _dedupe_preserve_order(reasons)
+
+
+def _dedupe_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
+
+
 def _scan_registry_base(
     root_name: str,
     root_handle: object,
@@ -595,6 +739,15 @@ def _registry_scan_bases(root_name: str) -> tuple[str, ...]:
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
         r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
         r"Software\Microsoft\Windows\CurrentVersion\App Paths",
+    )
+
+
+def _uninstall_registry_bases(root_name: str) -> tuple[str, ...]:
+    if root_name == "HKCU":
+        return (r"Software\Microsoft\Windows\CurrentVersion\Uninstall",)
+    return (
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
     )
 
 

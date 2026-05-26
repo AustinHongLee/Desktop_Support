@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
-from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem  # noqa: E402
+from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, OfficialUninstaller  # noqa: E402
 from launcher.ui.safe_cleanup_dialog import SafeCleanupDialog  # noqa: E402
 
 
@@ -89,6 +89,33 @@ class SafeCleanupDialogTests(unittest.TestCase):
         labels = _tree_texts(dialog._info_tree)
         self.assertIn("疑似安裝資料夾", labels)
         self.assertIn("登錄檔候選", labels)
+
+    def test_dialog_surfaces_official_uninstaller_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_root = root / "Programs" / "demo"
+            app_root.mkdir(parents=True)
+            target = app_root / "Demo.exe"
+            target.write_text("x", encoding="utf-8")
+            uninstaller = OfficialUninstaller(
+                id="uninstaller:HKCU:Demo",
+                root_name="HKCU",
+                registry_key="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo",
+                display_name="Demo App",
+                uninstall_command="uninstall.exe",
+                match_reason="DisplayIcon 指向目標路徑",
+                confidence=0.875,
+            )
+
+            with patch("launcher.core.safe_cleanup._official_uninstallers", return_value=[uninstaller]):
+                with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                    dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                    _wait_for_scan(dialog)
+
+        self.assertFalse(dialog._uninstall_panel.isHidden())
+        self.assertIn("Demo App", dialog._uninstall_label.text())
+        self.assertIn("官方解除安裝", _tree_texts(dialog._info_tree))
+        self.assertIn("官方解除安裝 1", dialog._summary.text())
 
     def test_registry_items_are_disabled_until_high_risk_toggle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
