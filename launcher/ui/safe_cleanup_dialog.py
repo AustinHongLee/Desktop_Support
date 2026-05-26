@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import os
 import subprocess
 import sys
 import time
@@ -1065,7 +1066,13 @@ def _open_registry_location(root_name: str, registry_key: str) -> None:
     last_key = rf"Computer\{root}\{registry_key}"
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Applets\Regedit") as key:
         winreg.SetValueEx(key, "LastKey", 0, winreg.REG_SZ, last_key)
-    subprocess.Popen(["regedit.exe"])  # noqa: S603,S607 - local desktop action.
+    _launch_regedit()
+
+
+def _launch_regedit() -> None:
+    if not hasattr(os, "startfile"):
+        raise RuntimeError("目前平台不支援 ShellExecute 啟動 Regedit。")
+    os.startfile("regedit.exe")  # type: ignore[attr-defined]  # noqa: S606 - local desktop action via ShellExecute.
 
 
 def _regedit_root_name(root_name: str) -> str:

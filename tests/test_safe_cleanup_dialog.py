@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QApplication, QDialog, QHeaderView  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
 from launcher.core.safe_cleanup import BLOCKED_LAYER, PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, InstalledApplication, OfficialUninstaller  # noqa: E402
+from launcher.ui import safe_cleanup_dialog as safe_cleanup_dialog_module  # noqa: E402
 from launcher.ui.safe_cleanup_dialog import SafeCleanupDialog  # noqa: E402
 
 
@@ -149,6 +150,12 @@ class SafeCleanupDialogTests(unittest.TestCase):
 
         self.assertTrue(dialog._locate_button.isEnabled())
         self.assertEqual(captured, [("HKLM", "Software\\Demo")])
+
+    def test_launch_regedit_uses_shell_execute_startfile(self) -> None:
+        with patch.object(safe_cleanup_dialog_module.os, "startfile", create=True) as startfile:
+            safe_cleanup_dialog_module._launch_regedit()
+
+        startfile.assert_called_once_with("regedit.exe")
 
     def test_dialog_conclusion_identifies_app_executable_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
