@@ -12,8 +12,10 @@ from launcher.core.context_model import LauncherContext
 from launcher.core.safe_cleanup import (
     BLOCKED_LAYER,
     PROCESS_LAYER,
+    REGISTRY_LAYER,
     REVIEW_LAYER,
     SAFE_LAYER,
+    CleanupPlan,
     CleanupPlanItem,
     OfficialUninstaller,
     ScanCancelToken,
@@ -227,6 +229,77 @@ class SafeCleanupTests(unittest.TestCase):
             self.assertEqual(manifest["moved"][0]["original_path"], str(target))
             self.assertEqual(manifest["moved"][0]["original_sha256"], hashlib.sha256(b"x").hexdigest())
             self.assertTrue((result.quarantine_dir / "Restore.ps1").exists())
+
+    def test_apply_registry_cleanup_exports_backup_and_restore_script(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry_item = CleanupPlanItem(
+                id="registry:HKCU:Software\\Demo:InstallPath",
+                layer=REGISTRY_LAYER,
+                kind="registry_value",
+                label="HKCU\\Demo\\InstallPath",
+                action="刪除登錄值",
+                note="測試",
+                checked_default=False,
+                root_name="HKCU",
+                registry_key="Software\\Demo",
+                registry_value_name="InstallPath",
+                registry_value_data="C:\\Demo",
+            )
+            plan = CleanupPlan(targets=(), items=(registry_item,), created_at=0)
+
+            def fake_export(_item: CleanupPlanItem, session_dir: Path, _index: int) -> Path:
+                export_path = session_dir / "registry-001-demo.reg"
+                export_path.write_text("Windows Registry Editor Version 5.00", encoding="utf-8")
+                return export_path
+
+            with patch("launcher.core.safe_cleanup._export_registry_key", side_effect=fake_export):
+                with patch("launcher.core.safe_cleanup._delete_registry_value") as delete_registry:
+                    result = apply_cleanup_plan(
+                        plan,
+                        {registry_item.id},
+                        include_registry=True,
+                        quarantine_root=root / "quarantine",
+                    )
+
+            delete_registry.assert_called_once_with(registry_item)
+            self.assertEqual(result.registry_deleted_count, 1)
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["registry_deleted"][0]["registry_key"], "Software\\Demo")
+            self.assertTrue(Path(manifest["registry_deleted"][0]["export_path"]).exists())
+            restore_script = result.quarantine_dir / "Restore-Registry.ps1"
+            self.assertTrue(restore_script.exists())
+            self.assertIn("reg.exe import", restore_script.read_text(encoding="utf-8"))
+
+    def test_registry_cleanup_does_not_delete_when_export_fails(self) -> None:
+        registry_item = CleanupPlanItem(
+            id="registry:HKCU:Software\\Demo:InstallPath",
+            layer=REGISTRY_LAYER,
+            kind="registry_value",
+            label="HKCU\\Demo\\InstallPath",
+            action="刪除登錄值",
+            note="測試",
+            checked_default=False,
+            root_name="HKCU",
+            registry_key="Software\\Demo",
+            registry_value_name="InstallPath",
+            registry_value_data="C:\\Demo",
+        )
+        plan = CleanupPlan(targets=(), items=(registry_item,), created_at=0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("launcher.core.safe_cleanup._export_registry_key", side_effect=RuntimeError("export failed")):
+                with patch("launcher.core.safe_cleanup._delete_registry_value") as delete_registry:
+                    result = apply_cleanup_plan(
+                        plan,
+                        {registry_item.id},
+                        include_registry=True,
+                        quarantine_root=Path(tmp) / "quarantine",
+                    )
+
+        delete_registry.assert_not_called()
+        self.assertEqual(result.registry_deleted_count, 0)
+        self.assertTrue(result.errors)
 
     def test_restore_quarantine_items_moves_file_back_and_updates_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

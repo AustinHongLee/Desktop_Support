@@ -392,6 +392,7 @@ class SafeCleanupDialog(QDialog):
             f"已隔離檔案/資料夾：{result.moved_count}",
             f"已嘗試關閉程序：{result.closed_process_count}",
             f"已刪 HKCU 登錄值：{result.registry_deleted_count}",
+            f"登錄檔備份：{'已建立 Restore-Registry.ps1' if result.registry_deleted_count else '無'}",
             f"已清工具列近期紀錄：{'是' if result.state_cleaned else '否'}",
         ]
         if result.errors:
