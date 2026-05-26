@@ -11,6 +11,7 @@ import ctypes
 import hashlib
 import re
 from dataclasses import asdict, dataclass
+from enum import Enum
 from pathlib import Path
 from threading import Event
 from typing import Any, Callable
@@ -61,6 +62,12 @@ class ScanCancelToken:
 
     def cancelled(self) -> bool:
         return self._flag.is_set()
+
+
+class RestoreConflictPolicy(str, Enum):
+    SKIP = "skip"
+    RENAME = "rename"
+    OVERWRITE = "overwrite"
 
 
 @dataclass(frozen=True)
@@ -329,10 +336,16 @@ def load_quarantine_manifest(session_dir: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def restore_quarantine_items(session_dir: Path, indices: set[int] | None = None) -> QuarantineRestoreResult:
+def restore_quarantine_items(
+    session_dir: Path,
+    indices: set[int] | None = None,
+    *,
+    conflict_policy: RestoreConflictPolicy | str = RestoreConflictPolicy.SKIP,
+) -> QuarantineRestoreResult:
     manifest = load_quarantine_manifest(session_dir)
     moved = _manifest_moved_records(manifest)
     selected = set(range(len(moved))) if indices is None else set(indices)
+    policy = _restore_conflict_policy(conflict_policy)
     restored = 0
     errors: list[str] = []
     for index, record in enumerate(moved):
@@ -349,12 +362,21 @@ def restore_quarantine_items(session_dir: Path, indices: set[int] | None = None)
                 raise ValueError("manifest 缺少原始路徑")
             if not destination.exists():
                 raise FileNotFoundError(destination)
+            restore_target = original
+            conflict = original.exists()
             if original.exists():
-                raise FileExistsError(f"原位置已存在：{original}")
-            original.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(destination), str(original))
+                if policy == RestoreConflictPolicy.SKIP:
+                    raise FileExistsError(f"原位置已存在：{original}")
+                if policy == RestoreConflictPolicy.RENAME:
+                    restore_target = _renamed_restore_target(original)
+                elif policy == RestoreConflictPolicy.OVERWRITE:
+                    _remove_restore_conflict(original)
+            restore_target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(destination), str(restore_target))
             record["restored_at"] = time.time()
-            record["restored_to"] = str(original)
+            record["restored_to"] = str(restore_target)
+            record["restore_conflict_policy"] = policy.value
+            record["restore_conflict_original_existed"] = conflict
             restored += 1
         except Exception as exc:
             label = original_text or destination_text or f"record {index + 1}"
@@ -380,6 +402,33 @@ def _resolve_targets(context: LauncherContext) -> list[Path]:
     if context.folder is not None:
         return [context.folder]
     return []
+
+
+def _restore_conflict_policy(value: RestoreConflictPolicy | str) -> RestoreConflictPolicy:
+    if isinstance(value, RestoreConflictPolicy):
+        return value
+    try:
+        return RestoreConflictPolicy(str(value))
+    except ValueError:
+        return RestoreConflictPolicy.SKIP
+
+
+def _renamed_restore_target(original: Path) -> Path:
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    base = original.with_name(f"{original.name}.restored-{stamp}")
+    candidate = base
+    index = 2
+    while candidate.exists():
+        candidate = original.with_name(f"{original.name}.restored-{stamp}.{index}")
+        index += 1
+    return candidate
+
+
+def _remove_restore_conflict(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def _target_item(path: Path, cancel_token: ScanCancelToken | None = None) -> CleanupPlanItem:

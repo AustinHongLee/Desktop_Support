@@ -14,6 +14,7 @@ from launcher.core.safe_cleanup import (
     PROCESS_LAYER,
     REGISTRY_LAYER,
     REVIEW_LAYER,
+    RestoreConflictPolicy,
     SAFE_LAYER,
     CleanupPlan,
     CleanupPlanItem,
@@ -322,6 +323,62 @@ class SafeCleanupTests(unittest.TestCase):
             self.assertIn("restored_at", manifest["moved"][0])
             sessions = list_quarantine_sessions(quarantine)
             self.assertEqual(sessions[0].restored_count, 1)
+
+    def test_restore_quarantine_items_skips_conflicting_original_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "conflict.txt"
+            target.write_text("old", encoding="utf-8")
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+            result = apply_cleanup_plan(plan, {plan.items[0].id}, quarantine_root=root / "quarantine")
+            target.write_text("new", encoding="utf-8")
+
+            restore_result = restore_quarantine_items(result.quarantine_dir)
+
+            self.assertEqual(restore_result.restored_count, 0)
+            self.assertTrue(restore_result.errors)
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+
+    def test_restore_quarantine_items_can_rename_conflicting_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "conflict.txt"
+            target.write_text("old", encoding="utf-8")
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+            result = apply_cleanup_plan(plan, {plan.items[0].id}, quarantine_root=root / "quarantine")
+            target.write_text("new", encoding="utf-8")
+
+            restore_result = restore_quarantine_items(result.quarantine_dir, conflict_policy=RestoreConflictPolicy.RENAME)
+
+            restored_files = list(root.glob("conflict.txt.restored-*"))
+            self.assertEqual(restore_result.restored_count, 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+            self.assertEqual(restored_files[0].read_text(encoding="utf-8"), "old")
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["moved"][0]["restore_conflict_policy"], "rename")
+
+    def test_restore_quarantine_items_can_overwrite_conflicting_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "conflict.txt"
+            target.write_text("old", encoding="utf-8")
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+            result = apply_cleanup_plan(plan, {plan.items[0].id}, quarantine_root=root / "quarantine")
+            target.write_text("new", encoding="utf-8")
+
+            restore_result = restore_quarantine_items(result.quarantine_dir, conflict_policy=RestoreConflictPolicy.OVERWRITE)
+
+            self.assertEqual(restore_result.restored_count, 1)
+            self.assertEqual(target.read_text(encoding="utf-8"), "old")
+            manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["moved"][0]["restored_to"], str(target))
+            self.assertEqual(manifest["moved"][0]["restore_conflict_policy"], "overwrite")
 
     def test_delete_quarantine_session_requires_quarantine_root_and_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

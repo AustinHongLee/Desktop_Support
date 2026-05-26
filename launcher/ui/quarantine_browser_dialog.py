@@ -8,6 +8,8 @@ from PyQt6.QtCore import QFileInfo, Qt, QUrl
 from PyQt6.QtGui import QBrush, QColor, QDesktopServices
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QComboBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -26,6 +28,7 @@ from PyQt6.QtWidgets import (
 
 from launcher.core.safe_cleanup import (
     QuarantineSession,
+    RestoreConflictPolicy,
     delete_quarantine_session,
     list_quarantine_sessions,
     load_quarantine_manifest,
@@ -71,6 +74,14 @@ class QuarantineBrowserDialog(QDialog):
         self._detail.setReadOnly(True)
         self._detail.setMinimumHeight(115)
 
+        self._conflict_policy = QComboBox()
+        self._conflict_policy.addItem("衝突時略過", RestoreConflictPolicy.SKIP.value)
+        self._conflict_policy.addItem("衝突時改名還原", RestoreConflictPolicy.RENAME.value)
+        self._conflict_policy.addItem("衝突時覆蓋原位置", RestoreConflictPolicy.OVERWRITE.value)
+        self._conflict_policy.currentIndexChanged.connect(lambda _index: self._update_conflict_controls())
+        self._overwrite_confirm = QCheckBox("我確認允許覆蓋原位置")
+        self._overwrite_confirm.setEnabled(False)
+
         refresh_button = QPushButton("重新整理")
         refresh_button.clicked.connect(self.refresh_sessions)
         self._open_folder_button = QPushButton("開啟隔離資料夾")
@@ -111,6 +122,9 @@ class QuarantineBrowserDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addWidget(refresh_button)
         buttons.addWidget(self._open_folder_button)
+        buttons.addWidget(QLabel("還原衝突"))
+        buttons.addWidget(self._conflict_policy)
+        buttons.addWidget(self._overwrite_confirm)
         buttons.addStretch(1)
         buttons.addWidget(self._restore_selected_button)
         buttons.addWidget(self._restore_all_button)
@@ -147,9 +161,11 @@ class QuarantineBrowserDialog(QDialog):
         if not indices:
             QMessageBox.information(self, "隔離區管理", "請先選取要還原的項目。")
             return
+        if not self._validate_restore_policy():
+            return
         if not self._confirm_restore(len(indices)):
             return
-        result = restore_quarantine_items(session.path, indices)
+        result = restore_quarantine_items(session.path, indices, conflict_policy=self._selected_conflict_policy())
         self._show_restore_result(result.restored_count, result.errors)
         self._refresh_sessions(preselect=session.path)
 
@@ -161,9 +177,11 @@ class QuarantineBrowserDialog(QDialog):
         if not pending:
             QMessageBox.information(self, "隔離區管理", "此 session 目前沒有待還原項目。")
             return
+        if not self._validate_restore_policy():
+            return
         if not self._confirm_restore(len(pending)):
             return
-        result = restore_quarantine_items(session.path, set(pending))
+        result = restore_quarantine_items(session.path, set(pending), conflict_policy=self._selected_conflict_policy())
         self._show_restore_result(result.restored_count, result.errors)
         self._refresh_sessions(preselect=session.path)
 
@@ -297,6 +315,8 @@ class QuarantineBrowserDialog(QDialog):
         self._restore_selected_button.setEnabled(has_session and has_pending)
         self._restore_all_button.setEnabled(has_session and has_pending)
         self._delete_button.setEnabled(has_session)
+        self._conflict_policy.setEnabled(has_session and has_pending)
+        self._update_conflict_controls()
 
     def _current_session(self) -> QuarantineSession | None:
         row = self._session_table.currentRow()
@@ -323,14 +343,32 @@ class QuarantineBrowserDialog(QDialog):
         return indices
 
     def _confirm_restore(self, count: int) -> bool:
+        policy_text = self._conflict_policy.currentText()
         answer = QMessageBox.question(
             self,
             "還原隔離項目",
-            f"將還原 {count} 個項目到原始位置。\n若原位置已存在，該項會略過並顯示錯誤。確定？",
+            f"將還原 {count} 個項目。\n衝突策略：{policy_text}\n\n確定？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
         return answer == QMessageBox.StandardButton.Yes
+
+    def _selected_conflict_policy(self) -> RestoreConflictPolicy:
+        return RestoreConflictPolicy(str(self._conflict_policy.currentData() or RestoreConflictPolicy.SKIP.value))
+
+    def _validate_restore_policy(self) -> bool:
+        if self._selected_conflict_policy() != RestoreConflictPolicy.OVERWRITE:
+            return True
+        if self._overwrite_confirm.isChecked():
+            return True
+        QMessageBox.warning(self, "隔離區管理", "覆蓋原位置前，請先勾選確認。")
+        return False
+
+    def _update_conflict_controls(self) -> None:
+        overwrite = self._selected_conflict_policy() == RestoreConflictPolicy.OVERWRITE
+        self._overwrite_confirm.setEnabled(overwrite and self._conflict_policy.isEnabled())
+        if not overwrite:
+            self._overwrite_confirm.setChecked(False)
 
     def _show_restore_result(self, restored_count: int, errors: tuple[str, ...]) -> None:
         lines = [f"已還原：{restored_count} 個項目"]
