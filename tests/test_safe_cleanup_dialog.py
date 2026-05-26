@@ -116,6 +116,40 @@ class SafeCleanupDialogTests(unittest.TestCase):
         dialog._update_detail()
         self.assertIn("重裝影響：可能", dialog._detail.toPlainText())
 
+    def test_locate_selected_hklm_registry_item_opens_registry_location(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "app.exe"
+            target.write_text("x", encoding="utf-8")
+            hklm_item = CleanupPlanItem(
+                id="registry:HKLM:Software\\Demo:InstallLocation",
+                layer=BLOCKED_LAYER,
+                kind="registry_value",
+                label="HKLM\\Demo\\InstallLocation",
+                action="需管理員清理",
+                note="HKLM 測試",
+                checked_default=False,
+                root_name="HKLM",
+                registry_key="Software\\Demo",
+                registry_value_name="InstallLocation",
+                registry_value_data=str(target),
+            )
+            plan = CleanupPlan(targets=(target,), items=(hklm_item,), created_at=time.time())
+
+            with patch("launcher.ui.safe_cleanup_dialog.build_cleanup_plan", return_value=plan):
+                dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                _wait_for_scan(dialog)
+
+            child = dialog._tree.topLevelItem(0).child(0)
+            dialog._tree.setCurrentItem(child)
+
+            captured: list[tuple[str, str]] = []
+            with patch("launcher.ui.safe_cleanup_dialog._open_registry_location", side_effect=lambda root_name, key: captured.append((root_name, key))):
+                dialog.locate_selected_item()
+
+        self.assertTrue(dialog._locate_button.isEnabled())
+        self.assertEqual(captured, [("HKLM", "Software\\Demo")])
+
     def test_dialog_conclusion_identifies_app_executable_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import subprocess
+import sys
 import time
 import traceback
 
@@ -50,6 +52,11 @@ from launcher.core.safe_cleanup import (
 from launcher.ui.installed_app_picker_dialog import InstalledApplicationPickerDialog
 from launcher.ui.quarantine_browser_dialog import QuarantineBrowserDialog
 from launcher.ui.theme import preferences_stylesheet
+
+try:
+    import winreg
+except ImportError:  # pragma: no cover - Windows-only integration.
+    winreg = None  # type: ignore[assignment]
 
 
 class SafeCleanupDialog(QDialog):
@@ -173,6 +180,10 @@ class SafeCleanupDialog(QDialog):
         self._apply_button = QPushButton("隔離 / 清理勾選項目")
         self._apply_button.setDefault(True)
         self._apply_button.clicked.connect(self.apply_selected)
+        self._locate_button = QPushButton("定位選取項目")
+        self._locate_button.setToolTip("開啟檔案所在位置；登錄檔項目會開啟 Regedit 並定位到對應 key。")
+        self._locate_button.clicked.connect(self.locate_selected_item)
+        self._locate_button.setEnabled(False)
         quarantine_button = QPushButton("管理隔離區")
         quarantine_button.clicked.connect(self.open_quarantine_browser)
         close_button = QPushButton("關閉")
@@ -188,6 +199,7 @@ class SafeCleanupDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addWidget(quarantine_button)
         buttons.addStretch(1)
+        buttons.addWidget(self._locate_button)
         buttons.addWidget(self._apply_button)
         buttons.addWidget(close_button)
 
@@ -396,6 +408,16 @@ class SafeCleanupDialog(QDialog):
             return
         self._start_apply(selected_ids)
 
+    def locate_selected_item(self) -> None:
+        item = self._current_plan_item()
+        if item is None:
+            QMessageBox.information(self, "安全清除工作台", "請先選擇要定位的項目。")
+            return
+        try:
+            _locate_plan_item(item)
+        except Exception as exc:
+            QMessageBox.warning(self, "安全清除工作台", f"無法定位此項目：\n{exc}")
+
     def _start_apply(self, selected_ids: set[str]) -> None:
         self._set_apply_controls(True)
         worker = _CleanupApplyWorker(
@@ -542,6 +564,7 @@ class SafeCleanupDialog(QDialog):
         self._cancel_scan_button.setEnabled(active)
         self._refresh_button.setEnabled(not active and not self._apply_active)
         self._apply_button.setEnabled(not active and not self._apply_active)
+        self._locate_button.setEnabled(not active and not self._apply_active and _can_locate_item(self._current_plan_item()))
 
     def _set_apply_controls(self, active: bool) -> None:
         self._apply_active = active
@@ -556,6 +579,7 @@ class SafeCleanupDialog(QDialog):
         self._cancel_scan_button.setEnabled(False)
         self._refresh_button.setEnabled(not active and not self._scan_active)
         self._apply_button.setEnabled(not active and not self._scan_active)
+        self._locate_button.setEnabled(not active and _can_locate_item(self._current_plan_item()))
         self._uninstall_button.setEnabled(not active and not self._scan_active)
 
     def _show_scan_placeholder(self) -> None:
@@ -726,12 +750,11 @@ class SafeCleanupDialog(QDialog):
         return selected
 
     def _update_detail(self) -> None:
-        current = self._tree.currentItem()
-        if current is None:
-            return
-        item = self._item_by_id.get(str(current.data(0, Qt.ItemDataRole.UserRole)))
+        item = self._current_plan_item()
         if item is None:
+            self._locate_button.setEnabled(False)
             return
+        self._locate_button.setEnabled(not self._apply_active and _can_locate_item(item))
         lines = [
             f"項目：{item.label}",
             f"層級：{_layer_label(item.layer)}",
@@ -757,6 +780,12 @@ class SafeCleanupDialog(QDialog):
                 lines.append("重裝影響：可能。HKLM / Windows Installer 殘留可能讓安裝程式誤判已安裝、修復/移除入口異常，或沿用舊路徑。")
                 lines.append("處理方式：一般模式不直接刪；深度清理需管理員權限，先匯出 .reg 備份，再刪除已確認屬於目標的值或 key。")
         self._detail.setPlainText("\n".join(lines))
+
+    def _current_plan_item(self) -> CleanupPlanItem | None:
+        current = self._tree.currentItem()
+        if current is None:
+            return None
+        return self._item_by_id.get(str(current.data(0, Qt.ItemDataRole.UserRole)))
 
     def _layer_icon(self, layer: str) -> QIcon:
         pixmap = {
@@ -989,6 +1018,64 @@ def _item_location(item: CleanupPlanItem) -> str:
     if item.registry_key:
         return f"{item.root_name}\\{item.registry_key}\\{item.registry_value_name or '(Default)'}"
     return ""
+
+
+def _can_locate_item(item: CleanupPlanItem | None) -> bool:
+    if item is None:
+        return False
+    return bool(item.registry_key or item.path or item.process_path)
+
+
+def _locate_plan_item(item: CleanupPlanItem) -> None:
+    if item.registry_key:
+        _open_registry_location(item.root_name, item.registry_key)
+        return
+    if item.path:
+        _open_path_location(Path(item.path))
+        return
+    if item.process_path:
+        _open_path_location(Path(item.process_path))
+        return
+    raise ValueError("此項目沒有可定位的位置。")
+
+
+def _open_path_location(path: Path) -> None:
+    if sys.platform != "win32":
+        raise RuntimeError("目前只支援 Windows 定位。")
+    target = path.expanduser().resolve(strict=False)
+    if target.exists() and target.is_file():
+        subprocess.Popen(["explorer.exe", f"/select,{target}"])  # noqa: S603,S607 - local desktop action.
+        return
+    if target.exists() and target.is_dir():
+        subprocess.Popen(["explorer.exe", str(target)])  # noqa: S603,S607 - local desktop action.
+        return
+    parent = target.parent
+    if parent.exists():
+        subprocess.Popen(["explorer.exe", str(parent)])  # noqa: S603,S607 - local desktop action.
+        return
+    raise FileNotFoundError(f"找不到可開啟的位置：{target}")
+
+
+def _open_registry_location(root_name: str, registry_key: str) -> None:
+    if sys.platform != "win32" or winreg is None:
+        raise RuntimeError("目前只支援 Windows Regedit 定位。")
+    root = _regedit_root_name(root_name)
+    if not root or not registry_key:
+        raise ValueError(f"不支援的登錄檔根目錄：{root_name}")
+    last_key = rf"Computer\{root}\{registry_key}"
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Applets\Regedit") as key:
+        winreg.SetValueEx(key, "LastKey", 0, winreg.REG_SZ, last_key)
+    subprocess.Popen(["regedit.exe"])  # noqa: S603,S607 - local desktop action.
+
+
+def _regedit_root_name(root_name: str) -> str:
+    roots = {
+        "HKCU": "HKEY_CURRENT_USER",
+        "HKEY_CURRENT_USER": "HKEY_CURRENT_USER",
+        "HKLM": "HKEY_LOCAL_MACHINE",
+        "HKEY_LOCAL_MACHINE": "HKEY_LOCAL_MACHINE",
+    }
+    return roots.get(root_name.strip().upper(), "")
 
 
 def _apply_row_style(row: QTreeWidgetItem, item: CleanupPlanItem) -> None:
