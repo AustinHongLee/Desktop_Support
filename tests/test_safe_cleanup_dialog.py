@@ -108,6 +108,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertIn("系統層待管理員確認", group.text(0))
         self.assertFalse(group.isExpanded())
         self.assertEqual(child.text(2), "需管理員清理")
+        self.assertEqual(child.text(0), "管理員")
         self.assertTrue(bool(child.flags() & Qt.ItemFlag.ItemIsEnabled))
         self.assertTrue(bool(child.flags() & Qt.ItemFlag.ItemIsSelectable))
         self.assertFalse(bool(child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
@@ -115,6 +116,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
         dialog._tree.setCurrentItem(child)
         dialog._update_detail()
         self.assertIn("重裝影響：可能", dialog._detail.toPlainText())
+        self.assertIn("為什麼不能打勾", dialog._detail.toPlainText())
 
     def test_locate_selected_hklm_registry_item_opens_registry_location(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -249,11 +251,13 @@ class SafeCleanupDialogTests(unittest.TestCase):
         assert registry_child is not None
         self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsEnabled))
         self.assertFalse(bool(registry_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
+        self.assertEqual(registry_child.text(0), "需允許")
 
         dialog._include_registry.setChecked(True)
 
         self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsEnabled))
         self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
+        self.assertEqual(registry_child.text(0), "")
 
     def test_process_items_are_disabled_until_close_toggle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -289,11 +293,13 @@ class SafeCleanupDialogTests(unittest.TestCase):
         assert process_child is not None
         self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
         self.assertFalse(bool(process_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
+        self.assertEqual(process_child.text(0), "需允許")
 
         dialog._include_process.setChecked(True)
 
         self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
         self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
+        self.assertEqual(process_child.text(0), "")
         self.assertIn("執行中", dialog._summary.text())
 
     def test_dialog_accepts_typed_residue_target(self) -> None:

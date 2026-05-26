@@ -149,7 +149,7 @@ class SafeCleanupDialog(QDialog):
 
         self._tree = QTreeWidget()
         self._tree.setColumnCount(5)
-        self._tree.setHeaderLabels(["套用", "清除建議", "動作", "判斷註解", "位置 / 登錄檔"])
+        self._tree.setHeaderLabels(["套用 / 狀態", "清除建議", "動作", "判斷註解", "位置 / 登錄檔"])
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._tree.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -718,10 +718,13 @@ class SafeCleanupDialog(QDialog):
                     enabled = enabled and self._include_registry.isChecked()
                 flags = child.flags() | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                 if enabled:
+                    child.setText(0, "")
+                    child.setCheckState(0, Qt.CheckState.Checked if item.checked_default and item.executable else Qt.CheckState.Unchecked)
                     flags |= Qt.ItemFlag.ItemIsUserCheckable
                 else:
                     flags &= ~Qt.ItemFlag.ItemIsUserCheckable
-                    child.setCheckState(0, Qt.CheckState.Unchecked)
+                    child.setData(0, Qt.ItemDataRole.CheckStateRole, None)
+                    child.setText(0, _non_apply_status(item))
                 child.setFlags(flags)
         self._tree.blockSignals(False)
 
@@ -774,7 +777,8 @@ class SafeCleanupDialog(QDialog):
             if item.layer == BLOCKED_LAYER:
                 lines.append("")
                 lines.append("重裝影響：可能。HKLM / Windows Installer 殘留可能讓安裝程式誤判已安裝、修復/移除入口異常，或沿用舊路徑。")
-                lines.append("處理方式：一般模式不直接刪；深度清理需管理員權限，先匯出 .reg 備份，再刪除已確認屬於目標的值或 key。")
+                lines.append("為什麼不能打勾：主清理按鈕只處理目前能完整備份與還原的項目；此項屬系統層，需管理員深度清理流程。")
+                lines.append("處理方式：先用來源檢視確認內容；深度清理需管理員權限，先匯出 .reg 備份，再刪除已確認屬於目標的值或 key。")
         self._detail.setPlainText("\n".join(lines))
 
     def _current_plan_item(self) -> CleanupPlanItem | None:
@@ -1014,6 +1018,16 @@ def _item_location(item: CleanupPlanItem) -> str:
     if item.registry_key:
         return f"{item.root_name}\\{item.registry_key}\\{item.registry_value_name or '(Default)'}"
     return ""
+
+
+def _non_apply_status(item: CleanupPlanItem) -> str:
+    if item.layer == BLOCKED_LAYER and item.registry_key:
+        return "管理員"
+    if item.layer == BLOCKED_LAYER:
+        return "不可執行"
+    if item.layer in {PROCESS_LAYER, REVIEW_LAYER, REGISTRY_LAYER}:
+        return "需允許"
+    return "查看"
 
 
 def _can_locate_item(item: CleanupPlanItem | None) -> bool:
