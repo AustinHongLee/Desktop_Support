@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
 from launcher.core.context_model import LauncherContext
 from launcher.core.safe_cleanup import (
     BLOCKED_LAYER,
+    PROCESS_LAYER,
     REGISTRY_LAYER,
     REVIEW_LAYER,
     SAFE_LAYER,
@@ -81,6 +82,9 @@ class SafeCleanupDialog(QDialog):
         self._identity = QLabel()
         self._identity.setObjectName("PreferenceTitle")
         self._identity.setWordWrap(True)
+        self._conclusion = QLabel()
+        self._conclusion.setObjectName("PreferenceHint")
+        self._conclusion.setWordWrap(True)
 
         self._info_tree = QTreeWidget()
         self._info_tree.setColumnCount(2)
@@ -102,6 +106,9 @@ class SafeCleanupDialog(QDialog):
         self._include_review = QCheckBox("允許執行需確認層")
         self._include_review.setToolTip("資料夾與疑似衍生檔需要人工確認才可加入隔離。")
         self._include_review.stateChanged.connect(lambda _state: self._refresh_item_flags())
+        self._include_process = QCheckBox("允許嘗試關閉執行中程序")
+        self._include_process.setToolTip("只會嘗試正常 taskkill，不使用強制 /F；失敗時請手動關閉。")
+        self._include_process.stateChanged.connect(lambda _state: self._refresh_item_flags())
         self._include_registry = QCheckBox("允許登錄檔 HKCU 清理")
         self._include_registry.setToolTip("只允許刪除 HKCU 值；HKLM / 系統層只列出。")
         self._include_registry.stateChanged.connect(lambda _state: self._refresh_item_flags())
@@ -116,6 +123,7 @@ class SafeCleanupDialog(QDialog):
 
         toggles = QHBoxLayout()
         toggles.addWidget(self._include_review)
+        toggles.addWidget(self._include_process)
         toggles.addWidget(self._include_registry)
         toggles.addWidget(self._system_guard)
         toggles.addStretch(1)
@@ -130,6 +138,7 @@ class SafeCleanupDialog(QDialog):
         info_layout.setContentsMargins(0, 0, 0, 0)
         info_layout.setSpacing(8)
         info_layout.addWidget(self._identity)
+        info_layout.addWidget(self._conclusion)
         info_layout.addWidget(self._info_tree, 1)
 
         suggestion_panel = QWidget()
@@ -188,6 +197,7 @@ class SafeCleanupDialog(QDialog):
             QMessageBox.information(self, "安全清除工作台", "目前沒有勾選可執行項目。")
             return
         selected = [self._item_by_id[item_id] for item_id in selected_ids if item_id in self._item_by_id]
+        process_count = sum(1 for item in selected if item.layer == PROCESS_LAYER)
         registry_count = sum(1 for item in selected if item.layer == REGISTRY_LAYER)
         review_count = sum(1 for item in selected if item.layer == REVIEW_LAYER)
         blocked_count = sum(1 for item in selected if item.layer == BLOCKED_LAYER)
@@ -196,6 +206,9 @@ class SafeCleanupDialog(QDialog):
             return
         if review_count and not self._include_review.isChecked():
             QMessageBox.warning(self, "安全清除工作台", "需確認層尚未允許執行。")
+            return
+        if process_count and not self._include_process.isChecked():
+            QMessageBox.warning(self, "安全清除工作台", "執行中程序關閉尚未允許。")
             return
         if registry_count and not self._include_registry.isChecked():
             QMessageBox.warning(self, "安全清除工作台", "登錄檔 HKCU 清理尚未允許執行。")
@@ -212,11 +225,17 @@ class SafeCleanupDialog(QDialog):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        result = apply_cleanup_plan(self._plan, selected_ids, include_registry=self._include_registry.isChecked())
+        result = apply_cleanup_plan(
+            self._plan,
+            selected_ids,
+            include_registry=self._include_registry.isChecked(),
+            include_process_close=self._include_process.isChecked(),
+        )
         lines = [
             f"隔離資料夾：{result.quarantine_dir}",
             f"Manifest：{result.manifest_path}",
             f"已隔離檔案/資料夾：{result.moved_count}",
+            f"已嘗試關閉程序：{result.closed_process_count}",
             f"已刪 HKCU 登錄值：{result.registry_deleted_count}",
             f"已清工具列近期紀錄：{'是' if result.state_cleaned else '否'}",
         ]
@@ -233,9 +252,10 @@ class SafeCleanupDialog(QDialog):
         self._item_by_id = {item.id: item for item in self._plan.items}
         self._target_path.setText(_target_path_text(self._plan.targets))
         self._identity.setText(_identity_text(self._plan))
+        self._conclusion.setText(_analysis_conclusion(self._plan))
         self._summary.setText(_summary_text(self._plan))
         self._populate_info_tree()
-        for layer in (SAFE_LAYER, REVIEW_LAYER, REGISTRY_LAYER, BLOCKED_LAYER):
+        for layer in (SAFE_LAYER, PROCESS_LAYER, REVIEW_LAYER, REGISTRY_LAYER, BLOCKED_LAYER):
             layer_items = [item for item in self._plan.items if item.layer == layer]
             if not layer_items:
                 continue
@@ -289,6 +309,9 @@ class SafeCleanupDialog(QDialog):
         relation_group.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirLinkIcon))
         self._info_tree.addTopLevelItem(relation_group)
         for title, kinds in (
+            ("疑似安裝資料夾", {"install_folder"}),
+            ("執行中 / 可能佔用", {"running_process"}),
+            ("捷徑", {"shortcut"}),
             ("同名 / 衍生檔", {"associated_file", "associated_folder"}),
             ("工具列近期紀錄", {"state_record"}),
             ("登錄檔候選", {"registry_value"}),
@@ -317,6 +340,8 @@ class SafeCleanupDialog(QDialog):
                 if item is None:
                     continue
                 enabled = item.executable
+                if item.layer == PROCESS_LAYER:
+                    enabled = enabled and self._include_process.isChecked()
                 if item.layer == REVIEW_LAYER:
                     enabled = enabled and self._include_review.isChecked()
                 if item.layer == REGISTRY_LAYER:
@@ -368,6 +393,11 @@ class SafeCleanupDialog(QDialog):
         if item.path:
             lines.append(f"路徑：{item.path}")
             lines.append(f"大小：{_format_size(item.size_bytes)}")
+        if item.process_id:
+            lines.append(f"PID：{item.process_id}")
+            lines.append(f"程序：{item.process_name}")
+            lines.append(f"程序路徑：{item.process_path or '未知'}")
+            lines.append(f"可嘗試關閉：{'是' if item.can_close else '否'}")
         if item.registry_key:
             lines.append(f"登錄檔：{item.root_name}\\{item.registry_key}")
             lines.append(f"值：{item.registry_value_name or '(Default)'}")
@@ -377,6 +407,7 @@ class SafeCleanupDialog(QDialog):
     def _layer_icon(self, layer: str) -> QIcon:
         pixmap = {
             SAFE_LAYER: QStyle.StandardPixmap.SP_DialogApplyButton,
+            PROCESS_LAYER: QStyle.StandardPixmap.SP_ComputerIcon,
             REVIEW_LAYER: QStyle.StandardPixmap.SP_MessageBoxWarning,
             REGISTRY_LAYER: QStyle.StandardPixmap.SP_FileDialogDetailedView,
             BLOCKED_LAYER: QStyle.StandardPixmap.SP_MessageBoxCritical,
@@ -384,10 +415,14 @@ class SafeCleanupDialog(QDialog):
         return self.style().standardIcon(pixmap)
 
     def _item_icon(self, item: CleanupPlanItem) -> QIcon:
+        if item.layer == PROCESS_LAYER:
+            return self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
         if item.layer == REGISTRY_LAYER:
             return self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
         if item.kind.endswith("folder"):
             return self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
+        if item.kind == "shortcut":
+            return self.style().standardIcon(QStyle.StandardPixmap.SP_FileLinkIcon)
         if item.kind == "state_record":
             return self.style().standardIcon(QStyle.StandardPixmap.SP_DriveFDIcon)
         return self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon)
@@ -418,14 +453,40 @@ def _identity_text(plan: CleanupPlan) -> str:
     return f"{len(plan.targets)} 個目標｜第一個：{target.name or target}｜{layer}"
 
 
+def _analysis_conclusion(plan: CleanupPlan) -> str:
+    if not plan.targets:
+        return "請先選擇一個檔案或資料夾。"
+    target = plan.targets[0]
+    install_count = _count_kinds(plan, {"install_folder"})
+    shortcut_count = _count_kinds(plan, {"shortcut"})
+    process_count = _count_kinds(plan, {"running_process"})
+    registry_count = _count_kinds(plan, {"registry_value"})
+    associated_count = _count_kinds(plan, {"associated_file", "associated_folder"})
+    if target.suffix.casefold() == ".exe" and (install_count or registry_count or shortcut_count):
+        return (
+            "判斷：這看起來像一個應用程式執行檔。建議先檢查官方解除安裝資訊；"
+            f"目前找到安裝資料夾 {install_count}、執行中/可能佔用 {process_count}、捷徑 {shortcut_count}、登錄檔候選 {registry_count}。"
+        )
+    if process_count:
+        return f"判斷：目前找到 {process_count} 個執行中或可能佔用目標的程序；清除前建議先關閉。"
+    if associated_count:
+        return f"判斷：找到 {associated_count} 個同名或衍生項目，適合先隔離檢查再清除。"
+    return "判斷：目前只找到目標本體；清除前仍會先移到隔離區。"
+
+
 def _summary_text(plan: CleanupPlan) -> str:
     return (
         f"安全 {plan.count_by_layer(SAFE_LAYER)}｜"
+        f"執行中 {plan.count_by_layer(PROCESS_LAYER)}｜"
         f"需確認 {plan.count_by_layer(REVIEW_LAYER)}｜"
         f"登錄檔 {plan.count_by_layer(REGISTRY_LAYER)}｜"
         f"Blocked {plan.count_by_layer(BLOCKED_LAYER)}｜"
         f"估計大小 {_format_size(plan.total_size_bytes)}"
     )
+
+
+def _count_kinds(plan: CleanupPlan, kinds: set[str]) -> int:
+    return sum(1 for item in plan.items if item.kind in kinds)
 
 
 def _layer_title(layer: str, count: int) -> str:
@@ -435,6 +496,7 @@ def _layer_title(layer: str, count: int) -> str:
 def _layer_label(layer: str) -> str:
     labels = {
         SAFE_LAYER: "安全可隔離",
+        PROCESS_LAYER: "執行中 / 可能佔用",
         REVIEW_LAYER: "需要人工確認",
         REGISTRY_LAYER: "登錄檔 HKCU 高風險",
         BLOCKED_LAYER: "系統保護 / 不執行",
@@ -445,6 +507,8 @@ def _layer_label(layer: str) -> str:
 def _item_location(item: CleanupPlanItem) -> str:
     if item.path:
         return item.path
+    if item.process_id:
+        return item.process_path or f"PID {item.process_id}"
     if item.registry_key:
         return f"{item.root_name}\\{item.registry_key}\\{item.registry_value_name or '(Default)'}"
     return ""
@@ -453,6 +517,7 @@ def _item_location(item: CleanupPlanItem) -> str:
 def _apply_row_style(row: QTreeWidgetItem, item: CleanupPlanItem) -> None:
     color = {
         SAFE_LAYER: "#155e36",
+        PROCESS_LAYER: "#1d4ed8",
         REVIEW_LAYER: "#8a4b00",
         REGISTRY_LAYER: "#7c2d12",
         BLOCKED_LAYER: "#991b1b",

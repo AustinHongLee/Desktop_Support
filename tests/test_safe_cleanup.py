@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,8 +10,10 @@ from unittest.mock import patch
 from launcher.core.context_model import LauncherContext
 from launcher.core.safe_cleanup import (
     BLOCKED_LAYER,
+    PROCESS_LAYER,
     REVIEW_LAYER,
     SAFE_LAYER,
+    CleanupPlanItem,
     apply_cleanup_plan,
     build_cleanup_plan,
 )
@@ -41,6 +44,82 @@ class SafeCleanupTests(unittest.TestCase):
 
         self.assertEqual(plan.items[0].layer, REVIEW_LAYER)
         self.assertFalse(plan.items[0].checked_default)
+
+    def test_exe_under_localappdata_programs_suggests_install_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app_root = root / "Programs" / "cursor"
+            app_root.mkdir(parents=True)
+            target = app_root / "Cursor.exe"
+            target.write_text("x", encoding="utf-8")
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(root)}):
+                with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                    plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+
+        install_item = next(item for item in plan.items if item.kind == "install_folder")
+        self.assertEqual(install_item.layer, REVIEW_LAYER)
+        self.assertEqual(Path(install_item.path), app_root)
+
+    def test_plan_includes_running_process_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "app.exe"
+            target.write_text("x", encoding="utf-8")
+            process_item = CleanupPlanItem(
+                id="process:123",
+                layer=PROCESS_LAYER,
+                kind="running_process",
+                label="app.exe (PID 123)",
+                action="嘗試關閉程序",
+                note="程序執行檔就是目前目標。",
+                checked_default=False,
+                process_id=123,
+                process_name="app.exe",
+                process_path=str(target),
+                can_close=True,
+            )
+
+            with patch("launcher.core.safe_cleanup._running_process_items", return_value=[process_item]):
+                with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                    plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+
+        item = next(entry for entry in plan.items if entry.kind == "running_process")
+        self.assertEqual(item.layer, PROCESS_LAYER)
+        self.assertTrue(item.executable)
+
+    def test_apply_can_close_selected_process_when_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "app.exe"
+            target.write_text("x", encoding="utf-8")
+            process_item = CleanupPlanItem(
+                id="process:123",
+                layer=PROCESS_LAYER,
+                kind="running_process",
+                label="app.exe (PID 123)",
+                action="嘗試關閉程序",
+                note="程序執行檔就是目前目標。",
+                checked_default=False,
+                process_id=123,
+                process_name="app.exe",
+                process_path=str(target),
+                can_close=True,
+            )
+
+            with patch("launcher.core.safe_cleanup._running_process_items", return_value=[process_item]):
+                with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                    plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+            with patch("launcher.core.safe_cleanup._close_process") as close_process:
+                result = apply_cleanup_plan(
+                    plan,
+                    {process_item.id},
+                    include_process_close=True,
+                    quarantine_root=root / "quarantine",
+                )
+
+        close_process.assert_called_once_with(123)
+        self.assertEqual(result.closed_process_count, 1)
 
     def test_missing_target_is_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
