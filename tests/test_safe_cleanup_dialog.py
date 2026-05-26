@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
+from threading import Event
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,7 +14,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
-from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, CleanupPlanItem  # noqa: E402
+from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem  # noqa: E402
 from launcher.ui.safe_cleanup_dialog import SafeCleanupDialog  # noqa: E402
 
 
@@ -29,6 +31,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
 
             with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
                 dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                _wait_for_scan(dialog)
 
         self.assertEqual(dialog.windowTitle(), "安全清除工作台")
         self.assertIn("安全 1", dialog._summary.text())
@@ -48,6 +51,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
 
             with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
                 dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                _wait_for_scan(dialog)
 
         labels = _tree_texts(dialog._info_tree)
         self.assertIn("目標身分", labels)
@@ -79,6 +83,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
             with patch.dict(os.environ, {"LOCALAPPDATA": str(root)}):
                 with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[registry_item]):
                     dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                    _wait_for_scan(dialog)
 
         self.assertIn("應用程式執行檔", dialog._conclusion.text())
         labels = _tree_texts(dialog._info_tree)
@@ -106,6 +111,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
 
             with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[registry_item]):
                 dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                _wait_for_scan(dialog)
 
         registry_child = None
         for index in range(dialog._tree.topLevelItemCount()):
@@ -143,6 +149,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
             with patch("launcher.core.safe_cleanup._running_process_items", return_value=[process_item]):
                 with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
                     dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                    _wait_for_scan(dialog)
 
         process_child = None
         for index in range(dialog._tree.topLevelItemCount()):
@@ -159,6 +166,63 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
         self.assertIn("執行中", dialog._summary.text())
 
+    def test_dialog_shows_busy_state_before_background_scan_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "slow.txt"
+            target.write_text("x", encoding="utf-8")
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+
+                self.assertTrue(dialog._scan_active)
+                self.assertFalse(dialog._apply_button.isEnabled())
+
+                _wait_for_scan(dialog)
+
+        self.assertFalse(dialog._scan_active)
+        self.assertTrue(dialog._apply_button.isEnabled())
+        self.assertIn("安全 1", dialog._summary.text())
+
+    def test_cancel_scan_ignores_late_worker_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "late.txt"
+            target.write_text("x", encoding="utf-8")
+            started = Event()
+            release = Event()
+            late_plan = CleanupPlan(
+                targets=(target,),
+                items=(
+                    CleanupPlanItem(
+                        id="target:late",
+                        layer=SAFE_LAYER,
+                        kind="file",
+                        label="late result",
+                        action="移到隔離區",
+                        note="should be ignored",
+                        checked_default=True,
+                        path=str(target),
+                    ),
+                ),
+                created_at=time.time(),
+            )
+
+            def slow_build(_context) -> CleanupPlan:  # noqa: ANN001
+                started.set()
+                release.wait(2)
+                return late_plan
+
+            with patch("launcher.ui.safe_cleanup_dialog.build_cleanup_plan", side_effect=slow_build):
+                dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                _wait_for_event(started)
+                dialog.cancel_scan()
+                release.set()
+                _wait_for_scan(dialog)
+
+        self.assertIn("分析已取消", dialog._summary.text())
+        self.assertNotIn("late result", _tree_texts(dialog._tree))
+
 def _tree_texts(tree) -> set[str]:  # noqa: ANN001
     texts: set[str] = set()
     for top_index in range(tree.topLevelItemCount()):
@@ -173,6 +237,26 @@ def _collect_item_texts(item, texts: set[str]) -> None:  # noqa: ANN001
             texts.add(text)
     for index in range(item.childCount()):
         _collect_item_texts(item.child(index), texts)
+
+
+def _wait_for_scan(dialog: SafeCleanupDialog) -> None:
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        QApplication.processEvents()
+        if not dialog._scan_active and not dialog._scan_threads:
+            return
+        time.sleep(0.01)
+    raise AssertionError("SafeCleanupDialog background scan did not finish in time")
+
+
+def _wait_for_event(event: Event) -> None:
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        QApplication.processEvents()
+        if event.is_set():
+            return
+        time.sleep(0.01)
+    raise AssertionError("background worker did not start in time")
 
 
 if __name__ == "__main__":

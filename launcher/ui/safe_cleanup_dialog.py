@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import time
+import traceback
 
-from PyQt6.QtCore import QFileInfo, Qt
+from PyQt6.QtCore import QFileInfo, QObject, Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -17,6 +19,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QStyle,
@@ -46,9 +49,13 @@ class SafeCleanupDialog(QDialog):
     def __init__(self, context: LauncherContext, parent=None) -> None:  # noqa: ANN001
         super().__init__(parent)
         self._context = context
-        self._plan: CleanupPlan = build_cleanup_plan(context)
+        self._plan: CleanupPlan = _placeholder_plan(context)
         self._item_by_id: dict[str, CleanupPlanItem] = {}
         self._icon_provider = QFileIconProvider()
+        self._scan_generation = 0
+        self._scan_active = False
+        self._scan_threads: list[QThread] = []
+        self._scan_workers: list[_CleanupPlanWorker] = []
 
         self.setWindowTitle("安全清除工作台")
         self.setMinimumSize(1120, 700)
@@ -70,15 +77,25 @@ class SafeCleanupDialog(QDialog):
         file_button.clicked.connect(self.pick_file)
         folder_button = QPushButton("選擇資料夾")
         folder_button.clicked.connect(self.pick_folder)
-        refresh_button = QPushButton("重新分析")
-        refresh_button.clicked.connect(self.refresh_plan)
+        self._refresh_button = QPushButton("重新分析")
+        self._refresh_button.clicked.connect(self.refresh_plan)
+        self._cancel_scan_button = QPushButton("取消分析")
+        self._cancel_scan_button.clicked.connect(self.cancel_scan)
+        self._cancel_scan_button.setEnabled(False)
 
         target_controls = QHBoxLayout()
         target_controls.addWidget(QLabel("分析目標"))
         target_controls.addWidget(self._target_path, 1)
         target_controls.addWidget(file_button)
         target_controls.addWidget(folder_button)
-        target_controls.addWidget(refresh_button)
+        target_controls.addWidget(self._refresh_button)
+        target_controls.addWidget(self._cancel_scan_button)
+
+        self._scan_progress = QProgressBar()
+        self._scan_progress.setRange(0, 0)
+        self._scan_progress.setTextVisible(False)
+        self._scan_progress.setFixedHeight(8)
+        self._scan_progress.hide()
 
         self._identity = QLabel()
         self._identity.setObjectName("PreferenceTitle")
@@ -116,9 +133,9 @@ class SafeCleanupDialog(QDialog):
         self._system_guard = QCheckBox("我確認沒有勾選系統保護路徑")
         self._system_guard.setToolTip("系統保護路徑仍不會執行；這個確認用來避免使用者忽略 blocked 層警告。")
 
-        apply_button = QPushButton("隔離 / 清理勾選項目")
-        apply_button.setDefault(True)
-        apply_button.clicked.connect(self.apply_selected)
+        self._apply_button = QPushButton("隔離 / 清理勾選項目")
+        self._apply_button.setDefault(True)
+        self._apply_button.clicked.connect(self.apply_selected)
         quarantine_button = QPushButton("管理隔離區")
         quarantine_button.clicked.connect(self.open_quarantine_browser)
         close_button = QPushButton("關閉")
@@ -134,7 +151,7 @@ class SafeCleanupDialog(QDialog):
         buttons = QHBoxLayout()
         buttons.addWidget(quarantine_button)
         buttons.addStretch(1)
-        buttons.addWidget(apply_button)
+        buttons.addWidget(self._apply_button)
         buttons.addWidget(close_button)
 
         info_panel = QWidget()
@@ -167,13 +184,15 @@ class SafeCleanupDialog(QDialog):
         layout.addWidget(title)
         layout.addWidget(hint)
         layout.addLayout(target_controls)
+        layout.addWidget(self._scan_progress)
         layout.addWidget(splitter, 1)
         layout.addLayout(toggles)
         layout.addWidget(self._detail)
         layout.addLayout(buttons)
 
         self.setStyleSheet(preferences_stylesheet())
-        self._populate()
+        self._show_scan_placeholder()
+        self.refresh_plan()
 
     def open_quarantine_browser(self) -> None:
         dialog = QuarantineBrowserDialog(parent=self)
@@ -196,10 +215,21 @@ class SafeCleanupDialog(QDialog):
         self.refresh_plan()
 
     def refresh_plan(self) -> None:
-        self._plan = build_cleanup_plan(self._context)
-        self._populate()
+        self._start_plan_scan()
+
+    def cancel_scan(self) -> None:
+        if not self._scan_active:
+            return
+        self._scan_generation += 1
+        self._scan_active = False
+        self._set_scan_controls(False)
+        self._summary.setText("分析已取消；可重新分析或重新選擇目標。")
+        self._detail.setPlainText("已取消等待本次分析結果。背景掃描若稍後完成，結果會被忽略。")
 
     def apply_selected(self) -> None:
+        if self._scan_active:
+            QMessageBox.information(self, "安全清除工作台", "目前仍在分析，請稍候完成後再執行。")
+            return
         selected_ids = self._selected_item_ids()
         if not selected_ids:
             QMessageBox.information(self, "安全清除工作台", "目前沒有勾選可執行項目。")
@@ -253,6 +283,75 @@ class SafeCleanupDialog(QDialog):
         self._detail.setPlainText("\n".join(lines))
         QMessageBox.information(self, "安全清除工作台", "\n".join(lines[:5]))
         self.refresh_plan()
+
+    def _start_plan_scan(self) -> None:
+        self._scan_generation += 1
+        generation = self._scan_generation
+        self._scan_active = True
+        self._plan = _placeholder_plan(self._context)
+        self._show_scan_placeholder()
+        self._set_scan_controls(True)
+
+        thread = QThread()
+        worker = _CleanupPlanWorker(self._context, generation)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_scan_finished)
+        worker.failed.connect(self._on_scan_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda thread=thread, worker=worker: self._remove_scan_thread(thread, worker))
+        self._scan_threads.append(thread)
+        self._scan_workers.append(worker)
+        thread.start()
+
+    def _on_scan_finished(self, generation: int, plan: CleanupPlan) -> None:
+        if generation != self._scan_generation:
+            return
+        self._scan_active = False
+        self._plan = plan
+        self._set_scan_controls(False)
+        self._populate()
+        self._detail.setPlainText(f"分析完成：{datetime.fromtimestamp(plan.created_at).strftime('%Y-%m-%d %H:%M:%S')}")
+
+    def _on_scan_failed(self, generation: int, message: str) -> None:
+        if generation != self._scan_generation:
+            return
+        self._scan_active = False
+        self._plan = _failed_plan(self._context, message)
+        self._set_scan_controls(False)
+        self._populate()
+        self._detail.setPlainText(message)
+
+    def _remove_scan_thread(self, thread: QThread, worker: "_CleanupPlanWorker") -> None:
+        if thread in self._scan_threads:
+            self._scan_threads.remove(thread)
+        if worker in self._scan_workers:
+            self._scan_workers.remove(worker)
+
+    def _set_scan_controls(self, active: bool) -> None:
+        self._scan_progress.setVisible(active)
+        self._cancel_scan_button.setEnabled(active)
+        self._refresh_button.setEnabled(not active)
+        self._apply_button.setEnabled(not active)
+
+    def _show_scan_placeholder(self) -> None:
+        self._tree.blockSignals(True)
+        self._tree.clear()
+        self._item_by_id = {}
+        self._target_path.setText(_target_path_text(self._plan.targets))
+        self._identity.setText("正在分析目標")
+        self._conclusion.setText("正在掃描目標、關聯檔、捷徑、執行中程序與登錄檔候選。")
+        self._summary.setText("分析中...")
+        item = QTreeWidgetItem(["分析中", "請稍候", "無動作", "背景分析進行中，完成後會自動更新清除建議。", ""])
+        item.setFirstColumnSpanned(True)
+        self._tree.addTopLevelItem(item)
+        self._tree.blockSignals(False)
+        self._populate_info_tree()
+        self._detail.setPlainText("分析中；大型資料夾或登錄檔候選較多時，視窗仍可移動與關閉。")
 
     def _populate(self) -> None:
         self._tree.blockSignals(True)
@@ -440,6 +539,52 @@ class SafeCleanupDialog(QDialog):
         if not icon.isNull():
             return icon
         return self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon if path.is_dir() else QStyle.StandardPixmap.SP_FileIcon)
+
+
+class _CleanupPlanWorker(QObject):
+    finished = pyqtSignal(int, object)
+    failed = pyqtSignal(int, str)
+
+    def __init__(self, context: LauncherContext, generation: int) -> None:
+        super().__init__()
+        self._context = context
+        self._generation = generation
+
+    def run(self) -> None:
+        try:
+            self.finished.emit(self._generation, build_cleanup_plan(self._context))
+        except Exception:
+            self.failed.emit(self._generation, traceback.format_exc())
+
+
+def _placeholder_plan(context: LauncherContext) -> CleanupPlan:
+    return CleanupPlan(targets=tuple(_context_targets(context)), items=(), created_at=time.time())
+
+
+def _failed_plan(context: LauncherContext, message: str) -> CleanupPlan:
+    return CleanupPlan(
+        targets=tuple(_context_targets(context)),
+        items=(
+            CleanupPlanItem(
+                id="scan:error",
+                layer=BLOCKED_LAYER,
+                kind="empty",
+                label="分析失敗",
+                action="無動作",
+                note=message.splitlines()[-1] if message.splitlines() else message,
+                checked_default=False,
+            ),
+        ),
+        created_at=time.time(),
+    )
+
+
+def _context_targets(context: LauncherContext) -> list[Path]:
+    if context.files:
+        return [path for path in context.files if str(path).strip()]
+    if context.folder is not None:
+        return [context.folder]
+    return []
 
 
 def _target_path_text(targets: tuple[Path, ...]) -> str:
