@@ -170,8 +170,9 @@ class SafeCleanupDialog(QDialog):
         self._include_registry = QCheckBox("允許登錄檔 HKCU 清理")
         self._include_registry.setToolTip("只允許刪除 HKCU 值；HKLM / 系統層只列出。")
         self._include_registry.stateChanged.connect(lambda _state: self._refresh_item_flags())
-        self._system_guard = QCheckBox("我確認沒有勾選系統保護路徑")
-        self._system_guard.setToolTip("系統保護路徑仍不會執行；這個確認用來避免使用者忽略 blocked 層警告。")
+        self._system_note = QLabel("系統層：需管理員深度清理")
+        self._system_note.setObjectName("PreferenceHint")
+        self._system_note.setToolTip("HKLM / Windows Installer 項目不由一般清理按鈕執行；需後續管理員模式、.reg 備份與還原紀錄。")
 
         self._apply_button = QPushButton("隔離 / 清理勾選項目")
         self._apply_button.setDefault(True)
@@ -189,7 +190,7 @@ class SafeCleanupDialog(QDialog):
         toggles.addWidget(self._include_review)
         toggles.addWidget(self._include_process)
         toggles.addWidget(self._include_registry)
-        toggles.addWidget(self._system_guard)
+        toggles.addWidget(self._system_note)
         toggles.addStretch(1)
 
         buttons = QHBoxLayout()
@@ -379,7 +380,7 @@ class SafeCleanupDialog(QDialog):
         review_count = sum(1 for item in selected if item.layer == REVIEW_LAYER)
         blocked_count = sum(1 for item in selected if item.layer == BLOCKED_LAYER)
         if blocked_count:
-            QMessageBox.warning(self, "安全清除工作台", "Blocked / 系統保護項目不可執行，請取消勾選。")
+            QMessageBox.warning(self, "安全清除工作台", "系統層項目需管理員深度清理，不由一般清理按鈕執行。")
             return
         if review_count and not self._include_review.isChecked():
             QMessageBox.warning(self, "安全清除工作台", "需確認層尚未允許執行。")
@@ -389,9 +390,6 @@ class SafeCleanupDialog(QDialog):
             return
         if registry_count and not self._include_registry.isChecked():
             QMessageBox.warning(self, "安全清除工作台", "登錄檔 HKCU 清理尚未允許執行。")
-            return
-        if registry_count and not self._system_guard.isChecked():
-            QMessageBox.warning(self, "安全清除工作台", "請先確認沒有勾選系統保護路徑。")
             return
         answer = QMessageBox.question(
             self,
