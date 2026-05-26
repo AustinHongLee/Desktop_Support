@@ -138,10 +138,11 @@ class DockWindowTests(unittest.TestCase):
             state = AppStateStore(Path(tmp) / "state.json")
             window = _make_window(state)
 
-            menu = window._build_edge_menu()
-            action_texts = [action.text() for action in menu.actions()]
+        menu = window._build_edge_menu()
+        action_texts = [action.text() for action in menu.actions()]
 
-            self.assertIn("右鍵選單管理...", action_texts)
+        self.assertIn("右鍵選單管理...", action_texts)
+        self.assertIn("安全清除工作台...", action_texts)
 
     def test_wake_request_shows_collapsed_hidden_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -165,6 +166,20 @@ class DockWindowTests(unittest.TestCase):
             window._context_inbox = _OpenIsoInbox(Path(tmp))
             opened: list[bool] = []
             window.open_iso_workbench = lambda: opened.append(True)  # type: ignore[method-assign]
+
+            window._poll_context_inbox()
+            self._app.processEvents()
+
+            self.assertEqual(window._context.source, "explorer.menu")
+            self.assertEqual(opened, [True])
+
+    def test_open_safe_cleanup_request_opens_workbench_after_context_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            window = _make_window(state)
+            window._context_inbox = _OpenSafeCleanupInbox(Path(tmp))
+            opened: list[bool] = []
+            window.open_safe_cleanup = lambda: opened.append(True)  # type: ignore[method-assign]
 
             window._poll_context_inbox()
             self._app.processEvents()
@@ -213,6 +228,21 @@ class _OpenIsoInbox:
 
     def take_request(self) -> _OpenIsoRequest:
         return _OpenIsoRequest(self._root)
+
+
+class _OpenSafeCleanupRequest:
+    command = "open_safe_cleanup"
+
+    def __init__(self, root: Path) -> None:
+        self.context = LauncherContext(folder=root, source="explorer.menu")
+
+
+class _OpenSafeCleanupInbox:
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    def take_request(self) -> _OpenSafeCleanupRequest:
+        return _OpenSafeCleanupRequest(self._root)
 
 
 if __name__ == "__main__":

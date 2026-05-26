@@ -27,6 +27,12 @@ class AppMainArgumentTests(unittest.TestCase):
         self.assertTrue(args.open_iso_workbench)
         self.assertEqual(args.set_context, ["C:/Temp"])
 
+    def test_open_safe_cleanup_argument_is_supported(self) -> None:
+        args = _parse_args(["--open-safe-cleanup", "--set-context", "C:/Temp/a.tmp"])
+
+        self.assertTrue(args.open_safe_cleanup)
+        self.assertEqual(args.set_context, ["C:/Temp/a.tmp"])
+
     def test_show_existing_wakes_running_instance(self) -> None:
         class _Guard:
             already_running = True
@@ -52,6 +58,19 @@ class AppMainArgumentTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         inbox_type.return_value.submit_open_iso_workbench.assert_called_once_with(["C:/Temp"], source="explorer.menu")
+
+    def test_open_safe_cleanup_wakes_running_instance_with_command(self) -> None:
+        class _Guard:
+            already_running = True
+
+        with patch("sys.argv", ["launcher", "--open-safe-cleanup", "--set-context", "C:/Temp/a.tmp"]):
+            with patch("launcher.app.main.SingleInstanceGuard", return_value=_Guard()):
+                with patch("launcher.app.main.ContextInbox") as inbox_type:
+                    with patch("builtins.print"):
+                        result = main()
+
+        self.assertEqual(result, 0)
+        inbox_type.return_value.submit_open_safe_cleanup.assert_called_once_with(["C:/Temp/a.tmp"], source="explorer.menu")
 
     def test_instance_mutex_is_project_scoped(self) -> None:
         mutex_name = _instance_mutex_name()

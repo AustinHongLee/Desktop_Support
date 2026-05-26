@@ -30,6 +30,7 @@ from launcher.windows.context_menu_registry import (
     default_pythonw_path,
     expected_context_menu_command,
     expected_iso_workbench_command,
+    expected_safe_cleanup_command,
     open_with_program_command,
     power_shell_here_command,
     run_script_command,
@@ -63,6 +64,13 @@ _TEMPLATES = (
         "ISO PDF 命名",
         "設定目前位置後直接叫出 ISO PDF 工作台。",
         default_target_label="資料夾空白處",
+    ),
+    _ActionTemplate(
+        "safe_cleanup",
+        "安全清除工作台",
+        "安全清除...",
+        "針對右鍵目標產生多層清除計畫，可隔離檔案並列出登錄檔候選項。",
+        default_target_label="檔案",
     ),
     _ActionTemplate(
         "powershell_here",
@@ -267,6 +275,8 @@ class ContextMenuActionDialog(QDialog):
             return expected_context_menu_command(pythonw, target.argument_token)
         if template.id == "open_iso":
             return expected_iso_workbench_command(pythonw, target.argument_token)
+        if template.id == "safe_cleanup":
+            return expected_safe_cleanup_command(pythonw, target.argument_token)
         if template.id == "powershell_here":
             return power_shell_here_command(target)
         if template.id == "open_program":
@@ -277,7 +287,7 @@ class ContextMenuActionDialog(QDialog):
 
     def _suggested_icon(self) -> str:
         template = self._selected_template()
-        if template.id in {"set_context", "open_iso"}:
+        if template.id in {"set_context", "open_iso", "safe_cleanup"}:
             return str(default_pythonw_path())
         if template.id == "powershell_here":
             return "powershell.exe"

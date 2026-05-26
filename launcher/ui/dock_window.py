@@ -35,6 +35,7 @@ from launcher.ui.job_monitor import ActionRunThread, JobMonitor
 from launcher.ui.plugin_manager_dialog import PluginManagerDialog
 from launcher.ui.preferences_dialog import PreferencesDialog
 from launcher.ui.rename_dialog import RenameDialog
+from launcher.ui.safe_cleanup_dialog import SafeCleanupDialog
 from launcher.ui.theme import Theme, dock_stylesheet, theme_by_name
 from launcher.windows.clipboard import set_clipboard_text
 from launcher.windows.explorer_context import get_open_explorer_contexts
@@ -259,6 +260,12 @@ class DockWindow(QWidget):
     def open_iso_workbench(self) -> None:
         self._open_iso_workbench("iso.pdf_page_naming", "ISO PDF 拆頁命名", "ISO")
 
+    def open_safe_cleanup(self, action_id: str = "system.safe_cleanup", title: str = "安全清除工作台", category: str = "檔案") -> None:
+        self._state_store.record_action(action_id, title, category)
+        self._state_store.record_context(self._context)
+        dialog = SafeCleanupDialog(self._context, self)
+        dialog.exec()
+
     def _open_iso_workbench(self, action_id: str, title: str, category: str) -> None:
         self._state_store.record_action(action_id, title, category)
         self._state_store.record_context(self._context)
@@ -278,6 +285,9 @@ class DockWindow(QWidget):
             return
         if action.command.type == "ui_iso_pdf_rename_dialog":
             self._open_iso_workbench(action.id, action.title, action.category)
+            return
+        if action.command.type == "ui_safe_cleanup_dialog":
+            self.open_safe_cleanup(action.id, action.title, action.category)
             return
 
         self._state_store.record_action(action.id, action.title, action.category)
@@ -572,6 +582,9 @@ class DockWindow(QWidget):
         context_menu = QAction("右鍵選單管理...", menu)
         context_menu.triggered.connect(self.open_explorer_context_menu_manager)
         menu.addAction(context_menu)
+        safe_cleanup = QAction("安全清除工作台...", menu)
+        safe_cleanup.triggered.connect(lambda: self.open_safe_cleanup())
+        menu.addAction(safe_cleanup)
         preferences = QAction("偏好設定...", menu)
         preferences.triggered.connect(self.open_preferences)
         menu.addAction(preferences)
@@ -888,6 +901,8 @@ class DockWindow(QWidget):
                 self._hide_timer.start(1800)
         if getattr(request, "command", "") == "open_iso_workbench":
             QTimer.singleShot(0, self.open_iso_workbench)
+        if getattr(request, "command", "") == "open_safe_cleanup":
+            QTimer.singleShot(0, self.open_safe_cleanup)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(dock_stylesheet(self._theme()))

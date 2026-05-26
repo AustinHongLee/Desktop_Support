@@ -14,6 +14,7 @@ from launcher.windows.context_menu_registry import (
     entry_detail_lines,
     expected_context_menu_command,
     expected_iso_workbench_command,
+    expected_safe_cleanup_command,
     is_launcher_managed_entry,
     open_with_program_command,
     power_shell_here_command,
@@ -35,6 +36,12 @@ class ContextMenuRegistryTests(unittest.TestCase):
 
         self.assertIn("--open-iso-workbench", command)
         self.assertIn('--set-context "%V"', command)
+
+    def test_expected_safe_cleanup_command_opens_workbench_with_context(self) -> None:
+        command = expected_safe_cleanup_command(Path("C:/Tool/.venv/Scripts/pythonw.exe"), "%1")
+
+        self.assertIn("--open-safe-cleanup", command)
+        self.assertIn('--set-context "%1"', command)
 
     def test_targets_cover_common_explorer_contexts(self) -> None:
         labels = {target.label for target in CONTEXT_MENU_TARGETS}

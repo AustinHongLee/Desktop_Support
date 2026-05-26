@@ -89,7 +89,20 @@
         "module": "launcher.plugins.system_tools.system_actions",
         "entry": "write_file_list"
       }
+    },
+    {
+      "id": "system.safe_cleanup",
+      "title": "安全清除工作台",
+      "category": "檔案",
+      "description": "針對目前檔案或資料夾產生多層清除計畫，先隔離、可檢查，再處理登錄檔候選項。",
+      "icon": "shield",
+      "risk": "high",
+      "accepts": {
+        "requires_folder": true
+      },
+      "command": {
+        "type": "ui_safe_cleanup_dialog"
+      }
     }
   ]
 }
-

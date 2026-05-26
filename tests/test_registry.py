@@ -22,6 +22,7 @@ class RegistryTests(unittest.TestCase):
         self.assertNotIn("copy.folder_file_base_names", registry.actions)
         self.assertIn("system.open_powershell", registry.actions)
         self.assertIn("system.write_file_list", registry.actions)
+        self.assertIn("system.safe_cleanup", registry.actions)
         self.assertIn("rename.ui_table", registry.actions)
         self.assertIn("rename.selected_from_clipboard", registry.actions)
         self.assertIn("pdf.split_pages", registry.actions)

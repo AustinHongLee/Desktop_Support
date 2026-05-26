@@ -35,6 +35,16 @@ class ContextMenuActionDialogTests(unittest.TestCase):
         self.assertEqual(request.label, "ISO PDF 命名")
         self.assertIn("--open-iso-workbench", request.command)
 
+    def test_safe_cleanup_template_builds_direct_workbench_request(self) -> None:
+        dialog = ContextMenuActionDialog()
+        dialog._template_combo.setCurrentIndex(2)
+
+        request = dialog.build_request()
+
+        self.assertEqual(request.label, "安全清除...")
+        self.assertIn("--open-safe-cleanup", request.command)
+        self.assertEqual(request.target.label, "檔案")
+
     def test_create_entry_uses_registry_request_and_accepts(self) -> None:
         dialog = ContextMenuActionDialog()
         entry = ContextMenuEntry(
