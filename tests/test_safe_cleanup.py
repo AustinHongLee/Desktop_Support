@@ -169,8 +169,10 @@ class SafeCleanupTests(unittest.TestCase):
             user_profile = root / "User"
             false_positive = local / "Temporary Internet Files"
             true_positive = roaming / "Trimble" / "Tekla Structures 2026"
+            date_false_positive = user_profile / "Documents" / "Codex" / "2026-05-07"
             false_positive.mkdir(parents=True)
             true_positive.mkdir(parents=True)
+            date_false_positive.mkdir(parents=True)
             target = Path("C:/Program Files/Tekla Structures/2026.0/bin/TeklaStructures.exe")
             uninstaller = OfficialUninstaller(
                 id="uninstaller:HKLM:Tekla",
@@ -198,6 +200,36 @@ class SafeCleanupTests(unittest.TestCase):
         footprints = {Path(item.path) for item in plan.items if item.kind == "app_footprint_folder"}
         self.assertIn(true_positive, footprints)
         self.assertNotIn(false_positive, footprints)
+        self.assertNotIn(date_false_positive, footprints)
+
+    def test_product_name_can_scan_residue_after_main_program_is_gone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "LocalAppData"
+            roaming = root / "RoamingAppData"
+            program_data = root / "ProgramData"
+            user_profile = root / "User"
+            residue = roaming / "Trimble" / "Tekla Structures 2026"
+            residue.mkdir(parents=True)
+            (residue / "settings.json").write_text("{}", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LOCALAPPDATA": str(local),
+                    "APPDATA": str(roaming),
+                    "ProgramData": str(program_data),
+                    "USERPROFILE": str(user_profile),
+                },
+            ):
+                with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                    plan = build_cleanup_plan(LauncherContext.from_paths([Path("Tekla Structures 2026")]), state_path=root / "state.json")
+
+        target_item = next(item for item in plan.items if item.id.startswith("target:"))
+        footprints = {Path(item.path): item for item in plan.items if item.kind == "app_footprint_folder"}
+        self.assertEqual(target_item.layer, BLOCKED_LAYER)
+        self.assertIn("目標本體不存在", target_item.note)
+        self.assertIn(residue, footprints)
 
     def test_installer_registry_residue_matches_value_names(self) -> None:
         target = Path("C:/Program Files/Tekla Structures/2026.0/bin/TeklaStructures.exe")

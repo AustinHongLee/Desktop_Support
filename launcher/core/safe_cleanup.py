@@ -551,7 +551,7 @@ def _target_item(path: Path, cancel_token: ScanCancelToken | None = None) -> Cle
     is_dir = path.is_dir()
     if not exists:
         layer = BLOCKED_LAYER
-        note = "目標不存在，不能清除。"
+        note = "目標本體不存在；這通常是已被其他解除安裝器移除。工作台仍會用舊路徑/名稱搜尋殘留，但本項不可執行。"
     elif protected:
         layer = BLOCKED_LAYER
         note = f"位於系統保護範圍：{reason}。第一版只列出，不執行。"
@@ -998,10 +998,11 @@ def _path_identity_candidates(value: str, source: str, *, strong: bool) -> list[
             parts = parts[index + 2 :]
             break
     candidates: list[tuple[str, str, bool]] = []
-    for part in parts[-5:]:
+    tail = parts[-5:]
+    for part in tail:
         candidates.append((part, source, strong))
-    for first, second in zip(parts[-5:], parts[-4:]):
-        candidates.append((f"{first} {second}", source, strong))
+    for index in range(len(tail) - 1):
+        candidates.append((f"{tail[index]} {tail[index + 1]}", source, strong))
     return candidates
 
 
@@ -1061,10 +1062,10 @@ def _app_footprint_score(path: Path, identities: tuple[_AppIdentity, ...]) -> tu
         else:
             hits = [token for token in identity.tokens if token in path_tokens]
             if len(identity.tokens) == 1:
-                if identity.tokens[0] in _path_name_tokens(path):
+                if not _is_version_token(identity.tokens[0]) and identity.tokens[0] in _path_name_tokens(path):
                     score = 4
                     matched = hits
-            elif len(hits) >= 2:
+            elif len(hits) >= 2 and any(not _is_version_token(token) for token in hits):
                 score = min(5, 2 + len(hits))
                 matched = hits
         if score > best_score:
@@ -1084,8 +1085,14 @@ def _path_name_tokens(path: Path) -> set[str]:
 
 def _app_tokens(value: str) -> tuple[str, ...]:
     text = _normalized_app_text(value)
-    tokens = tuple(token for token in text.split() if _is_meaningful_app_token(token))
-    return tokens
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in text.split():
+        if not _is_meaningful_app_token(token) or token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tuple(tokens)
 
 
 def _normalized_app_text(value: str) -> str:
@@ -1103,6 +1110,10 @@ def _is_meaningful_app_token(token: str) -> bool:
     if token.isdigit():
         return len(token) >= 4
     return len(token) >= 3
+
+
+def _is_version_token(token: str) -> bool:
+    return token.isdigit()
 
 
 def _app_phrase(tokens: tuple[str, ...]) -> str:
@@ -1354,13 +1365,14 @@ def _registry_needles(targets: list[Path]) -> tuple[str, ...]:
             values.add(path.name.casefold())
         if path.stem and len(path.stem) >= 3:
             values.add(path.stem.casefold())
-        for candidate in (path, *path.parents):
-            candidate_text = str(candidate.resolve(strict=False)).casefold()
-            if candidate_text and len(_app_tokens(candidate_text)) >= 2:
-                values.add(candidate_text)
-        install_folder = _probable_install_folder(path)
-        if install_folder is not None:
-            values.add(str(install_folder.resolve(strict=False)).casefold())
+        if path.is_absolute():
+            for candidate in (path, *path.parents):
+                candidate_text = str(candidate.resolve(strict=False)).casefold()
+                if candidate_text and len(_app_tokens(candidate_text)) >= 2:
+                    values.add(candidate_text)
+            install_folder = _probable_install_folder(path)
+            if install_folder is not None:
+                values.add(str(install_folder.resolve(strict=False)).casefold())
     return tuple(sorted(values, key=len, reverse=True))
 
 

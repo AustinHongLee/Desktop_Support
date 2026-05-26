@@ -193,6 +193,45 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
         self.assertIn("執行中", dialog._summary.text())
 
+    def test_dialog_accepts_typed_residue_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            initial = root / "initial.txt"
+            initial.write_text("x", encoding="utf-8")
+            typed_target = Path("Tekla Structures 2026")
+            captured: list[LauncherContext] = []
+
+            dialog = SafeCleanupDialog(LauncherContext.from_paths([initial]))
+            _wait_for_scan(dialog)
+
+            def fake_build(context, *, cancel_token=None, progress=None) -> CleanupPlan:  # noqa: ANN001
+                captured.append(context)
+                if progress is not None:
+                    progress("目標身分", 1, 1)
+                return CleanupPlan(
+                    targets=(typed_target,),
+                    items=(
+                        CleanupPlanItem(
+                            id="target:typed",
+                            layer=SAFE_LAYER,
+                            kind="file",
+                            label="typed",
+                            action="無動作",
+                            note="typed",
+                            checked_default=False,
+                        ),
+                    ),
+                    created_at=time.time(),
+                )
+
+            with patch("launcher.ui.safe_cleanup_dialog.build_cleanup_plan", side_effect=fake_build):
+                dialog._target_path.setText(str(typed_target))
+                dialog.analyze_typed_target()
+                _wait_for_scan(dialog)
+
+        self.assertEqual(captured[-1].files, (typed_target,))
+        self.assertEqual(dialog._target_path.text(), str(typed_target))
+
     def test_dialog_shows_busy_state_before_background_scan_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

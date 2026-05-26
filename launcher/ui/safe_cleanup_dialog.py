@@ -73,20 +73,22 @@ class SafeCleanupDialog(QDialog):
 
         title = QLabel("安全清除工作台")
         title.setObjectName("PreferenceTitle")
-        hint = QLabel("先選一個檔案或資料夾，工作台會顯示目標身分、同名衍生項、工具紀錄與登錄檔候選；確認後才把勾選項目移到隔離區。")
+        hint = QLabel("先選一個檔案/資料夾，或直接輸入已被刪除的舊路徑/產品名稱；工作台會顯示目標身分、殘留足跡、工具紀錄與登錄檔候選。")
         hint.setObjectName("PreferenceHint")
         hint.setWordWrap(True)
 
         self._summary = QLabel()
         self._summary.setObjectName("PreferenceHint")
         self._target_path = QLineEdit()
-        self._target_path.setReadOnly(True)
-        self._target_path.setPlaceholderText("尚未選擇目標")
+        self._target_path.setPlaceholderText("可輸入舊 exe 路徑、資料夾路徑或產品名稱，例如 Tekla Structures 2026")
+        self._target_path.returnPressed.connect(self.analyze_typed_target)
 
         file_button = QPushButton("選擇檔案")
         file_button.clicked.connect(self.pick_file)
         folder_button = QPushButton("選擇資料夾")
         folder_button.clicked.connect(self.pick_folder)
+        typed_button = QPushButton("分析輸入")
+        typed_button.clicked.connect(self.analyze_typed_target)
         self._refresh_button = QPushButton("重新分析")
         self._refresh_button.clicked.connect(self.refresh_plan)
         self._cancel_scan_button = QPushButton("取消分析")
@@ -98,6 +100,7 @@ class SafeCleanupDialog(QDialog):
         target_controls.addWidget(self._target_path, 1)
         target_controls.addWidget(file_button)
         target_controls.addWidget(folder_button)
+        target_controls.addWidget(typed_button)
         target_controls.addWidget(self._refresh_button)
         target_controls.addWidget(self._cancel_scan_button)
 
@@ -290,11 +293,30 @@ class SafeCleanupDialog(QDialog):
         self._context = LauncherContext(folder=Path(folder), source="picker.safe_cleanup")
         self.refresh_plan()
 
+    def analyze_typed_target(self) -> None:
+        if self._apply_active:
+            QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，完成後再切換目標。")
+            return
+        if self._sync_context_from_target_input(show_empty_warning=True):
+            self.refresh_plan()
+
     def refresh_plan(self) -> None:
         if self._apply_active:
             QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，完成後再重新分析。")
             return
+        self._sync_context_from_target_input(show_empty_warning=False)
         self._start_plan_scan()
+
+    def _sync_context_from_target_input(self, *, show_empty_warning: bool) -> bool:
+        text = self._target_path.text().strip()
+        if not text:
+            if show_empty_warning:
+                QMessageBox.information(self, "安全清除工作台", "請輸入舊路徑、資料夾路徑或產品名稱。")
+            return False
+        current_text = _target_path_text(tuple(_context_targets(self._context)))
+        if text != current_text:
+            self._context = LauncherContext.from_paths([Path(text)], source="typed.safe_cleanup")
+        return True
 
     def cancel_scan(self) -> None:
         if not self._scan_active:
@@ -850,8 +872,9 @@ def _identity_text(plan: CleanupPlan) -> str:
     target = plan.targets[0]
     target_item = next((item for item in plan.items if item.id.startswith("target:")), None)
     layer = _layer_label(target_item.layer) if target_item else "未知"
+    retired = "｜殘渣掃描" if len(plan.targets) == 1 and not target.exists() else ""
     if len(plan.targets) == 1:
-        return f"{target.name or target}｜{_path_type_text(target)}｜{layer}"
+        return f"{target.name or target}｜{_path_type_text(target)}｜{layer}{retired}"
     return f"{len(plan.targets)} 個目標｜第一個：{target.name or target}｜{layer}"
 
 
@@ -866,6 +889,12 @@ def _analysis_conclusion(plan: CleanupPlan) -> str:
     footprint_count = _count_kinds(plan, {"app_footprint_file", "app_footprint_folder"})
     associated_count = _count_kinds(plan, {"associated_file", "associated_folder"})
     uninstall_count = len(plan.official_uninstallers)
+    if not target.exists() and (footprint_count or registry_count or shortcut_count or uninstall_count):
+        return (
+            "判斷：目標本體不存在，已進入退役後殘渣掃描。"
+            "這通常發生在主程式被其他解除安裝器硬刪後；"
+            f"目前找到官方解除安裝 {uninstall_count}、應用程式足跡 {footprint_count}、捷徑 {shortcut_count}、登錄檔/Installer 殘留 {registry_count}。"
+        )
     if target.suffix.casefold() == ".exe" and (uninstall_count or install_count or footprint_count or registry_count or shortcut_count):
         return (
             "判斷：這看起來像一個應用程式執行檔。建議先跑官方解除安裝，再清殘留；"
