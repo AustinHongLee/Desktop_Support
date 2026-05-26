@@ -641,7 +641,7 @@ class SafeCleanupDialog(QDialog):
         safety_group.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning))
         self._info_tree.addTopLevelItem(safety_group)
         safety_group.addChild(_info_item("預設策略", "檔案先移到隔離區；不直接永久刪除"))
-        safety_group.addChild(_info_item("系統唯讀證據", f"{self._plan.count_by_layer(BLOCKED_LAYER)} 項只列出，不執行"))
+        safety_group.addChild(_info_item("系統層待確認", f"{self._plan.count_by_layer(BLOCKED_LAYER)} 項需管理員模式，不在一般模式執行"))
         safety_group.addChild(_info_item("需人工確認", f"{self._plan.count_by_layer(REVIEW_LAYER)} 項"))
 
         relation_group = QTreeWidgetItem(["關聯資訊", ""])
@@ -696,11 +696,11 @@ class SafeCleanupDialog(QDialog):
                     enabled = enabled and self._include_review.isChecked()
                 if item.layer == REGISTRY_LAYER:
                     enabled = enabled and self._include_registry.isChecked()
-                flags = child.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                flags = child.flags() | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                 if enabled:
-                    flags |= Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                    flags |= Qt.ItemFlag.ItemIsUserCheckable
                 else:
-                    flags &= ~Qt.ItemFlag.ItemIsEnabled
+                    flags &= ~Qt.ItemFlag.ItemIsUserCheckable
                     child.setCheckState(0, Qt.CheckState.Unchecked)
                 child.setFlags(flags)
         self._tree.blockSignals(False)
@@ -752,6 +752,10 @@ class SafeCleanupDialog(QDialog):
             lines.append(f"登錄檔：{item.root_name}\\{item.registry_key}")
             lines.append(f"值：{item.registry_value_name or '(Default)'}")
             lines.append(f"內容：{item.registry_value_data}")
+            if item.layer == BLOCKED_LAYER:
+                lines.append("")
+                lines.append("重裝影響：可能。HKLM / Windows Installer 殘留可能讓安裝程式誤判已安裝、修復/移除入口異常，或沿用舊路徑。")
+                lines.append("處理方式：一般模式不直接刪；深度清理需管理員權限，先匯出 .reg 備份，再刪除已確認屬於目標的值或 key。")
         self._detail.setPlainText("\n".join(lines))
 
     def _layer_icon(self, layer: str) -> QIcon:
@@ -953,7 +957,7 @@ def _summary_text(plan: CleanupPlan) -> str:
         f"足跡 {_count_kinds(plan, {'app_footprint_file', 'app_footprint_folder'})}｜"
         f"登錄檔 {_count_kinds(plan, {'registry_value', 'installer_registry_value'})}｜"
         f"官方解除安裝 {len(plan.official_uninstallers)}｜"
-        f"唯讀證據 {plan.count_by_layer(BLOCKED_LAYER)}｜"
+        f"系統待確認 {plan.count_by_layer(BLOCKED_LAYER)}｜"
         f"估計大小 {_format_size(plan.total_size_bytes)}"
     )
 
@@ -972,7 +976,7 @@ def _layer_label(layer: str) -> str:
         PROCESS_LAYER: "執行中 / 可能佔用",
         REVIEW_LAYER: "需要人工確認",
         REGISTRY_LAYER: "登錄檔 HKCU 高風險",
-        BLOCKED_LAYER: "系統唯讀證據 / 不執行",
+        BLOCKED_LAYER: "系統層待管理員確認",
     }
     return labels.get(layer, layer)
 

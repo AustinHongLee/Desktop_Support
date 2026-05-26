@@ -1277,11 +1277,11 @@ def _scan_registry_base(
                     layer=layer,
                     kind="registry_value",
                     label=f"{root_name}\\{key_label}\\{value_label}",
-                    action="刪除登錄值" if root_name == "HKCU" else "唯讀列出",
+                    action="刪除登錄值" if root_name == "HKCU" else "需管理員清理",
                     note=(
                         "HKCU 登錄值含有目標路徑/名稱；需勾選高風險確認才會刪除。"
                         if root_name == "HKCU"
-                        else "HKLM 是系統層登錄檔證據；工具只把它當線索顯示，不會在一般模式刪除。"
+                        else "HKLM 是系統層登錄檔；一般模式只列出。若確認屬於目標且影響重新安裝，需以管理員模式匯出備份後清理。"
                     ),
                     checked_default=False,
                     root_name=root_name,
@@ -1354,10 +1354,10 @@ def _scan_installer_registry_base(
                 layer=BLOCKED_LAYER,
                 kind="installer_registry_value",
                 label=f"{root_name}\\Installer\\{key_label}\\{_compact_label(value_label)}",
-                action="唯讀列出",
+                action="需管理員清理",
                 note=(
-                    "Windows Installer / HKLM 唯讀證據：登錄值名稱或內容含有目標安裝路徑。"
-                    f"命中：{matched}。這類系統層項目只用來判斷殘留，不會自動刪除。"
+                    "Windows Installer / HKLM 深度殘留候選：登錄值名稱或內容含有目標安裝路徑。"
+                    f"命中：{matched}。這類項目可能影響重裝、修復或移除判斷；需管理員模式與備份後才可清理。"
                 ),
                 checked_default=False,
                 root_name=root_name,

@@ -89,8 +89,8 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 layer=BLOCKED_LAYER,
                 kind="registry_value",
                 label="HKLM\\Demo\\InstallDate",
-                action="唯讀列出",
-                note="HKLM 是系統層登錄檔證據；工具只把它當線索顯示，不會在一般模式刪除。",
+                action="需管理員清理",
+                note="HKLM 是系統層登錄檔；一般模式只列出。若確認屬於目標且影響重新安裝，需以管理員模式匯出備份後清理。",
                 checked_default=False,
                 root_name="HKLM",
                 registry_key="Software\\Demo",
@@ -105,11 +105,16 @@ class SafeCleanupDialogTests(unittest.TestCase):
 
         group = dialog._tree.topLevelItem(0)
         child = group.child(0)
-        self.assertIn("系統唯讀證據", group.text(0))
+        self.assertIn("系統層待管理員確認", group.text(0))
         self.assertFalse(group.isExpanded())
-        self.assertEqual(child.text(2), "唯讀列出")
-        self.assertFalse(bool(child.flags() & Qt.ItemFlag.ItemIsEnabled))
-        self.assertIn("唯讀證據 1", dialog._summary.text())
+        self.assertEqual(child.text(2), "需管理員清理")
+        self.assertTrue(bool(child.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertTrue(bool(child.flags() & Qt.ItemFlag.ItemIsSelectable))
+        self.assertFalse(bool(child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
+        self.assertIn("系統待確認 1", dialog._summary.text())
+        dialog._tree.setCurrentItem(child)
+        dialog._update_detail()
+        self.assertIn("重裝影響：可能", dialog._detail.toPlainText())
 
     def test_dialog_conclusion_identifies_app_executable_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -200,11 +205,13 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 break
         self.assertIsNotNone(registry_child)
         assert registry_child is not None
-        self.assertFalse(bool(registry_child.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertFalse(bool(registry_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
 
         dialog._include_registry.setChecked(True)
 
         self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
 
     def test_process_items_are_disabled_until_close_toggle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -238,11 +245,13 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 break
         self.assertIsNotNone(process_child)
         assert process_child is not None
-        self.assertFalse(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertFalse(bool(process_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
 
         dialog._include_process.setChecked(True)
 
         self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
+        self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
         self.assertIn("執行中", dialog._summary.text())
 
     def test_dialog_accepts_typed_residue_target(self) -> None:
