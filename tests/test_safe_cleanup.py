@@ -8,6 +8,7 @@ import hashlib
 from pathlib import Path
 from unittest.mock import patch
 
+from launcher.core import safe_cleanup as safe_cleanup_module
 from launcher.core.context_model import LauncherContext
 from launcher.core.safe_cleanup import (
     BLOCKED_LAYER,
@@ -71,6 +72,23 @@ class SafeCleanupTests(unittest.TestCase):
 
         install_item = next(item for item in plan.items if item.kind == "install_folder")
         self.assertEqual(install_item.layer, REVIEW_LAYER)
+        self.assertEqual(Path(install_item.path), app_root)
+
+    def test_exe_under_program_files_suggests_product_root_as_blocked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            program_files = root / "Program Files"
+            app_root = program_files / "Tekla Structures"
+            target = app_root / "2026.0" / "bin" / "TeklaStructures.exe"
+            target.parent.mkdir(parents=True)
+            target.write_text("x", encoding="utf-8")
+
+            with patch.dict(os.environ, {"ProgramFiles": str(program_files)}):
+                with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                    plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+
+        install_item = next(item for item in plan.items if item.kind == "install_folder")
+        self.assertEqual(install_item.layer, BLOCKED_LAYER)
         self.assertEqual(Path(install_item.path), app_root)
 
     def test_plan_includes_official_uninstaller_candidates(self) -> None:
@@ -141,6 +159,71 @@ class SafeCleanupTests(unittest.TestCase):
         self.assertEqual(footprints[roaming_footprint].layer, REVIEW_LAYER)
         self.assertEqual(footprints[program_data_footprint].layer, BLOCKED_LAYER)
         self.assertFalse(footprints[roaming_footprint].checked_default)
+
+    def test_app_footprints_ignore_generic_program_files_terms(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "LocalAppData"
+            roaming = root / "RoamingAppData"
+            program_data = root / "ProgramData"
+            user_profile = root / "User"
+            false_positive = local / "Temporary Internet Files"
+            true_positive = roaming / "Trimble" / "Tekla Structures 2026"
+            false_positive.mkdir(parents=True)
+            true_positive.mkdir(parents=True)
+            target = Path("C:/Program Files/Tekla Structures/2026.0/bin/TeklaStructures.exe")
+            uninstaller = OfficialUninstaller(
+                id="uninstaller:HKLM:Tekla",
+                root_name="HKLM",
+                registry_key="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Tekla Structures 2026",
+                display_name="Tekla Structures 2026",
+                uninstall_command='"C:\\Program Files\\Tekla\\uninstall.exe"',
+                install_location="C:\\Program Files\\Tekla Structures\\2026.0",
+                confidence=0.95,
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LOCALAPPDATA": str(local),
+                    "APPDATA": str(roaming),
+                    "ProgramData": str(program_data),
+                    "USERPROFILE": str(user_profile),
+                },
+            ):
+                with patch("launcher.core.safe_cleanup._official_uninstallers", return_value=[uninstaller]):
+                    with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                        plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+
+        footprints = {Path(item.path) for item in plan.items if item.kind == "app_footprint_folder"}
+        self.assertIn(true_positive, footprints)
+        self.assertNotIn(false_positive, footprints)
+
+    def test_installer_registry_residue_matches_value_names(self) -> None:
+        target = Path("C:/Program Files/Tekla Structures/2026.0/bin/TeklaStructures.exe")
+        needles = safe_cleanup_module._registry_needles([target])
+        values = [
+            (
+                r"Software\Microsoft\Windows\CurrentVersion\Installer\Folders",
+                r"C:\Program Files\Tekla Structures\2026.0\bin\\",
+                "",
+            )
+        ]
+
+        with patch("launcher.core.safe_cleanup._iter_registry_values", return_value=values):
+            items = safe_cleanup_module._scan_installer_registry_base(
+                "HKLM",
+                object(),
+                r"Software\Microsoft\Windows\CurrentVersion\Installer\Folders",
+                needles,
+                max_depth=1,
+                limit=10,
+            )
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].kind, "installer_registry_value")
+        self.assertEqual(items[0].layer, BLOCKED_LAYER)
+        self.assertIn("Windows Installer", items[0].note)
 
     def test_run_official_uninstaller_prefers_quiet_command(self) -> None:
         uninstaller = OfficialUninstaller(

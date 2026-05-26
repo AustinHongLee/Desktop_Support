@@ -65,9 +65,18 @@ _APP_NOISY_TOKENS = {
     "application",
     "appdata",
     "bin",
+    "cache",
+    "cached",
+    "center",
     "client",
+    "common",
+    "content",
     "data",
     "documents",
+    "file",
+    "files",
+    "folder",
+    "folders",
     "helper",
     "install",
     "installer",
@@ -76,6 +85,10 @@ _APP_NOISY_TOKENS = {
     "program",
     "programdata",
     "programs",
+    "profile",
+    "profiles",
+    "project",
+    "projects",
     "roaming",
     "roamingappdata",
     "setup",
@@ -767,9 +780,10 @@ def _registry_reference_items(targets: list[Path], cancel_token: ScanCancelToken
         _check_cancelled(cancel_token)
         for base in bases:
             _check_cancelled(cancel_token)
-            items.extend(_scan_registry_base(root_name, root_handle, base, needles, limit=max(0, 40 - len(items)), cancel_token=cancel_token))
-            if len(items) >= 40:
+            items.extend(_scan_registry_base(root_name, root_handle, base, needles, limit=max(0, 50 - len(items)), cancel_token=cancel_token))
+            if len(items) >= 50:
                 return items
+    items.extend(_installer_registry_residue_items(targets, needles, limit=max(0, 80 - len(items)), cancel_token=cancel_token))
     return items
 
 
@@ -1171,14 +1185,91 @@ def _scan_registry_base(
     return matches
 
 
+def _installer_registry_residue_items(
+    targets: list[Path],
+    needles: tuple[str, ...],
+    *,
+    limit: int,
+    cancel_token: ScanCancelToken | None = None,
+) -> list[CleanupPlanItem]:
+    if limit <= 0 or winreg is None or sys.platform != "win32" or not _should_scan_uninstallers(targets):
+        return []
+    matches: list[CleanupPlanItem] = []
+    bases = (
+        (r"Software\Microsoft\Windows\CurrentVersion\Installer\Folders", 1),
+        (r"Software\Microsoft\Windows\CurrentVersion\Installer\UserData", 8),
+    )
+    for base, depth in bases:
+        _check_cancelled(cancel_token)
+        matches.extend(
+            _scan_installer_registry_base(
+                "HKLM",
+                winreg.HKEY_LOCAL_MACHINE,
+                base,
+                needles,
+                max_depth=depth,
+                limit=max(0, limit - len(matches)),
+                cancel_token=cancel_token,
+            )
+        )
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def _scan_installer_registry_base(
+    root_name: str,
+    root_handle: object,
+    base: str,
+    needles: tuple[str, ...],
+    *,
+    max_depth: int,
+    limit: int,
+    cancel_token: ScanCancelToken | None = None,
+) -> list[CleanupPlanItem]:
+    if limit <= 0:
+        return []
+    matches: list[CleanupPlanItem] = []
+    for key_path, value_name, value_data in _iter_registry_values(root_handle, base, max_depth=max_depth, cancel_token=cancel_token):
+        _check_cancelled(cancel_token)
+        haystack = "\n".join((key_path, value_name, value_data)).casefold()
+        matched = next((needle for needle in needles if needle and needle in haystack), "")
+        if not matched:
+            continue
+        value_label = "(Default)" if value_name == "" else value_name
+        key_label = key_path.rsplit("\\", 1)[-1]
+        matches.append(
+            CleanupPlanItem(
+                id=f"installer_registry:{root_name}:{key_path}:{value_name}",
+                layer=BLOCKED_LAYER,
+                kind="installer_registry_value",
+                label=f"{root_name}\\Installer\\{key_label}\\{_compact_label(value_label)}",
+                action="只列出",
+                note=(
+                    "Windows Installer 殘留候選：登錄值名稱/內容含有目標安裝路徑。"
+                    f"命中：{matched}。HKLM 系統層只列出，不自動刪除。"
+                ),
+                checked_default=False,
+                root_name=root_name,
+                registry_key=key_path,
+                registry_value_name=value_name,
+                registry_value_data=value_data,
+            )
+        )
+        if len(matches) >= limit:
+            break
+    return matches
+
+
 def _iter_registry_values(root_handle: object, base: str, *, max_depth: int, cancel_token: ScanCancelToken | None = None):
     _check_cancelled(cancel_token)
     try:
         with winreg.OpenKey(root_handle, base, 0, winreg.KEY_READ | _registry_view_flag()) as key:
             for value_name, value_data in _enum_values(key):
                 _check_cancelled(cancel_token)
-                if isinstance(value_data, str) and value_data:
-                    yield base, value_name, value_data
+                value_text = value_data if isinstance(value_data, str) else ""
+                if value_name or value_text:
+                    yield base, value_name, value_text
             if max_depth <= 0:
                 return
             for subkey_name in _enum_subkeys(key):
@@ -1261,6 +1352,15 @@ def _registry_needles(targets: list[Path]) -> tuple[str, ...]:
             values.add(text)
         if path.name:
             values.add(path.name.casefold())
+        if path.stem and len(path.stem) >= 3:
+            values.add(path.stem.casefold())
+        for candidate in (path, *path.parents):
+            candidate_text = str(candidate.resolve(strict=False)).casefold()
+            if candidate_text and len(_app_tokens(candidate_text)) >= 2:
+                values.add(candidate_text)
+        install_folder = _probable_install_folder(path)
+        if install_folder is not None:
+            values.add(str(install_folder.resolve(strict=False)).casefold())
     return tuple(sorted(values, key=len, reverse=True))
 
 
@@ -1273,6 +1373,15 @@ def _probable_install_folder(target: Path) -> Path | None:
         except ValueError:
             return parent
         return (local_app_data / "Programs" / relative.parts[0]) if relative.parts else parent
+    for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
+        program_files = _env_path(env_name)
+        if program_files and _is_relative_to(target.resolve(strict=False), program_files):
+            try:
+                relative = target.resolve(strict=False).relative_to(program_files)
+            except ValueError:
+                continue
+            if relative.parts and relative.parts[0].casefold() not in {"common files", "windowsapps"}:
+                return program_files / relative.parts[0]
     if parent.name.casefold() in {target.stem.casefold(), "app", "bin"}:
         return parent
     return None
@@ -1690,6 +1799,13 @@ def _safe_quarantine_name(path: Path) -> str:
 def _sanitize_filename(value: str) -> str:
     cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value).strip(" .")
     return cleaned[:180] or "item"
+
+
+def _compact_label(value: str, *, limit: int = 96) -> str:
+    cleaned = re.sub(r"\s+", " ", str(value)).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[: limit - 1]}..."
 
 
 def _safe_size(path: Path, cancel_token: ScanCancelToken | None = None) -> int:

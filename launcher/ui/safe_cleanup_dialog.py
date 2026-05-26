@@ -606,6 +606,7 @@ class SafeCleanupDialog(QDialog):
             ("捷徑", {"shortcut"}),
             ("同名 / 衍生檔", {"associated_file", "associated_folder"}),
             ("工具列近期紀錄", {"state_record"}),
+            ("Windows Installer 殘留", {"installer_registry_value"}),
             ("登錄檔候選", {"registry_value"}),
         ):
             matches = [item for item in self._plan.items if item.kind in kinds]
@@ -709,7 +710,7 @@ class SafeCleanupDialog(QDialog):
     def _item_icon(self, item: CleanupPlanItem) -> QIcon:
         if item.layer == PROCESS_LAYER:
             return self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
-        if item.layer == REGISTRY_LAYER:
+        if item.layer == REGISTRY_LAYER or item.kind in {"registry_value", "installer_registry_value"}:
             return self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView)
         if item.kind.endswith("folder"):
             return self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
@@ -861,7 +862,7 @@ def _analysis_conclusion(plan: CleanupPlan) -> str:
     install_count = _count_kinds(plan, {"install_folder"})
     shortcut_count = _count_kinds(plan, {"shortcut"})
     process_count = _count_kinds(plan, {"running_process"})
-    registry_count = _count_kinds(plan, {"registry_value"})
+    registry_count = _count_kinds(plan, {"registry_value", "installer_registry_value"})
     footprint_count = _count_kinds(plan, {"app_footprint_file", "app_footprint_folder"})
     associated_count = _count_kinds(plan, {"associated_file", "associated_folder"})
     uninstall_count = len(plan.official_uninstallers)
@@ -886,7 +887,7 @@ def _summary_text(plan: CleanupPlan) -> str:
         f"執行中 {plan.count_by_layer(PROCESS_LAYER)}｜"
         f"需確認 {plan.count_by_layer(REVIEW_LAYER)}｜"
         f"足跡 {_count_kinds(plan, {'app_footprint_file', 'app_footprint_folder'})}｜"
-        f"登錄檔 {plan.count_by_layer(REGISTRY_LAYER)}｜"
+        f"登錄檔 {_count_kinds(plan, {'registry_value', 'installer_registry_value'})}｜"
         f"官方解除安裝 {len(plan.official_uninstallers)}｜"
         f"Blocked {plan.count_by_layer(BLOCKED_LAYER)}｜"
         f"估計大小 {_format_size(plan.total_size_bytes)}"
