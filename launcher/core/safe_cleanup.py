@@ -31,7 +31,16 @@ REVIEW_LAYER = "review"
 REGISTRY_LAYER = "registry"
 BLOCKED_LAYER = "blocked"
 
-FILE_KINDS = {"file", "folder", "associated_file", "associated_folder", "install_folder", "shortcut"}
+FILE_KINDS = {
+    "file",
+    "folder",
+    "associated_file",
+    "associated_folder",
+    "install_folder",
+    "shortcut",
+    "app_footprint_file",
+    "app_footprint_folder",
+}
 MANIFEST_SCHEMA_VERSION = 1
 
 ScanProgressCallback = Callable[[str, int, int], None]
@@ -44,9 +53,46 @@ _SCAN_STAGES = (
     "同名 / 衍生項",
     "捷徑",
     "官方解除安裝",
+    "應用程式足跡",
     "登錄檔候選",
     "工具列紀錄",
 )
+
+_APP_NOISY_TOKENS = {
+    "app",
+    "apps",
+    "application",
+    "appdata",
+    "bin",
+    "client",
+    "data",
+    "documents",
+    "helper",
+    "install",
+    "installer",
+    "local",
+    "localappdata",
+    "program",
+    "programdata",
+    "programs",
+    "roaming",
+    "roamingappdata",
+    "setup",
+    "temp",
+    "temporary",
+    "tool",
+    "tools",
+    "uninstall",
+    "uninstaller",
+    "update",
+    "updater",
+    "user",
+    "users",
+    "win32",
+    "win64",
+    "x86",
+    "x64",
+}
 
 
 class ScanCancelled(RuntimeError):
@@ -162,6 +208,14 @@ class QuarantineRestoreResult:
     errors: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class _AppIdentity:
+    label: str
+    tokens: tuple[str, ...]
+    source: str
+    strong: bool = False
+
+
 def build_cleanup_plan(
     context: LauncherContext,
     *,
@@ -188,9 +242,11 @@ def build_cleanup_plan(
     items.extend(_shortcut_reference_items(targets, seen_paths, token))
     _emit_scan_stage(progress, token, "官方解除安裝", 6)
     uninstallers = tuple(_official_uninstallers(targets, token))
-    _emit_scan_stage(progress, token, "登錄檔候選", 7)
+    _emit_scan_stage(progress, token, "應用程式足跡", 7)
+    items.extend(_app_footprint_items(targets, uninstallers, seen_paths, token))
+    _emit_scan_stage(progress, token, "登錄檔候選", 8)
     items.extend(_registry_reference_items(targets, token))
-    _emit_scan_stage(progress, token, "工具列紀錄", 8)
+    _emit_scan_stage(progress, token, "工具列紀錄", 9)
     app_state = state_path or default_state_path()
     if _state_mentions_targets(app_state, targets):
         items.append(
@@ -793,6 +849,239 @@ def _dedupe_preserve_order(values: list[str]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _app_footprint_items(
+    targets: list[Path],
+    uninstallers: tuple[OfficialUninstaller, ...],
+    seen_paths: set[str],
+    cancel_token: ScanCancelToken | None = None,
+) -> list[CleanupPlanItem]:
+    identities = _app_identities(targets, uninstallers)
+    if not identities:
+        return []
+    items: list[CleanupPlanItem] = []
+    for root in _app_footprint_roots():
+        _check_cancelled(cancel_token)
+        if not _path_exists(root) or not _path_is_dir(root):
+            continue
+        for candidate in _iter_app_footprint_candidates(root, cancel_token):
+            _check_cancelled(cancel_token)
+            key = _path_key(candidate)
+            if key in seen_paths or _has_seen_parent(candidate, seen_paths) or not _path_exists(candidate):
+                continue
+            score, reason = _app_footprint_score(candidate, identities)
+            if score < 4:
+                continue
+            protected, protected_reason = _is_protected_path(candidate)
+            layer = BLOCKED_LAYER if protected else REVIEW_LAYER
+            note = (
+                f"疑似應用程式足跡：{reason}。大型工程軟體可能共用授權、模板或設定，請人工確認後再隔離。"
+                if not protected
+                else f"疑似應用程式足跡：{reason}；但位於系統保護範圍：{protected_reason}。第一版只列出，不執行。"
+            )
+            items.append(
+                CleanupPlanItem(
+                    id=f"app_footprint:{key}",
+                    layer=layer,
+                    kind="app_footprint_folder" if _path_is_dir(candidate) else "app_footprint_file",
+                    label=candidate.name,
+                    action="移到隔離區" if not protected else "只列出",
+                    note=note,
+                    checked_default=False,
+                    path=str(candidate),
+                    size_bytes=_safe_size(candidate, cancel_token),
+                )
+            )
+            seen_paths.add(key)
+            if len(items) >= 60:
+                return items
+    return items
+
+
+def _app_identities(targets: list[Path], uninstallers: tuple[OfficialUninstaller, ...]) -> tuple[_AppIdentity, ...]:
+    raw: list[tuple[str, str, bool]] = []
+    for uninstaller in uninstallers:
+        if uninstaller.display_name:
+            raw.append((uninstaller.display_name, f"官方解除安裝名稱：{uninstaller.display_name}", True))
+        for value, source in (
+            (uninstaller.install_location, "官方解除安裝 InstallLocation"),
+            (uninstaller.display_icon, "官方解除安裝 DisplayIcon"),
+        ):
+            raw.extend(_path_identity_candidates(value, source, strong=True))
+    for target in targets:
+        strong = target.suffix.casefold() in {".exe", ".msi"}
+        raw.append((target.stem if target.suffix else target.name, f"目標名稱：{target.name or target}", strong))
+        raw.extend(_path_identity_candidates(str(target), "目標路徑", strong=strong))
+
+    identities: list[_AppIdentity] = []
+    seen: set[tuple[str, ...]] = set()
+    for label, source, strong in raw:
+        tokens = _app_tokens(label)
+        if not tokens:
+            continue
+        if len(tokens) == 1 and not (strong and len(tokens[0]) >= 5):
+            continue
+        key = tokens
+        if key in seen:
+            continue
+        seen.add(key)
+        identities.append(_AppIdentity(label=_app_phrase(tokens), tokens=tokens, source=source, strong=strong))
+    return tuple(identities[:12])
+
+
+def _path_identity_candidates(value: str, source: str, *, strong: bool) -> list[tuple[str, str, bool]]:
+    if not value:
+        return []
+    path = Path(str(value).strip().strip('"'))
+    parts = [part for part in path.parts if part and part not in {path.anchor, "\\", "/"}]
+    for index, part in enumerate(parts):
+        if _normalized_app_text(part) in {"temp", "tmp"} and index + 2 < len(parts):
+            parts = parts[index + 2 :]
+            break
+    candidates: list[tuple[str, str, bool]] = []
+    for part in parts[-5:]:
+        candidates.append((part, source, strong))
+    for first, second in zip(parts[-5:], parts[-4:]):
+        candidates.append((f"{first} {second}", source, strong))
+    return candidates
+
+
+def _app_footprint_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for root in (
+        _env_path("LOCALAPPDATA"),
+        _env_path("APPDATA"),
+        _env_path("ProgramData"),
+    ):
+        if root:
+            roots.append(root)
+    user_profile = _env_path("USERPROFILE")
+    if user_profile:
+        roots.append(user_profile / "Documents")
+        roots.append(user_profile / "AppData" / "LocalLow")
+    return tuple(_dedupe_paths(roots))
+
+
+def _iter_app_footprint_candidates(root: Path, cancel_token: ScanCancelToken | None = None):
+    try:
+        children = sorted(root.iterdir(), key=lambda item: item.name.casefold())[:300]
+    except OSError:
+        return
+    for child in children:
+        _check_cancelled(cancel_token)
+        yield child
+    for child in children:
+        _check_cancelled(cancel_token)
+        if not _path_is_dir(child):
+            continue
+        try:
+            grand_children = sorted(child.iterdir(), key=lambda item: item.name.casefold())[:300]
+        except OSError:
+            continue
+        for grand_child in grand_children:
+            _check_cancelled(cancel_token)
+            yield grand_child
+
+
+def _app_footprint_score(path: Path, identities: tuple[_AppIdentity, ...]) -> tuple[int, str]:
+    path_text = _normalized_app_text(str(path))
+    path_tokens = set(_app_tokens(str(path)))
+    name_text = _normalized_app_text(path.name)
+    best_score = 0
+    best_reason = ""
+    for identity in identities:
+        phrase = _app_phrase(identity.tokens)
+        score = 0
+        matched: list[str] = []
+        if phrase and phrase == name_text:
+            score = 6
+            matched = list(identity.tokens)
+        elif phrase and phrase in path_text:
+            score = 5
+            matched = list(identity.tokens)
+        else:
+            hits = [token for token in identity.tokens if token in path_tokens]
+            if len(identity.tokens) == 1:
+                if identity.tokens[0] in _path_name_tokens(path):
+                    score = 4
+                    matched = hits
+            elif len(hits) >= 2:
+                score = min(5, 2 + len(hits))
+                matched = hits
+        if score > best_score:
+            best_score = score
+            source = identity.source
+            hit_text = ", ".join(matched) if matched else phrase
+            best_reason = f"名稱命中 {hit_text}（來源：{source}，信心 {min(99, score * 16)}%）"
+    return best_score, best_reason
+
+
+def _path_name_tokens(path: Path) -> set[str]:
+    tokens: set[str] = set()
+    for part in path.parts:
+        tokens.update(_app_tokens(part))
+    return tokens
+
+
+def _app_tokens(value: str) -> tuple[str, ...]:
+    text = _normalized_app_text(value)
+    tokens = tuple(token for token in text.split() if _is_meaningful_app_token(token))
+    return tokens
+
+
+def _normalized_app_text(value: str) -> str:
+    camel_split = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(value))
+    alpha_digit_split = re.sub(r"(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])", " ", camel_split)
+    text = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", " ", alpha_digit_split)
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _is_meaningful_app_token(token: str) -> bool:
+    if not token or token in _APP_NOISY_TOKENS:
+        return False
+    if token.startswith("tmp"):
+        return False
+    if token.isdigit():
+        return len(token) >= 4
+    return len(token) >= 3
+
+
+def _app_phrase(tokens: tuple[str, ...]) -> str:
+    return " ".join(tokens)
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    result: list[Path] = []
+    for path in paths:
+        key = _path_key(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+def _has_seen_parent(path: Path, seen_paths: set[str]) -> bool:
+    for parent in path.parents:
+        if _path_key(parent) in seen_paths:
+            return True
+    return False
+
+
+def _path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
+
+
+def _path_is_dir(path: Path) -> bool:
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
 
 
 def _scan_registry_base(

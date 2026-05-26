@@ -94,6 +94,53 @@ class SafeCleanupTests(unittest.TestCase):
 
         self.assertEqual(plan.official_uninstallers, (uninstaller,))
 
+    def test_plan_includes_app_footprints_from_common_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "LocalAppData"
+            roaming = root / "RoamingAppData"
+            program_data = root / "ProgramData"
+            user_profile = root / "User"
+            target = local / "Programs" / "Tekla Structures 2026" / "bin" / "TeklaStructures.exe"
+            roaming_footprint = roaming / "Trimble" / "Tekla Structures 2026"
+            program_data_footprint = program_data / "Trimble" / "Tekla Structures 2026"
+            target.parent.mkdir(parents=True)
+            roaming_footprint.mkdir(parents=True)
+            program_data_footprint.mkdir(parents=True)
+            (roaming_footprint / "settings.json").write_text("{}", encoding="utf-8")
+            (program_data_footprint / "template.dat").write_text("x", encoding="utf-8")
+            target.write_text("x", encoding="utf-8")
+            uninstaller = OfficialUninstaller(
+                id="uninstaller:HKLM:Tekla",
+                root_name="HKLM",
+                registry_key="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Tekla Structures 2026",
+                display_name="Tekla Structures 2026",
+                uninstall_command='"C:\\Program Files\\Tekla\\uninstall.exe"',
+                install_location=str(target.parents[1]),
+                match_reason="InstallLocation 指向疑似安裝資料夾",
+                confidence=0.95,
+            )
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LOCALAPPDATA": str(local),
+                    "APPDATA": str(roaming),
+                    "ProgramData": str(program_data),
+                    "USERPROFILE": str(user_profile),
+                },
+            ):
+                with patch("launcher.core.safe_cleanup._official_uninstallers", return_value=[uninstaller]):
+                    with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                        plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+
+        footprints = {Path(item.path): item for item in plan.items if item.kind == "app_footprint_folder"}
+        self.assertIn(roaming_footprint, footprints)
+        self.assertIn(program_data_footprint, footprints)
+        self.assertEqual(footprints[roaming_footprint].layer, REVIEW_LAYER)
+        self.assertEqual(footprints[program_data_footprint].layer, BLOCKED_LAYER)
+        self.assertFalse(footprints[roaming_footprint].checked_default)
+
     def test_run_official_uninstaller_prefers_quiet_command(self) -> None:
         uninstaller = OfficialUninstaller(
             id="uninstaller:HKCU:Demo",
@@ -123,8 +170,8 @@ class SafeCleanupTests(unittest.TestCase):
                     progress=lambda name, index, total: stages.append((name, index, total)),
                 )
 
-        self.assertEqual(stages[0], ("目標身分", 1, 8))
-        self.assertEqual(stages[-1], ("工具列紀錄", 8, 8))
+        self.assertEqual(stages[0], ("目標身分", 1, 9))
+        self.assertEqual(stages[-1], ("工具列紀錄", 9, 9))
 
     def test_build_cleanup_plan_honors_cancel_token(self) -> None:
         token = ScanCancelToken()

@@ -601,6 +601,7 @@ class SafeCleanupDialog(QDialog):
             uninstall_branch.addChild(_info_item("結果", "未找到"))
         for title, kinds in (
             ("疑似安裝資料夾", {"install_folder"}),
+            ("應用程式足跡", {"app_footprint_file", "app_footprint_folder"}),
             ("執行中 / 可能佔用", {"running_process"}),
             ("捷徑", {"shortcut"}),
             ("同名 / 衍生檔", {"associated_file", "associated_folder"}),
@@ -861,13 +862,17 @@ def _analysis_conclusion(plan: CleanupPlan) -> str:
     shortcut_count = _count_kinds(plan, {"shortcut"})
     process_count = _count_kinds(plan, {"running_process"})
     registry_count = _count_kinds(plan, {"registry_value"})
+    footprint_count = _count_kinds(plan, {"app_footprint_file", "app_footprint_folder"})
     associated_count = _count_kinds(plan, {"associated_file", "associated_folder"})
     uninstall_count = len(plan.official_uninstallers)
-    if target.suffix.casefold() == ".exe" and (uninstall_count or install_count or registry_count or shortcut_count):
+    if target.suffix.casefold() == ".exe" and (uninstall_count or install_count or footprint_count or registry_count or shortcut_count):
         return (
             "判斷：這看起來像一個應用程式執行檔。建議先跑官方解除安裝，再清殘留；"
-            f"目前找到官方解除安裝 {uninstall_count}、安裝資料夾 {install_count}、執行中/可能佔用 {process_count}、捷徑 {shortcut_count}、登錄檔候選 {registry_count}。"
+            f"目前找到官方解除安裝 {uninstall_count}、安裝資料夾 {install_count}、應用程式足跡 {footprint_count}、"
+            f"執行中/可能佔用 {process_count}、捷徑 {shortcut_count}、登錄檔候選 {registry_count}。"
         )
+    if footprint_count:
+        return f"判斷：找到 {footprint_count} 個疑似應用程式足跡；大型軟體建議逐項確認來源後再隔離。"
     if process_count:
         return f"判斷：目前找到 {process_count} 個執行中或可能佔用目標的程序；清除前建議先關閉。"
     if associated_count:
@@ -880,6 +885,7 @@ def _summary_text(plan: CleanupPlan) -> str:
         f"安全 {plan.count_by_layer(SAFE_LAYER)}｜"
         f"執行中 {plan.count_by_layer(PROCESS_LAYER)}｜"
         f"需確認 {plan.count_by_layer(REVIEW_LAYER)}｜"
+        f"足跡 {_count_kinds(plan, {'app_footprint_file', 'app_footprint_folder'})}｜"
         f"登錄檔 {plan.count_by_layer(REGISTRY_LAYER)}｜"
         f"官方解除安裝 {len(plan.official_uninstallers)}｜"
         f"Blocked {plan.count_by_layer(BLOCKED_LAYER)}｜"
