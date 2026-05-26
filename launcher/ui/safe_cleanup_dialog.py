@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-import os
 import subprocess
 import sys
 import time
@@ -52,12 +51,8 @@ from launcher.core.safe_cleanup import (
 )
 from launcher.ui.installed_app_picker_dialog import InstalledApplicationPickerDialog
 from launcher.ui.quarantine_browser_dialog import QuarantineBrowserDialog
+from launcher.ui.registry_source_dialog import RegistrySourceDialog
 from launcher.ui.theme import preferences_stylesheet
-
-try:
-    import winreg
-except ImportError:  # pragma: no cover - Windows-only integration.
-    winreg = None  # type: ignore[assignment]
 
 
 class SafeCleanupDialog(QDialog):
@@ -181,8 +176,8 @@ class SafeCleanupDialog(QDialog):
         self._apply_button = QPushButton("隔離 / 清理勾選項目")
         self._apply_button.setDefault(True)
         self._apply_button.clicked.connect(self.apply_selected)
-        self._locate_button = QPushButton("定位選取項目")
-        self._locate_button.setToolTip("開啟檔案所在位置；登錄檔項目會開啟 Regedit 並定位到對應 key。")
+        self._locate_button = QPushButton("檢視 / 定位來源")
+        self._locate_button.setToolTip("開啟檔案所在位置；登錄檔項目會用內建檢視器列出 key 內所有值，必要時再外部開啟 Regedit。")
         self._locate_button.clicked.connect(self.locate_selected_item)
         self._locate_button.setEnabled(False)
         quarantine_button = QPushButton("管理隔離區")
@@ -415,7 +410,7 @@ class SafeCleanupDialog(QDialog):
             QMessageBox.information(self, "安全清除工作台", "請先選擇要定位的項目。")
             return
         try:
-            _locate_plan_item(item)
+            _locate_plan_item(item, self)
         except Exception as exc:
             QMessageBox.warning(self, "安全清除工作台", f"無法定位此項目：\n{exc}")
 
@@ -1027,9 +1022,9 @@ def _can_locate_item(item: CleanupPlanItem | None) -> bool:
     return bool(item.registry_key or item.path or item.process_path)
 
 
-def _locate_plan_item(item: CleanupPlanItem) -> None:
+def _locate_plan_item(item: CleanupPlanItem, parent: QWidget | None = None) -> None:
     if item.registry_key:
-        _open_registry_location(item.root_name, item.registry_key)
+        RegistrySourceDialog(item, parent=parent).exec()
         return
     if item.path:
         _open_path_location(Path(item.path))
@@ -1055,36 +1050,6 @@ def _open_path_location(path: Path) -> None:
         subprocess.Popen(["explorer.exe", str(parent)])  # noqa: S603,S607 - local desktop action.
         return
     raise FileNotFoundError(f"找不到可開啟的位置：{target}")
-
-
-def _open_registry_location(root_name: str, registry_key: str) -> None:
-    if sys.platform != "win32" or winreg is None:
-        raise RuntimeError("目前只支援 Windows Regedit 定位。")
-    root = _regedit_root_name(root_name)
-    if not root or not registry_key:
-        raise ValueError(f"不支援的登錄檔根目錄：{root_name}")
-    last_key = rf"Computer\{root}\{registry_key}"
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Applets\Regedit") as key:
-        winreg.SetValueEx(key, "LastKey", 0, winreg.REG_SZ, last_key)
-    _launch_regedit()
-
-
-def _launch_regedit() -> None:
-    if not hasattr(os, "startfile"):
-        raise RuntimeError("目前平台不支援 ShellExecute 啟動 Regedit。")
-    # /m opens a separate Regedit instance, which forces Regedit to read LastKey
-    # instead of reusing an existing window that may stay on the old location.
-    os.startfile("regedit.exe", "open", "/m")  # type: ignore[attr-defined]  # noqa: S606 - local desktop action via ShellExecute.
-
-
-def _regedit_root_name(root_name: str) -> str:
-    roots = {
-        "HKCU": "HKEY_CURRENT_USER",
-        "HKEY_CURRENT_USER": "HKEY_CURRENT_USER",
-        "HKLM": "HKEY_LOCAL_MACHINE",
-        "HKEY_LOCAL_MACHINE": "HKEY_LOCAL_MACHINE",
-    }
-    return roots.get(root_name.strip().upper(), "")
 
 
 def _apply_row_style(row: QTreeWidgetItem, item: CleanupPlanItem) -> None:

@@ -15,7 +15,6 @@ from PyQt6.QtWidgets import QApplication, QDialog, QHeaderView  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
 from launcher.core.safe_cleanup import BLOCKED_LAYER, PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, InstalledApplication, OfficialUninstaller  # noqa: E402
-from launcher.ui import safe_cleanup_dialog as safe_cleanup_dialog_module  # noqa: E402
 from launcher.ui.safe_cleanup_dialog import SafeCleanupDialog  # noqa: E402
 
 
@@ -144,18 +143,20 @@ class SafeCleanupDialogTests(unittest.TestCase):
             child = dialog._tree.topLevelItem(0).child(0)
             dialog._tree.setCurrentItem(child)
 
-            captured: list[tuple[str, str]] = []
-            with patch("launcher.ui.safe_cleanup_dialog._open_registry_location", side_effect=lambda root_name, key: captured.append((root_name, key))):
+            opened: list[CleanupPlanItem] = []
+
+            class FakeRegistrySourceDialog:
+                def __init__(self, item: CleanupPlanItem, parent=None) -> None:  # noqa: ANN001
+                    opened.append(item)
+
+                def exec(self) -> int:
+                    return 0
+
+            with patch("launcher.ui.safe_cleanup_dialog.RegistrySourceDialog", FakeRegistrySourceDialog):
                 dialog.locate_selected_item()
 
         self.assertTrue(dialog._locate_button.isEnabled())
-        self.assertEqual(captured, [("HKLM", "Software\\Demo")])
-
-    def test_launch_regedit_uses_shell_execute_startfile_with_new_instance(self) -> None:
-        with patch.object(safe_cleanup_dialog_module.os, "startfile", create=True) as startfile:
-            safe_cleanup_dialog_module._launch_regedit()
-
-        startfile.assert_called_once_with("regedit.exe", "open", "/m")
+        self.assertEqual(opened, [hklm_item])
 
     def test_dialog_conclusion_identifies_app_executable_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
