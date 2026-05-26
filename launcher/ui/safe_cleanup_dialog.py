@@ -66,6 +66,7 @@ class SafeCleanupDialog(QDialog):
         self._apply_active = False
         self._apply_threads: list[QThread] = []
         self._apply_workers: list[_CleanupApplyWorker] = []
+        self._suggestion_columns_initialized = False
 
         self.setWindowTitle("安全清除工作台")
         self.setMinimumSize(1120, 700)
@@ -143,6 +144,9 @@ class SafeCleanupDialog(QDialog):
         self._tree.setColumnCount(5)
         self._tree.setHeaderLabels(["套用", "清除建議", "動作", "判斷註解", "位置 / 登錄檔"])
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._tree.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self._tree.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._tree.itemSelectionChanged.connect(self._update_detail)
         self._tree.itemChanged.connect(self._on_item_changed)
 
@@ -545,6 +549,7 @@ class SafeCleanupDialog(QDialog):
         item = QTreeWidgetItem(["分析中", "請稍候", "無動作", "背景分析進行中，完成後會自動更新清除建議。", ""])
         item.setFirstColumnSpanned(True)
         self._tree.addTopLevelItem(item)
+        self._configure_suggestion_columns()
         self._tree.blockSignals(False)
         self._populate_info_tree()
         self._detail.setPlainText("分析中；大型資料夾或登錄檔候選較多時，視窗仍可移動與關閉。")
@@ -575,15 +580,24 @@ class SafeCleanupDialog(QDialog):
                 _apply_row_style(child, item)
                 group.addChild(child)
         self._tree.expandAll()
-        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self._tree.header().setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        self._tree.header().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self._configure_suggestion_columns()
         self._tree.blockSignals(False)
         self._refresh_item_flags()
         if self._tree.topLevelItemCount() > 0 and self._tree.topLevelItem(0).childCount() > 0:
             self._tree.setCurrentItem(self._tree.topLevelItem(0).child(0))
+
+    def _configure_suggestion_columns(self) -> None:
+        header = self._tree.header()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(54)
+        for column in range(self._tree.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+        if self._suggestion_columns_initialized:
+            return
+        default_widths = (88, 360, 110, 680, 860)
+        for column, width in enumerate(default_widths):
+            self._tree.setColumnWidth(column, width)
+        self._suggestion_columns_initialized = True
 
     def _populate_info_tree(self) -> None:
         self._info_tree.clear()

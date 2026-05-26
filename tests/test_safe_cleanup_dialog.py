@@ -11,7 +11,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QHeaderView  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
 from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, OfficialUninstaller  # noqa: E402
@@ -58,6 +58,26 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertIn("關聯資訊", labels)
         self.assertIn("同名 / 衍生檔", labels)
         self.assertIn("ABC_page_001.pdf", labels)
+
+    def test_suggestion_columns_are_resizable_and_scrollable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "very_long_name.txt"
+            target.write_text("x", encoding="utf-8")
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
+                _wait_for_scan(dialog)
+
+        header = dialog._tree.header()
+        self.assertFalse(header.stretchLastSection())
+        self.assertEqual(dialog._tree.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.assertEqual(header.sectionResizeMode(3), QHeaderView.ResizeMode.Interactive)
+        self.assertEqual(header.sectionResizeMode(4), QHeaderView.ResizeMode.Interactive)
+        original_width = dialog._tree.columnWidth(3)
+        dialog._tree.setColumnWidth(3, original_width + 123)
+        dialog._populate()
+        self.assertEqual(dialog._tree.columnWidth(3), original_width + 123)
 
     def test_dialog_conclusion_identifies_app_executable_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
