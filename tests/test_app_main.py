@@ -46,6 +46,18 @@ class AppMainArgumentTests(unittest.TestCase):
         self.assertEqual(result, 0)
         inbox_type.return_value.submit_show.assert_called_once()
 
+    def test_show_existing_forces_new_instance_visible(self) -> None:
+        class _Guard:
+            already_running = False
+
+        with patch("sys.argv", ["launcher", "--show-existing"]):
+            with patch("launcher.app.main.SingleInstanceGuard", return_value=_Guard()):
+                with patch("launcher.app.main._run_pyqt", return_value=0) as run_pyqt:
+                    result = main()
+
+        self.assertEqual(result, 0)
+        run_pyqt.assert_called_once_with(start_hidden=False, force_show=True)
+
     def test_open_iso_workbench_wakes_running_instance_with_command(self) -> None:
         class _Guard:
             already_running = True

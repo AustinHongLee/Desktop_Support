@@ -61,6 +61,18 @@ class DockWindowTests(unittest.TestCase):
             self.assertEqual(window._tail_text(vertical=True), "○")
             self.assertTrue(window._context_label.text().startswith("○ "))
 
+    def test_show_expanded_overrides_saved_auto_hide_collapse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            state.set_auto_hide_enabled(True)
+            window = _make_window(state)
+            window._set_collapsed(True)
+
+            window.show_expanded()
+
+            self.assertFalse(window._collapsed)
+            self.assertFalse(window._tail_button.isVisible())
+
     def test_context_chip_and_tail_expose_source_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = AppStateStore(Path(tmp) / "state.json")

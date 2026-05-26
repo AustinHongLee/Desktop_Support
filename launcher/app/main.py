@@ -12,7 +12,7 @@ from launcher.windows.single_instance import SingleInstanceGuard
 INSTANCE_MUTEX_VERSION = "v2"
 
 
-def _run_pyqt(*, start_hidden: bool = False) -> int:
+def _run_pyqt(*, start_hidden: bool = False, force_show: bool = False) -> int:
     from PyQt6.QtWidgets import QApplication
 
     from launcher.app.bootstrap import LauncherBootstrap
@@ -21,7 +21,9 @@ def _run_pyqt(*, start_hidden: bool = False) -> int:
     app.setQuitOnLastWindowClosed(False)
 
     dock, _tray = LauncherBootstrap().create()
-    if not start_hidden:
+    if force_show and not start_hidden:
+        dock.show_expanded()
+    elif not start_hidden:
         dock.show()
 
     return app.exec()
@@ -70,7 +72,7 @@ def main() -> int:
         return 0
 
     try:
-        return _run_pyqt(start_hidden=args.start_hidden)
+        return _run_pyqt(start_hidden=args.start_hidden, force_show=args.show_existing)
     except ModuleNotFoundError as exc:
         if exc.name != "PyQt6":
             raise

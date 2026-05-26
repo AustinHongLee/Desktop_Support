@@ -222,6 +222,13 @@ class DockWindow(QWidget):
         self._context = self._context_service.current_context()
         self._update_context_label()
 
+    def show_expanded(self) -> None:
+        self.show()
+        self._hide_timer.stop()
+        self._set_collapsed(False)
+        self.raise_()
+        self.activateWindow()
+
     def pick_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(
             self,
