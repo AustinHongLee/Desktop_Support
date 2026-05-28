@@ -155,6 +155,7 @@ class DockWindowTests(unittest.TestCase):
 
         self.assertIn("右鍵選單管理...", action_texts)
         self.assertIn("安全清除工作台...", action_texts)
+        self.assertIn("檔案佔用檢查器...", action_texts)
 
     def test_wake_request_shows_collapsed_hidden_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -192,6 +193,20 @@ class DockWindowTests(unittest.TestCase):
             window._context_inbox = _OpenSafeCleanupInbox(Path(tmp))
             opened: list[bool] = []
             window.open_safe_cleanup = lambda: opened.append(True)  # type: ignore[method-assign]
+
+            window._poll_context_inbox()
+            self._app.processEvents()
+
+            self.assertEqual(window._context.source, "explorer.menu")
+            self.assertEqual(opened, [True])
+
+    def test_open_file_lock_checker_request_opens_workbench_after_context_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            window = _make_window(state)
+            window._context_inbox = _OpenFileLockCheckerInbox(Path(tmp))
+            opened: list[bool] = []
+            window.open_file_lock_checker = lambda: opened.append(True)  # type: ignore[method-assign]
 
             window._poll_context_inbox()
             self._app.processEvents()
@@ -255,6 +270,21 @@ class _OpenSafeCleanupInbox:
 
     def take_request(self) -> _OpenSafeCleanupRequest:
         return _OpenSafeCleanupRequest(self._root)
+
+
+class _OpenFileLockCheckerRequest:
+    command = "open_file_lock_checker"
+
+    def __init__(self, root: Path) -> None:
+        self.context = LauncherContext(folder=root, source="explorer.menu")
+
+
+class _OpenFileLockCheckerInbox:
+    def __init__(self, root: Path) -> None:
+        self._root = root
+
+    def take_request(self) -> _OpenFileLockCheckerRequest:
+        return _OpenFileLockCheckerRequest(self._root)
 
 
 if __name__ == "__main__":

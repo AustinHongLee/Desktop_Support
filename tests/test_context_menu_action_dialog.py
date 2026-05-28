@@ -45,6 +45,16 @@ class ContextMenuActionDialogTests(unittest.TestCase):
         self.assertIn("--open-safe-cleanup", request.command)
         self.assertEqual(request.target.label, "檔案")
 
+    def test_file_lock_template_builds_direct_workbench_request(self) -> None:
+        dialog = ContextMenuActionDialog()
+        dialog._template_combo.setCurrentIndex(3)
+
+        request = dialog.build_request()
+
+        self.assertEqual(request.label, "誰佔用這個檔案...")
+        self.assertIn("--open-file-lock-checker", request.command)
+        self.assertEqual(request.target.label, "檔案")
+
     def test_create_entry_uses_registry_request_and_accepts(self) -> None:
         dialog = ContextMenuActionDialog()
         entry = ContextMenuEntry(

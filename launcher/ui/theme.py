@@ -25,6 +25,29 @@ class Theme:
     danger: str
     danger_bg: str
     drop_bg: str
+    surface_card: str = "#ffffff"
+    surface_card_hover: str = "#f9fafb"
+    surface_sunken: str = "#f3f4f6"
+    shadow_rgba: str = "15, 23, 42, 0.08"
+    layer_safe_fg: str = "#047857"
+    layer_safe_bg: str = "#ecfdf5"
+    layer_safe_border: str = "#a7f3d0"
+    layer_process_fg: str = "#0369a1"
+    layer_process_bg: str = "#f0f9ff"
+    layer_process_border: str = "#bae6fd"
+    layer_review_fg: str = "#b45309"
+    layer_review_bg: str = "#fffbeb"
+    layer_review_border: str = "#fde68a"
+    layer_registry_fg: str = "#be123c"
+    layer_registry_bg: str = "#fff1f2"
+    layer_registry_border: str = "#fecdd3"
+    layer_blocked_fg: str = "#475569"
+    layer_blocked_bg: str = "#f8fafc"
+    layer_blocked_border: str = "#cbd5e1"
+    radius_sm: str = "6px"
+    radius_md: str = "10px"
+    radius_lg: str = "14px"
+    radius_pill: str = "999px"
 
 
 DEFAULT_LIGHT = Theme(
@@ -71,14 +94,65 @@ ENGINEERING_BLUE_LIGHT = Theme(
     danger="#b91c1c",
     danger_bg="#fecaca",
     drop_bg="#dbeafe",
+    surface_card="#ffffff",
+    surface_card_hover="#f8fafc",
+    surface_sunken="#e2e8f0",
+    shadow_rgba="15, 23, 42, 0.08",
+    layer_process_fg="#1d4ed8",
+    layer_process_bg="#eff6ff",
+    layer_process_border="#bfdbfe",
+)
+
+GRAPHITE_DARK = Theme(
+    name="graphite-dark",
+    font_family='"Segoe UI Variable Text", "Microsoft JhengHei UI", "Segoe UI", sans-serif',
+    font_size="13px",
+    text="#e2e8f0",
+    muted_text="#94a3b8",
+    panel="#0f172a",
+    surface="#1e293b",
+    surface_alt="#273449",
+    border="#334155",
+    border_strong="#64748b",
+    primary="#818cf8",
+    primary_hover="#6366f1",
+    primary_soft="rgba(129, 140, 248, 0.18)",
+    success="#34d399",
+    success_bg="rgba(16, 185, 129, 0.16)",
+    warning="#fbbf24",
+    warning_bg="rgba(251, 191, 36, 0.16)",
+    danger="#fb7185",
+    danger_bg="rgba(244, 63, 94, 0.16)",
+    drop_bg="rgba(129, 140, 248, 0.18)",
+    surface_card="#1e293b",
+    surface_card_hover="#273449",
+    surface_sunken="#0b1220",
+    shadow_rgba="0, 0, 0, 0.30",
+    layer_safe_fg="#34d399",
+    layer_safe_bg="rgba(16,185,129,0.12)",
+    layer_safe_border="rgba(52,211,153,0.45)",
+    layer_process_fg="#38bdf8",
+    layer_process_bg="rgba(14,165,233,0.12)",
+    layer_process_border="rgba(56,189,248,0.45)",
+    layer_review_fg="#fbbf24",
+    layer_review_bg="rgba(245,158,11,0.12)",
+    layer_review_border="rgba(251,191,36,0.45)",
+    layer_registry_fg="#fb7185",
+    layer_registry_bg="rgba(244,63,94,0.12)",
+    layer_registry_border="rgba(251,113,133,0.45)",
+    layer_blocked_fg="#cbd5e1",
+    layer_blocked_bg="rgba(148,163,184,0.12)",
+    layer_blocked_border="rgba(203,213,225,0.45)",
 )
 
 THEME_OPTIONS = (
     ("graphite-light", "Graphite（推薦）"),
+    ("graphite-dark", "Graphite Dark"),
     ("engineering-blue-2", "Engineering Blue 2.0"),
 )
 _THEMES = {
     DEFAULT_LIGHT.name: DEFAULT_LIGHT,
+    GRAPHITE_DARK.name: GRAPHITE_DARK,
     ENGINEERING_BLUE_LIGHT.name: ENGINEERING_BLUE_LIGHT,
 }
 
@@ -612,6 +686,188 @@ def preferences_stylesheet(theme: Theme = DEFAULT_LIGHT) -> str:
     }}
     QLabel#ResultMetricTitle {{
         color: {theme.muted_text};
+        font-weight: 700;
+    }}
+    """
+
+
+def safe_cleanup_stylesheet(theme: Theme = DEFAULT_LIGHT) -> str:
+    return f"""
+    SafeCleanupDialog {{
+        background: {theme.panel};
+        color: {theme.text};
+        font-family: {theme.font_family};
+        font-size: {theme.font_size};
+    }}
+    QLabel {{
+        color: {theme.text};
+    }}
+    QLabel#H1 {{
+        color: {theme.text};
+        font-size: 20px;
+        font-weight: 700;
+    }}
+    QLabel#H2 {{
+        color: {theme.text};
+        font-size: 15px;
+        font-weight: 700;
+    }}
+    QLabel#Muted {{
+        color: {theme.muted_text};
+    }}
+    QLabel#Mono {{
+        color: {theme.muted_text};
+        font-family: "Cascadia Code", "Consolas", monospace;
+        font-size: 12px;
+    }}
+    QFrame#Card {{
+        background: {theme.surface_card};
+        border: 1px solid {theme.border};
+        border-radius: {theme.radius_md};
+    }}
+    QFrame#Card[hovered="true"] {{
+        background: {theme.surface_card_hover};
+        border-color: {theme.border_strong};
+    }}
+    QFrame#FooterWrap {{
+        background: {theme.surface};
+        border-top: 1px solid {theme.border};
+    }}
+    RiskBadge[layer="safe"] {{
+        background: {theme.layer_safe_bg};
+        color: {theme.layer_safe_fg};
+        border: 1px solid {theme.layer_safe_border};
+        border-radius: {theme.radius_pill};
+        padding: 2px 10px;
+        font-weight: 700;
+    }}
+    RiskBadge[layer="process"] {{
+        background: {theme.layer_process_bg};
+        color: {theme.layer_process_fg};
+        border: 1px solid {theme.layer_process_border};
+        border-radius: {theme.radius_pill};
+        padding: 2px 10px;
+        font-weight: 700;
+    }}
+    RiskBadge[layer="review"] {{
+        background: {theme.layer_review_bg};
+        color: {theme.layer_review_fg};
+        border: 1px solid {theme.layer_review_border};
+        border-radius: {theme.radius_pill};
+        padding: 2px 10px;
+        font-weight: 700;
+    }}
+    RiskBadge[layer="registry"] {{
+        background: {theme.layer_registry_bg};
+        color: {theme.layer_registry_fg};
+        border: 1px solid {theme.layer_registry_border};
+        border-radius: {theme.radius_pill};
+        padding: 2px 10px;
+        font-weight: 700;
+    }}
+    RiskBadge[layer="blocked"] {{
+        background: {theme.layer_blocked_bg};
+        color: {theme.layer_blocked_fg};
+        border: 1px solid {theme.layer_blocked_border};
+        border-radius: {theme.radius_pill};
+        padding: 2px 10px;
+        font-weight: 700;
+    }}
+    QPushButton {{
+        background: {theme.surface_alt};
+        color: {theme.text};
+        border: 1px solid {theme.border};
+        border-radius: {theme.radius_md};
+        padding: 8px 14px;
+    }}
+    QPushButton:hover {{
+        background: {theme.primary_soft};
+        border-color: {theme.primary};
+    }}
+    QPushButton:disabled {{
+        color: {theme.muted_text};
+        background: {theme.surface_sunken};
+        border-color: {theme.border};
+    }}
+    QPushButton#Primary {{
+        background: {theme.primary};
+        color: #ffffff;
+        border: none;
+        border-radius: {theme.radius_md};
+        padding: 10px 20px;
+        font-weight: 700;
+    }}
+    QPushButton#Primary:hover {{
+        background: {theme.primary_hover};
+    }}
+    QPushButton#Ghost {{
+        background: transparent;
+        color: {theme.text};
+        border: 1px solid {theme.border};
+        border-radius: {theme.radius_md};
+        padding: 8px 14px;
+    }}
+    QPushButton#Ghost:hover {{
+        background: {theme.surface_alt};
+        border-color: {theme.border_strong};
+    }}
+    QLineEdit {{
+        background: {theme.surface_card};
+        color: {theme.text};
+        border: 1px solid {theme.border};
+        border-radius: {theme.radius_sm};
+        padding: 8px 10px;
+        selection-background-color: {theme.primary};
+        selection-color: #ffffff;
+    }}
+    QLineEdit:focus {{
+        border: 2px solid {theme.primary};
+    }}
+    QCheckBox {{
+        color: {theme.text};
+        spacing: 8px;
+    }}
+    QProgressBar {{
+        background: {theme.surface_sunken};
+        border: 1px solid {theme.border};
+        border-radius: {theme.radius_sm};
+        color: {theme.muted_text};
+        text-align: center;
+    }}
+    QProgressBar::chunk {{
+        background: {theme.primary};
+        border-radius: {theme.radius_sm};
+    }}
+    QTabWidget::pane {{
+        border: 0;
+        background: transparent;
+    }}
+    QTabBar::tab {{
+        padding: 8px 16px;
+        margin-right: 4px;
+        border: none;
+        border-bottom: 2px solid transparent;
+        color: {theme.muted_text};
+        background: transparent;
+    }}
+    QTabBar::tab:selected {{
+        color: {theme.primary};
+        border-bottom: 2px solid {theme.primary};
+        font-weight: 700;
+    }}
+    QTreeWidget, QPlainTextEdit {{
+        background: {theme.surface_card};
+        color: {theme.text};
+        border: 1px solid {theme.border};
+        border-radius: {theme.radius_sm};
+        selection-background-color: {theme.primary_soft};
+        selection-color: {theme.text};
+    }}
+    QHeaderView::section {{
+        background: {theme.surface_alt};
+        color: {theme.text};
+        border: 1px solid {theme.border};
+        padding: 6px;
         font-weight: 700;
     }}
     """

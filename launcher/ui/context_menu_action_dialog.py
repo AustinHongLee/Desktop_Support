@@ -29,6 +29,7 @@ from launcher.windows.context_menu_registry import (
     create_context_menu_entry,
     default_pythonw_path,
     expected_context_menu_command,
+    expected_file_lock_checker_command,
     expected_iso_workbench_command,
     expected_safe_cleanup_command,
     open_with_program_command,
@@ -70,6 +71,13 @@ _TEMPLATES = (
         "安全清除工作台",
         "安全清除...",
         "針對右鍵目標產生多層清除計畫，可隔離檔案並列出登錄檔候選項。",
+        default_target_label="檔案",
+    ),
+    _ActionTemplate(
+        "file_lock_checker",
+        "檔案佔用檢查器",
+        "誰佔用這個檔案...",
+        "針對右鍵目標列出正在佔用的程序，可定位、正常關閉或強制結束。",
         default_target_label="檔案",
     ),
     _ActionTemplate(
@@ -277,6 +285,8 @@ class ContextMenuActionDialog(QDialog):
             return expected_iso_workbench_command(pythonw, target.argument_token)
         if template.id == "safe_cleanup":
             return expected_safe_cleanup_command(pythonw, target.argument_token)
+        if template.id == "file_lock_checker":
+            return expected_file_lock_checker_command(pythonw, target.argument_token)
         if template.id == "powershell_here":
             return power_shell_here_command(target)
         if template.id == "open_program":
@@ -287,7 +297,7 @@ class ContextMenuActionDialog(QDialog):
 
     def _suggested_icon(self) -> str:
         template = self._selected_template()
-        if template.id in {"set_context", "open_iso", "safe_cleanup"}:
+        if template.id in {"set_context", "open_iso", "safe_cleanup", "file_lock_checker"}:
             return str(default_pythonw_path())
         if template.id == "powershell_here":
             return "powershell.exe"

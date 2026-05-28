@@ -11,6 +11,52 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $ProjectRoot
 
+function Get-LauncherLogPaths {
+    $stateRoot = if ($env:LOCALAPPDATA) {
+        Join-Path $env:LOCALAPPDATA "EngineeringLauncher"
+    } else {
+        Join-Path $env:USERPROFILE ".engineering_launcher"
+    }
+    $logDir = Join-Path $stateRoot "logs"
+    New-Item -ItemType Directory -Force -Path $logDir -ErrorAction SilentlyContinue | Out-Null
+    $projectLogDir = Join-Path $ProjectRoot "logs"
+    New-Item -ItemType Directory -Force -Path $projectLogDir -ErrorAction SilentlyContinue | Out-Null
+    return @(
+        (Join-Path $logDir "launcher_startup.log"),
+        (Join-Path $projectLogDir "launcher_startup.log")
+    )
+}
+
+function Get-ProjectLogDir {
+    $projectLogDir = Join-Path $ProjectRoot "logs"
+    New-Item -ItemType Directory -Force -Path $projectLogDir -ErrorAction SilentlyContinue | Out-Null
+    return $projectLogDir
+}
+
+function Write-LauncherLog {
+    param([string]$Message)
+    $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    foreach ($path in @(Get-LauncherLogPaths)) {
+        try {
+            Add-Content -Path $path -Encoding UTF8 -Value "[$stamp] $Message"
+            return
+        } catch {
+            # Startup logging must never become the reason startup fails.
+        }
+    }
+}
+
+function Normalize-ArgumentList {
+    param([object[]]$Values)
+    $result = @()
+    foreach ($value in @($Values)) {
+        if ($null -ne $value -and "$value" -ne "") {
+            $result += "$value"
+        }
+    }
+    return $result
+}
+
 function Resolve-LauncherBackgroundPython {
     $venvPythonw = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
     if (Test-Path $venvPythonw) {
@@ -33,9 +79,37 @@ function Resolve-LauncherBackgroundPython {
 function Stop-ProjectPython {
     $venvPythonw = Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
     $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-    Get-Process -Name python,pythonw -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -eq $venvPythonw -or $_.Path -eq $venvPython } |
-        Stop-Process -Force -ErrorAction SilentlyContinue
+    $processes = @(
+        Get-Process -Name python,pythonw -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -eq $venvPythonw -or $_.Path -eq $venvPython }
+    )
+    try {
+        $projectNeedle = $ProjectRoot.ToLowerInvariant()
+        $processes += @(
+            Get-CimInstance Win32_Process -Filter "name='python.exe' or name='pythonw.exe'" -ErrorAction Stop |
+            Where-Object {
+                $commandLine = "$($_.CommandLine)".ToLowerInvariant()
+                $commandLine.Contains("launcher.app.main") -and $commandLine.Contains($projectNeedle)
+            } |
+            ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }
+        )
+    } catch {
+        Write-LauncherLog "Process command-line scan skipped: $($_.Exception.Message)"
+    }
+    $processes = @($processes | Where-Object { $null -ne $_ } | Sort-Object Id -Unique)
+    foreach ($process in $processes) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($process in $processes) {
+        try {
+            Wait-Process -Id $process.Id -Timeout 5 -ErrorAction SilentlyContinue
+        } catch {
+            Write-LauncherLog "Process wait skipped for $($process.Id): $($_.Exception.Message)"
+        }
+    }
+    if ($processes.Count -gt 0) {
+        Start-Sleep -Milliseconds 500
+    }
 }
 
 function Resolve-LauncherPython {
@@ -62,28 +136,42 @@ function Resolve-LauncherPython {
     throw "Python was not found. Install Python 3.12+ or create .venv in this project."
 }
 
-if ($Restart) {
-    Stop-ProjectPython
-}
+try {
+    Write-LauncherLog "Starting launcher. Foreground=$Foreground ShowDock=$ShowDock Restart=$Restart ProjectRoot=$ProjectRoot"
 
-$launcherArgs = @("-m", "launcher.app.main")
-if (-not $ShowDock) {
-    $launcherArgs += "--start-hidden"
-}
-$launcherArgs += "--show-existing"
-$launcherArgs += $LauncherArgsFromCommandLine
+    if ($Restart) {
+        Stop-ProjectPython
+    }
 
-if (-not $Foreground) {
-    $backgroundPython = Resolve-LauncherBackgroundPython
-    if ($backgroundPython) {
-        Start-Process -FilePath $backgroundPython -ArgumentList $launcherArgs -WorkingDirectory $ProjectRoot -WindowStyle Hidden
+    $launcherArgs = @("-m", "launcher.app.main")
+    if (-not $ShowDock) {
+        $launcherArgs += "--start-hidden"
+    }
+    $launcherArgs += "--show-existing"
+    $launcherArgs = Normalize-ArgumentList -Values (@($launcherArgs) + @($LauncherArgsFromCommandLine))
+
+    if (-not $Foreground) {
+        $python = Resolve-LauncherPython
+        $processArgs = Normalize-ArgumentList -Values (@($python.Args) + @($launcherArgs))
+        $process = Start-Process `
+            -FilePath $python.Exe `
+            -ArgumentList $processArgs `
+            -WorkingDirectory $ProjectRoot `
+            -WindowStyle Hidden `
+            -PassThru
+        Write-LauncherLog "Started background launcher via python. Pid=$($process.Id) Args=$($processArgs -join ' ')"
         return
     }
 
     $python = Resolve-LauncherPython
-    Start-Process -FilePath $python.Exe -ArgumentList @(@($python.Args) + $launcherArgs) -WorkingDirectory $ProjectRoot -WindowStyle Hidden
-    return
+    $foregroundArgs = Normalize-ArgumentList -Values (@($python.Args) + @($launcherArgs))
+    Write-LauncherLog "Running foreground launcher via $($python.Exe). Args=$($foregroundArgs -join ' ')"
+    & $python.Exe @foregroundArgs
+} catch {
+    Write-LauncherLog "ERROR: $($_.Exception.Message)"
+    Write-LauncherLog "STACK: $($_.ScriptStackTrace)"
+    if ($Foreground) {
+        throw
+    }
+    exit 1
 }
-
-$python = Resolve-LauncherPython
-& $python.Exe @($python.Args) @launcherArgs

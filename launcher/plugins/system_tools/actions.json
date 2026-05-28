@@ -103,6 +103,17 @@
       "command": {
         "type": "ui_safe_cleanup_dialog"
       }
+    },
+    {
+      "id": "system.file_lock_checker",
+      "title": "檔案佔用檢查器",
+      "category": "檔案",
+      "description": "檢查目前檔案或資料夾被哪些程序佔用，並可定位、正常關閉或強制結束程序。",
+      "icon": "search",
+      "risk": "medium",
+      "command": {
+        "type": "ui_file_lock_checker_dialog"
+      }
     }
   ]
 }

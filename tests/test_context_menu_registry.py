@@ -13,6 +13,7 @@ from launcher.windows.context_menu_registry import (
     ExplorerContextMenuStatus,
     entry_detail_lines,
     expected_context_menu_command,
+    expected_file_lock_checker_command,
     expected_iso_workbench_command,
     expected_safe_cleanup_command,
     is_launcher_managed_entry,
@@ -41,6 +42,12 @@ class ContextMenuRegistryTests(unittest.TestCase):
         command = expected_safe_cleanup_command(Path("C:/Tool/.venv/Scripts/pythonw.exe"), "%1")
 
         self.assertIn("--open-safe-cleanup", command)
+        self.assertIn('--set-context "%1"', command)
+
+    def test_expected_file_lock_checker_command_opens_workbench_with_context(self) -> None:
+        command = expected_file_lock_checker_command(Path("C:/Tool/.venv/Scripts/pythonw.exe"), "%1")
+
+        self.assertIn("--open-file-lock-checker", command)
         self.assertIn('--set-context "%1"', command)
 
     def test_targets_cover_common_explorer_contexts(self) -> None:

@@ -40,7 +40,24 @@ FILE_KINDS = {
     "shortcut",
     "app_footprint_file",
     "app_footprint_folder",
+    "leftover_installer",
 }
+INSTALLER_FILE_EXTENSIONS = {".appx", ".exe", ".msi", ".msix", ".msixbundle"}
+UPDATER_CACHE_HINTS = {
+    "cache",
+    "download",
+    "downloads",
+    "install",
+    "installer",
+    "package",
+    "packages",
+    "pending",
+    "squirrel",
+    "update",
+    "updater",
+}
+UPDATER_METADATA_EXTENSIONS = {".json", ".yml", ".yaml", ".xml", ".txt", ".toml", ".plist"}
+UPDATER_METADATA_MAX_BYTES = 256 * 1024
 MANIFEST_SCHEMA_VERSION = 1
 SUPPORTED_MANIFEST_SCHEMAS = {1}
 
@@ -108,6 +125,33 @@ _APP_NOISY_TOKENS = {
     "x64",
 }
 
+KNOWN_FORK_PAIRS = {
+    "cursor": {
+        "microsoft visual studio code",
+        "microsoft vs code",
+        "visual studio code",
+        "vs code",
+        "vscode",
+    },
+    "windsurf": {
+        "microsoft visual studio code",
+        "microsoft vs code",
+        "visual studio code",
+        "vs code",
+        "vscode",
+    },
+    "trae": {
+        "microsoft visual studio code",
+        "microsoft vs code",
+        "visual studio code",
+        "vs code",
+        "vscode",
+    },
+    "visual studio code": {"cursor", "windsurf", "trae"},
+    "vs code": {"cursor", "windsurf", "trae"},
+    "vscode": {"cursor", "windsurf", "trae"},
+}
+
 
 class ScanCancelled(RuntimeError):
     pass
@@ -142,6 +186,7 @@ class OfficialUninstaller:
     display_icon: str = ""
     match_reason: str = ""
     confidence: float = 0.0
+    is_fork_relative: bool = False
 
     @property
     def preferred_command(self) -> str:
@@ -185,6 +230,8 @@ class CleanupPlanItem:
     process_name: str = ""
     process_path: str = ""
     can_close: bool = False
+    confidence: float = 1.0
+    evidence: tuple["CleanupEvidence", ...] = ()
 
     @property
     def executable(self) -> bool:
@@ -195,6 +242,14 @@ class CleanupPlanItem:
         if self.layer == REGISTRY_LAYER:
             return self.root_name == "HKCU" and bool(self.registry_key)
         return bool(self.path)
+
+
+@dataclass(frozen=True)
+class CleanupEvidence:
+    label: str
+    detail: str
+    weight: float = 0.0
+    kind: str = "neutral"
 
 
 @dataclass(frozen=True)
@@ -210,6 +265,41 @@ class CleanupPlan:
     @property
     def total_size_bytes(self) -> int:
         return sum(item.size_bytes for item in self.items if item.kind in FILE_KINDS)
+
+
+def confidence_band(confidence: float) -> str:
+    confidence = max(0.0, min(1.0, confidence))
+    if confidence >= 0.8:
+        return "high"
+    if confidence >= 0.6:
+        return "medium"
+    return "weak"
+
+
+def is_default_cleanup_candidate(item: CleanupPlanItem) -> bool:
+    return item.executable and item.checked_default and confidence_band(item.confidence) == "high"
+
+
+def evidence_summary(item: CleanupPlanItem) -> str:
+    if not item.evidence:
+        return "尚未提供結構化證據"
+    positive = sum(1 for evidence in item.evidence if evidence.kind == "positive")
+    warning = sum(1 for evidence in item.evidence if evidence.kind in {"warning", "negative"})
+    if warning:
+        return f"{positive} 項支持 / {warning} 項警示"
+    return f"{positive} 項支持"
+
+
+def _evidence(label: str, detail: str, *, weight: float = 0.0, kind: str = "neutral") -> CleanupEvidence:
+    return CleanupEvidence(label=label, detail=detail, weight=weight, kind=kind)
+
+
+@dataclass(frozen=True)
+class ItemImpact:
+    shortcut_count: int
+    registry_ref_count: int
+    process_count: int
+    derived_count: int
 
 
 @dataclass(frozen=True)
@@ -293,6 +383,9 @@ def build_cleanup_plan(
                 note="只清除本工具列 state.json 內指向目標的 recent/context 紀錄，不碰檔案本體。",
                 checked_default=True,
                 path=str(app_state),
+                evidence=(
+                    _evidence("工具列紀錄命中", "本工具自己的 state.json 提到目前目標；只會移除近期紀錄，不會碰外部應用資料。", weight=0.95, kind="positive"),
+                ),
             )
         )
     _check_cancelled(token)
@@ -306,6 +399,9 @@ def build_cleanup_plan(
                 action="無動作",
                 note="目前 Context 沒有檔案或資料夾。請先右鍵選取目標，或把檔案拖到工具列。",
                 checked_default=False,
+                evidence=(
+                    _evidence("缺少目標", "沒有可分析的檔案或資料夾，因此不會執行任何清理。", weight=-1.0, kind="warning"),
+                ),
             )
         )
     return CleanupPlan(targets=tuple(targets), items=tuple(items), created_at=time.time(), official_uninstallers=uninstallers)
@@ -320,6 +416,34 @@ def run_official_uninstaller(uninstaller: OfficialUninstaller) -> subprocess.Pop
 
 def scan_stage_count() -> int:
     return len(_SCAN_STAGES)
+
+
+def compute_impact(plan: CleanupPlan, item: CleanupPlanItem) -> ItemImpact:
+    needles = _impact_needles(item)
+    if not needles:
+        return ItemImpact(shortcut_count=0, registry_ref_count=0, process_count=0, derived_count=0)
+    shortcut_count = 0
+    registry_ref_count = 0
+    process_count = 0
+    derived_count = 0
+    for candidate in plan.items:
+        if candidate.id == item.id:
+            continue
+        if candidate.kind == "shortcut" and _impact_mentions(candidate.path, needles):
+            shortcut_count += 1
+        if candidate.registry_value_data and _impact_mentions(candidate.registry_value_data, needles):
+            registry_ref_count += 1
+        if candidate.kind == "running_process" and _impact_mentions(candidate.process_path, needles):
+            process_count += 1
+        if candidate.kind in {"associated_file", "associated_folder", "app_footprint_file", "app_footprint_folder", "install_folder", "leftover_installer"}:
+            if _impact_mentions(candidate.path or candidate.label, needles):
+                derived_count += 1
+    return ItemImpact(
+        shortcut_count=shortcut_count,
+        registry_ref_count=registry_ref_count,
+        process_count=process_count,
+        derived_count=derived_count,
+    )
 
 
 def apply_cleanup_plan(
@@ -385,6 +509,10 @@ def apply_cleanup_plan(
         state_cleaned=state_cleaned,
         errors=tuple(errors),
     )
+
+
+def apply_restore_all(_manifest_id: str) -> QuarantineRestoreResult:
+    raise NotImplementedError("全部還原流程尚未實作。")
 
 
 def default_quarantine_root() -> Path:
@@ -535,6 +663,24 @@ def _resolve_targets(context: LauncherContext) -> list[Path]:
     return []
 
 
+def _impact_needles(item: CleanupPlanItem) -> tuple[str, ...]:
+    values = [item.path, item.process_path, item.registry_value_data]
+    if item.path:
+        path = Path(item.path)
+        values.extend([path.name, path.stem])
+    needles: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip().casefold()
+        if len(normalized) >= 3 and normalized not in needles:
+            needles.append(normalized)
+    return tuple(needles)
+
+
+def _impact_mentions(value: str, needles: tuple[str, ...]) -> bool:
+    haystack = str(value or "").casefold()
+    return bool(haystack) and any(needle in haystack for needle in needles)
+
+
 def _restore_conflict_policy(value: RestoreConflictPolicy | str) -> RestoreConflictPolicy:
     if isinstance(value, RestoreConflictPolicy):
         return value
@@ -567,18 +713,24 @@ def _target_item(path: Path, cancel_token: ScanCancelToken | None = None) -> Cle
     exists = path.exists()
     protected, reason = _is_protected_path(path)
     is_dir = path.is_dir()
+    evidence: list[CleanupEvidence] = []
     if not exists:
         layer = BLOCKED_LAYER
         note = "目標本體不存在；這通常是已被其他解除安裝器移除。工作台仍會用舊路徑/名稱搜尋殘留，但本項不可執行。"
+        evidence.append(_evidence("目標不存在", "使用者輸入的目標本體目前不存在；仍會以名稱搜尋殘留，但本項不能清除。", weight=-1.0, kind="warning"))
     elif protected:
         layer = BLOCKED_LAYER
         note = f"位於系統保護範圍：{reason}。第一版只列出，不執行。"
+        evidence.append(_evidence("系統保護路徑", reason, weight=-1.0, kind="negative"))
     elif is_dir:
         layer = REVIEW_LAYER
         note = "資料夾可能包含大量資料；必須人工確認才會移到隔離區。"
+        evidence.append(_evidence("使用者指定資料夾", "此資料夾由使用者明確指定，但資料夾可能包含混合資料，因此預設需人工確認。", weight=0.7, kind="positive"))
+        evidence.append(_evidence("資料夾風險", "資料夾清理的影響範圍通常比單一檔案大，預設不自動勾選。", weight=-0.3, kind="warning"))
     else:
         layer = SAFE_LAYER
         note = "一般檔案，預設移到隔離區，可從 manifest 追蹤原位置。"
+        evidence.append(_evidence("使用者指定檔案", "此檔案由使用者明確指定，且不在系統保護範圍。", weight=1.0, kind="positive"))
     return CleanupPlanItem(
         id=f"target:{_path_key(path)}",
         layer=layer,
@@ -589,6 +741,7 @@ def _target_item(path: Path, cancel_token: ScanCancelToken | None = None) -> Cle
         checked_default=layer == SAFE_LAYER,
         path=str(path),
         size_bytes=_safe_size(path, cancel_token),
+        evidence=tuple(evidence),
     )
 
 
@@ -613,6 +766,11 @@ def _associated_items(targets: list[Path], seen_paths: set[str], cancel_token: S
                 continue
             protected, reason = _is_protected_path(child)
             layer = BLOCKED_LAYER if protected else REVIEW_LAYER
+            evidence = [
+                _evidence("同層名稱相近", f"位於目標同一資料夾，名稱與 {stem} 相近。", weight=0.68, kind="positive"),
+            ]
+            if protected:
+                evidence.append(_evidence("系統保護路徑", reason, weight=-1.0, kind="negative"))
             items.append(
                 CleanupPlanItem(
                     id=f"associated:{key}",
@@ -628,6 +786,8 @@ def _associated_items(targets: list[Path], seen_paths: set[str], cancel_token: S
                     checked_default=False,
                     path=str(child),
                     size_bytes=_safe_size(child, cancel_token),
+                    confidence=0.68,
+                    evidence=tuple(evidence),
                 )
             )
             seen_paths.add(key)
@@ -647,6 +807,11 @@ def _install_folder_items(targets: list[Path], seen_paths: set[str], cancel_toke
         if key in seen_paths:
             continue
         protected, reason = _is_protected_path(folder)
+        evidence = [
+            _evidence("程式位於此資料夾", f"目標執行檔 {target.name} 位於此安裝根目錄。", weight=0.78, kind="positive"),
+        ]
+        if protected:
+            evidence.append(_evidence("系統保護路徑", reason, weight=-1.0, kind="negative"))
         items.append(
             CleanupPlanItem(
                 id=f"install_folder:{key}",
@@ -662,6 +827,8 @@ def _install_folder_items(targets: list[Path], seen_paths: set[str], cancel_toke
                 checked_default=False,
                 path=str(folder),
                 size_bytes=_safe_size(folder, cancel_token),
+                confidence=0.78,
+                evidence=tuple(evidence),
             )
         )
         seen_paths.add(key)
@@ -699,6 +866,12 @@ def _shortcut_reference_items(targets: list[Path], seen_paths: set[str], cancel_
             if not target_matched and not name_matched:
                 continue
             note = f"捷徑指向目標：{target_path}" if target_matched else "捷徑名稱疑似對應目標；需人工確認。"
+            confidence = 0.92 if target_matched else 0.72
+            evidence = (
+                _evidence("捷徑目標命中", f"捷徑實際指向 {target_path}。", weight=0.92, kind="positive")
+                if target_matched
+                else _evidence("捷徑名稱相近", f"捷徑名稱 {shortcut.stem} 與目標名稱相近，但尚未確認目標路徑。", weight=0.72, kind="positive")
+            )
             items.append(
                 CleanupPlanItem(
                     id=f"shortcut:{key}",
@@ -710,6 +883,8 @@ def _shortcut_reference_items(targets: list[Path], seen_paths: set[str], cancel_
                     checked_default=False,
                     path=str(shortcut),
                     size_bytes=_safe_size(shortcut, cancel_token),
+                    confidence=confidence,
+                    evidence=(evidence,),
                 )
             )
             seen_paths.add(key)
@@ -742,6 +917,11 @@ def _running_process_items(targets: list[Path], cancel_token: ScanCancelToken | 
             note = f"{note}；不建議直接關閉：{close_reason}"
         else:
             note = f"{note}；可嘗試正常關閉，失敗時請手動關閉。"
+        evidence = [
+            _evidence("執行中程序命中", process.reason or "程序路徑與目標相符。", weight=0.9 if process.path else 0.7, kind="positive"),
+        ]
+        if not can_close:
+            evidence.append(_evidence("不建議關閉", close_reason or "此程序可能屬於系統或受保護程序。", weight=-1.0, kind="negative"))
         items.append(
             CleanupPlanItem(
                 id=f"process:{process.pid}",
@@ -755,6 +935,8 @@ def _running_process_items(targets: list[Path], cancel_token: ScanCancelToken | 
                 process_name=process.name,
                 process_path=str(process.path or ""),
                 can_close=can_close,
+                confidence=0.9 if process.path else 0.7,
+                evidence=tuple(evidence),
             )
         )
     return items
@@ -828,6 +1010,12 @@ def _official_uninstallers(targets: list[Path], cancel_token: ScanCancelToken | 
             score, reasons = _uninstaller_match_score(values, targets)
             if score < 3:
                 continue
+            fork_reason = _fork_relative_reason(values, targets)
+            confidence = min(1.0, score / 8)
+            is_fork_relative = bool(fork_reason)
+            if fork_reason:
+                reasons.append(fork_reason)
+                confidence = min(confidence * 0.5, 0.45)
             unique = f"{root_name}\\{key_path}".casefold()
             if unique in seen:
                 continue
@@ -843,7 +1031,8 @@ def _official_uninstallers(targets: list[Path], cancel_token: ScanCancelToken | 
                     install_location=values.get("InstallLocation", ""),
                     display_icon=values.get("DisplayIcon", ""),
                     match_reason="；".join(reasons),
-                    confidence=min(1.0, score / 8),
+                    confidence=confidence,
+                    is_fork_relative=is_fork_relative,
                 )
             )
     return sorted(uninstallers, key=lambda item: item.confidence, reverse=True)
@@ -971,6 +1160,53 @@ def _uninstaller_match_score(values: dict[str, str], targets: list[Path]) -> tup
     return score, _dedupe_preserve_order(reasons)
 
 
+def _fork_relative_reason(values: dict[str, str], targets: list[Path]) -> str:
+    aliases = _fork_aliases_for_targets(targets)
+    if not aliases:
+        return ""
+    candidate_texts = [
+        _normalized_app_text(values.get(field, ""))
+        for field in ("DisplayName", "InstallLocation", "DisplayIcon", "UninstallString", "QuietUninstallString")
+    ]
+    for target_name, alias in aliases:
+        alias_text = _normalized_app_text(alias)
+        if not alias_text:
+            continue
+        if any(_phrase_in_normalized_text(alias_text, text) for text in candidate_texts):
+            return f"可能是 fork 親屬（{target_name} -> {alias}）"
+    return ""
+
+
+def _fork_aliases_for_targets(targets: list[Path]) -> tuple[tuple[str, str], ...]:
+    aliases: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for target in targets:
+        texts = _target_fork_texts(target)
+        for app_name, relatives in KNOWN_FORK_PAIRS.items():
+            app_text = _normalized_app_text(app_name)
+            if not any(_phrase_in_normalized_text(app_text, text) for text in texts):
+                continue
+            for relative in relatives:
+                key = (app_name, relative)
+                if key in seen:
+                    continue
+                seen.add(key)
+                aliases.append(key)
+    return tuple(aliases)
+
+
+def _target_fork_texts(target: Path) -> tuple[str, ...]:
+    values = [target.name, target.stem, str(target)]
+    values.extend(part for part in target.parts[-4:] if part and part not in {target.anchor, "\\", "/"})
+    return tuple(_normalized_app_text(value) for value in values if str(value).strip())
+
+
+def _phrase_in_normalized_text(phrase: str, text: str) -> bool:
+    if not phrase or not text:
+        return False
+    return bool(re.search(rf"(?<![0-9a-z]){re.escape(phrase)}(?![0-9a-z])", text))
+
+
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -1032,6 +1268,12 @@ def _app_footprint_items(
                 continue
             protected, protected_reason = _is_protected_path(candidate)
             layer = BLOCKED_LAYER if protected else REVIEW_LAYER
+            evidence = [
+                _evidence("足跡規則命中", reason, weight=_score_to_confidence(score), kind="positive"),
+                _evidence("預設需確認", "此項來自廣義 AppData / ProgramData 足跡掃描；掃描會列出，但不會預設清除。", weight=-0.2, kind="warning"),
+            ]
+            if protected:
+                evidence.append(_evidence("系統保護路徑", protected_reason, weight=-1.0, kind="negative"))
             note = (
                 f"疑似應用程式足跡：{reason}。大型工程軟體可能共用授權、模板或設定，請人工確認後再隔離。"
                 if not protected
@@ -1048,26 +1290,121 @@ def _app_footprint_items(
                     checked_default=False,
                     path=str(candidate),
                     size_bytes=_safe_size(candidate, cancel_token),
+                    confidence=_score_to_confidence(score),
+                    evidence=tuple(evidence),
                 )
             )
             seen_paths.add(key)
             if len(items) >= 60:
                 return items
+    if _should_scan_updater_caches(targets):
+        items.extend(_updater_cache_items(identities, seen_paths, cancel_token, limit=max(0, 80 - len(items))))
     return items
+
+
+def _updater_cache_items(
+    identities: tuple[_AppIdentity, ...],
+    seen_paths: set[str],
+    cancel_token: ScanCancelToken | None = None,
+    *,
+    limit: int,
+) -> list[CleanupPlanItem]:
+    if limit <= 0:
+        return []
+    items: list[CleanupPlanItem] = []
+    for root in _app_footprint_roots():
+        _check_cancelled(cancel_token)
+        if not _path_exists(root) or not _path_is_dir(root):
+            continue
+        for cache_root in _iter_updater_cache_roots(root, cancel_token):
+            _check_cancelled(cancel_token)
+            for candidate in _iter_updater_cache_descendants(cache_root, cancel_token):
+                _check_cancelled(cancel_token)
+                key = _path_key(candidate)
+                if key in seen_paths or _has_seen_parent(candidate, seen_paths) or not _path_exists(candidate):
+                    continue
+                score, reason = _app_footprint_score(candidate, identities)
+                if score < 4:
+                    score, reason = _updater_metadata_score(candidate, identities)
+                if score < 4:
+                    continue
+                leftover_installer = _is_leftover_installer(candidate, score)
+                protected, protected_reason = _is_protected_path(candidate)
+                layer = BLOCKED_LAYER if protected else (SAFE_LAYER if leftover_installer else REVIEW_LAYER)
+                confidence = max(0.88 if leftover_installer else 0.72, _score_to_confidence(score))
+                evidence = [
+                    _evidence(
+                        "安裝暫存命中" if leftover_installer else "更新暫存命中",
+                        reason,
+                        weight=confidence,
+                        kind="positive",
+                    ),
+                    _evidence("位於更新暫存區", "路徑位於 updater/cache/pending 類目錄，常見於 Electron 或安裝器快取。", weight=0.2, kind="positive"),
+                ]
+                if leftover_installer:
+                    evidence.append(_evidence("安裝檔殘留", "安裝程式本體通常可先隔離釋放空間；仍保留還原 manifest。", weight=0.2, kind="positive"))
+                else:
+                    evidence.append(_evidence("預設需確認", "此項不是明確安裝檔殘留，因此顯示但不自動勾選。", weight=-0.2, kind="warning"))
+                if protected:
+                    evidence.append(_evidence("系統保護路徑", protected_reason, weight=-1.0, kind="negative"))
+                if leftover_installer:
+                    note = (
+                        f"安裝檔暫存殘留：{reason}。位於 updater/cache/pending 類目錄；已安裝或退役後通常可先隔離釋放空間。"
+                        if not protected
+                        else f"安裝檔暫存殘留：{reason}；但位於系統保護範圍：{protected_reason}。第一版只列出，不執行。"
+                    )
+                else:
+                    note = (
+                        f"疑似安裝/更新暫存：{reason}。位於 updater/cache/pending 類目錄，請確認應用已移除或不需更新後再隔離。"
+                        if not protected
+                        else f"疑似安裝/更新暫存：{reason}；但位於系統保護範圍：{protected_reason}。第一版只列出，不執行。"
+                    )
+                items.append(
+                    CleanupPlanItem(
+                        id=f"updater_cache:{key}",
+                        layer=layer,
+                        kind=_updater_cache_kind(candidate, leftover_installer),
+                        label=candidate.name,
+                        action="移到隔離區" if not protected else "只列出",
+                        note=note,
+                        checked_default=leftover_installer and not protected,
+                        path=str(candidate),
+                        size_bytes=_safe_size(candidate, cancel_token),
+                        confidence=confidence,
+                        evidence=tuple(evidence),
+                    )
+                )
+                seen_paths.add(key)
+                if len(items) >= limit:
+                    return items
+    return items
+
+
+def _should_scan_updater_caches(targets: list[Path]) -> bool:
+    for target in targets:
+        if not target.exists():
+            return True
+        if _is_updater_cache_path(target):
+            return True
+        if any(_is_updater_cache_path(parent) for parent in target.parents):
+            return True
+    return False
 
 
 def _app_identities(targets: list[Path], uninstallers: tuple[OfficialUninstaller, ...]) -> tuple[_AppIdentity, ...]:
     raw: list[tuple[str, str, bool]] = []
     for uninstaller in uninstallers:
+        if uninstaller.is_fork_relative:
+            continue
         if uninstaller.display_name:
-            raw.append((uninstaller.display_name, f"官方解除安裝名稱：{uninstaller.display_name}", True))
+            raw.append((uninstaller.display_name, f"官方解除安裝名稱：{uninstaller.display_name}", False))
         for value, source in (
             (uninstaller.install_location, "官方解除安裝 InstallLocation"),
             (uninstaller.display_icon, "官方解除安裝 DisplayIcon"),
         ):
-            raw.extend(_path_identity_candidates(value, source, strong=True))
+            raw.extend(_path_identity_candidates(value, source, strong=False))
     for target in targets:
-        strong = target.suffix.casefold() in {".exe", ".msi"}
+        strong = True
         raw.append((target.stem if target.suffix else target.name, f"目標名稱：{target.name or target}", strong))
         raw.extend(_path_identity_candidates(str(target), "目標路徑", strong=strong))
 
@@ -1142,6 +1479,89 @@ def _iter_app_footprint_candidates(root: Path, cancel_token: ScanCancelToken | N
             yield grand_child
 
 
+def _iter_updater_cache_roots(root: Path, cancel_token: ScanCancelToken | None = None):
+    try:
+        children = sorted(root.iterdir(), key=lambda item: item.name.casefold())[:400]
+    except OSError:
+        return
+    for child in children:
+        _check_cancelled(cancel_token)
+        if not _path_is_dir(child) or not _is_updater_cache_path(child):
+            continue
+        yield child
+        try:
+            grand_children = sorted(child.iterdir(), key=lambda item: item.name.casefold())[:120]
+        except OSError:
+            continue
+        for grand_child in grand_children:
+            _check_cancelled(cancel_token)
+            if _path_is_dir(grand_child) and _is_updater_cache_path(grand_child):
+                yield grand_child
+
+
+def _iter_updater_cache_descendants(root: Path, cancel_token: ScanCancelToken | None = None, *, max_depth: int = 2, limit: int = 1200):
+    pending: list[tuple[Path, int]] = [(root, 0)]
+    yielded = 0
+    while pending and yielded < limit:
+        current, depth = pending.pop(0)
+        try:
+            children = sorted(current.iterdir(), key=lambda item: item.name.casefold())[:300]
+        except OSError:
+            continue
+        for child in children:
+            _check_cancelled(cancel_token)
+            if yielded >= limit:
+                return
+            yielded += 1
+            yield child
+            if depth < max_depth and _path_is_dir(child):
+                pending.append((child, depth + 1))
+
+
+def _is_updater_cache_path(path: Path) -> bool:
+    tokens = set(_app_tokens(path.name))
+    if tokens & UPDATER_CACHE_HINTS:
+        return True
+    normalized = _normalized_app_text(path.name)
+    return any(hint in normalized for hint in ("updater", "update", "pending", "squirrel"))
+
+
+def _is_leftover_installer(path: Path, score: int) -> bool:
+    if _path_is_dir(path) or path.suffix.casefold() not in INSTALLER_FILE_EXTENSIONS:
+        return False
+    if score < 5:
+        return False
+    normalized_name = _normalized_app_text(path.name)
+    return any(_phrase_in_normalized_text(hint, normalized_name) for hint in ("setup", "install", "installer", "update", "updater"))
+
+
+def _updater_cache_kind(path: Path, leftover_installer: bool) -> str:
+    if leftover_installer:
+        return "leftover_installer"
+    return "app_footprint_folder" if _path_is_dir(path) else "app_footprint_file"
+
+
+def _updater_metadata_score(path: Path, identities: tuple[_AppIdentity, ...]) -> tuple[int, str]:
+    if _path_is_dir(path) or path.suffix.casefold() not in UPDATER_METADATA_EXTENSIONS:
+        return 0, ""
+    try:
+        if path.stat().st_size > UPDATER_METADATA_MAX_BYTES:
+            return 0, ""
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return 0, ""
+    normalized = _normalized_app_text(text)
+    for identity in identities:
+        phrase = _app_phrase(identity.tokens)
+        if phrase and _phrase_in_normalized_text(phrase, normalized):
+            return 5, f"metadata 內容命中 {phrase}（來源：{identity.source}，信心 80%）"
+        if identity.strong and len(identity.tokens) > 1:
+            hits = [token for token in identity.tokens if _phrase_in_normalized_text(token, normalized)]
+            if len(hits) >= 2:
+                return 4, f"metadata 內容命中 {', '.join(hits)}（來源：{identity.source}，信心 64%）"
+    return 0, ""
+
+
 def _app_footprint_score(path: Path, identities: tuple[_AppIdentity, ...]) -> tuple[int, str]:
     path_text = _normalized_app_text(str(path))
     path_tokens = set(_app_tokens(str(path)))
@@ -1159,6 +1579,8 @@ def _app_footprint_score(path: Path, identities: tuple[_AppIdentity, ...]) -> tu
             score = 5
             matched = list(identity.tokens)
         else:
+            if not identity.strong:
+                continue
             hits = [token for token in identity.tokens if token in path_tokens]
             if len(identity.tokens) == 1:
                 if not _is_version_token(identity.tokens[0]) and identity.tokens[0] in _path_name_tokens(path):
@@ -1173,6 +1595,10 @@ def _app_footprint_score(path: Path, identities: tuple[_AppIdentity, ...]) -> tu
             hit_text = ", ".join(matched) if matched else phrase
             best_reason = f"名稱命中 {hit_text}（來源：{source}，信心 {min(99, score * 16)}%）"
     return best_score, best_reason
+
+
+def _score_to_confidence(score: int) -> float:
+    return min(0.99, max(0.0, score * 0.16))
 
 
 def _path_name_tokens(path: Path) -> set[str]:
@@ -1271,6 +1697,11 @@ def _scan_registry_base(
             value_label = "(Default)" if value_name == "" else value_name
             layer = REGISTRY_LAYER if root_name == "HKCU" else BLOCKED_LAYER
             key_label = key_path.rsplit("\\", 1)[-1]
+            evidence = [
+                _evidence("登錄值內容命中", "登錄值內容含有目標路徑或名稱。", weight=0.84 if root_name == "HKCU" else 0.72, kind="positive"),
+            ]
+            if root_name != "HKCU":
+                evidence.append(_evidence("系統層登錄檔", "HKLM / 系統層登錄檔只列出，不由一般模式清理。", weight=-1.0, kind="negative"))
             matches.append(
                 CleanupPlanItem(
                     id=f"registry:{root_name}:{key_path}:{value_name}",
@@ -1288,6 +1719,8 @@ def _scan_registry_base(
                     registry_key=key_path,
                     registry_value_name=value_name,
                     registry_value_data=value_data,
+                    confidence=0.84 if root_name == "HKCU" else 0.72,
+                    evidence=tuple(evidence),
                 )
             )
             if len(matches) >= limit:
@@ -1348,6 +1781,10 @@ def _scan_installer_registry_base(
             continue
         value_label = "(Default)" if value_name == "" else value_name
         key_label = key_path.rsplit("\\", 1)[-1]
+        evidence = (
+            _evidence("Windows Installer 殘留命中", f"登錄 key、值名或內容命中：{matched}。", weight=0.74, kind="positive"),
+            _evidence("系統層登錄檔", "Windows Installer / HKLM 項目可能影響重裝判斷，需管理員模式與備份。", weight=-1.0, kind="negative"),
+        )
         matches.append(
             CleanupPlanItem(
                 id=f"installer_registry:{root_name}:{key_path}:{value_name}",
@@ -1364,6 +1801,8 @@ def _scan_installer_registry_base(
                 registry_key=key_path,
                 registry_value_name=value_name,
                 registry_value_data=value_data,
+                confidence=0.74,
+                evidence=evidence,
             )
         )
         if len(matches) >= limit:
@@ -1496,19 +1935,24 @@ def _non_version_app_tokens(value: str) -> tuple[str, ...]:
 
 
 def _probable_install_folder(target: Path) -> Path | None:
-    parent = target.parent
+    resolved = target.resolve(strict=False)
+    parent = resolved.parent
     local_app_data = _env_path("LOCALAPPDATA")
-    if local_app_data and _is_relative_to(parent, local_app_data / "Programs"):
+    if local_app_data and _is_relative_to(resolved, local_app_data / "Programs"):
         try:
-            relative = parent.relative_to(local_app_data / "Programs")
+            relative = resolved.relative_to(local_app_data / "Programs")
         except ValueError:
             return parent
-        return (local_app_data / "Programs" / relative.parts[0]) if relative.parts else parent
+        if not relative.parts:
+            return resolved
+        if target.suffix and len(relative.parts) == 1:
+            return None
+        return local_app_data / "Programs" / relative.parts[0]
     for env_name in ("ProgramFiles", "ProgramFiles(x86)"):
         program_files = _env_path(env_name)
-        if program_files and _is_relative_to(target.resolve(strict=False), program_files):
+        if program_files and _is_relative_to(resolved, program_files):
             try:
-                relative = target.resolve(strict=False).relative_to(program_files)
+                relative = resolved.relative_to(program_files)
             except ValueError:
                 continue
             if relative.parts and relative.parts[0].casefold() not in {"common files", "windowsapps"}:
@@ -1649,7 +2093,7 @@ def _can_close_process(process: "_RunningProcess") -> tuple[bool, str]:
     if process.app_type in {3, 4, 1000}:  # service, Explorer, critical
         return False, "系統/服務/Explorer 類型"
     if process.path is not None:
-        protected, reason = _is_protected_path(process.path)
+        protected, reason = _is_protected_process_path(process.path)
         if protected:
             return False, f"程序位於系統保護範圍：{reason}"
     return True, ""
@@ -1998,6 +2442,19 @@ def _is_protected_path(path: Path) -> tuple[bool, str]:
         if item
     )
     for root in protected_roots:
+        if _is_relative_to(resolved, root):
+            return True, str(root)
+    if resolved.anchor and resolved == Path(resolved.anchor):
+        return True, "磁碟根目錄"
+    return False, ""
+
+
+def _is_protected_process_path(path: Path) -> tuple[bool, str]:
+    try:
+        resolved = path.expanduser().resolve(strict=False)
+    except OSError:
+        resolved = path.absolute()
+    for root in [item for item in (_env_path("SystemRoot"), _env_path("WINDIR")) if item]:
         if _is_relative_to(resolved, root):
             return True, str(root)
     if resolved.anchor and resolved == Path(resolved.anchor):

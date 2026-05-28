@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFileIconProvider,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -25,6 +26,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStyle,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -32,6 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 from launcher.core.context_model import LauncherContext
+from launcher.core.state_store import AppStateStore
 from launcher.core.safe_cleanup import (
     BLOCKED_LAYER,
     PROCESS_LAYER,
@@ -46,13 +49,20 @@ from launcher.core.safe_cleanup import (
     ScanCancelled,
     apply_cleanup_plan,
     build_cleanup_plan,
+    confidence_band,
+    evidence_summary,
     run_official_uninstaller,
     scan_stage_count,
 )
 from launcher.ui.installed_app_picker_dialog import InstalledApplicationPickerDialog
 from launcher.ui.quarantine_browser_dialog import QuarantineBrowserDialog
 from launcher.ui.registry_source_dialog import RegistrySourceDialog
-from launcher.ui.theme import preferences_stylesheet
+from launcher.ui.safe_cleanup.activity_log_tab import ActivityLogTab
+from launcher.ui.safe_cleanup.header_card import TargetHeaderCard
+from launcher.ui.safe_cleanup.one_click_dialogs import OneClickResultDialog, OneClickSummaryDialog, default_one_click_ids
+from launcher.ui.safe_cleanup.overview_tab import OverviewTab
+from launcher.ui.safe_cleanup.quarantine_tab import QuarantineTab
+from launcher.ui.theme import safe_cleanup_stylesheet, theme_by_name
 
 
 class SafeCleanupDialog(QDialog):
@@ -71,85 +81,49 @@ class SafeCleanupDialog(QDialog):
         self._apply_threads: list[QThread] = []
         self._apply_workers: list[_CleanupApplyWorker] = []
         self._suggestion_columns_initialized = False
+        self._pending_one_click_result = False
 
         self.setWindowTitle("安全清除工作台")
-        self.setMinimumSize(1120, 700)
+        self.setMinimumSize(1200, 760)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
 
-        title = QLabel("安全清除工作台")
-        title.setObjectName("PreferenceTitle")
-        hint = QLabel("先選一個檔案/資料夾，或直接輸入已被刪除的舊路徑/產品名稱；工作台會顯示目標身分、殘留足跡、工具紀錄與登錄檔候選。")
-        hint.setObjectName("PreferenceHint")
-        hint.setWordWrap(True)
-
+        self._header = TargetHeaderCard()
+        self._header.analyze_requested.connect(self.analyze_typed_target)
+        self._header.refresh_requested.connect(self.refresh_plan)
+        self._header.cancel_requested.connect(self.cancel_scan)
+        self._header.one_click_requested.connect(self._on_one_click_clean)
+        self._header.pick_app_requested.connect(self.pick_installed_app)
+        self._header.pick_file_requested.connect(self.pick_file)
+        self._header.pick_folder_requested.connect(self.pick_folder)
         self._summary = QLabel()
-        self._summary.setObjectName("PreferenceHint")
-        self._target_path = QLineEdit()
-        self._target_path.setPlaceholderText("可輸入舊 exe 路徑、資料夾路徑或產品名稱，例如 Tekla Structures 2026")
-        self._target_path.returnPressed.connect(self.analyze_typed_target)
-
-        app_button = QPushButton("選擇應用")
-        app_button.clicked.connect(self.pick_installed_app)
-        file_button = QPushButton("選擇檔案")
-        file_button.clicked.connect(self.pick_file)
-        folder_button = QPushButton("選擇資料夾")
-        folder_button.clicked.connect(self.pick_folder)
-        typed_button = QPushButton("分析輸入")
-        typed_button.clicked.connect(self.analyze_typed_target)
-        self._refresh_button = QPushButton("重新分析")
-        self._refresh_button.clicked.connect(self.refresh_plan)
-        self._cancel_scan_button = QPushButton("取消分析")
-        self._cancel_scan_button.clicked.connect(self.cancel_scan)
-        self._cancel_scan_button.setEnabled(False)
-
-        target_controls = QHBoxLayout()
-        target_controls.addWidget(QLabel("分析目標"))
-        target_controls.addWidget(self._target_path, 1)
-        target_controls.addWidget(app_button)
-        target_controls.addWidget(file_button)
-        target_controls.addWidget(folder_button)
-        target_controls.addWidget(typed_button)
-        target_controls.addWidget(self._refresh_button)
-        target_controls.addWidget(self._cancel_scan_button)
+        self._summary.setObjectName("Muted")
+        self._summary.setWordWrap(True)
+        self._target_path: QLineEdit = self._header.target_path_edit
+        self._refresh_button = self._header.refresh_button
+        self._cancel_scan_button = self._header.cancel_button
 
         self._scan_progress = QProgressBar()
         self._scan_progress.setRange(0, scan_stage_count())
-        self._scan_progress.setTextVisible(False)
-        self._scan_progress.setFixedHeight(8)
+        self._scan_progress.setTextVisible(True)
+        self._scan_progress.setFixedHeight(18)
         self._scan_progress.hide()
 
-        self._uninstall_panel = QWidget()
-        uninstall_layout = QHBoxLayout(self._uninstall_panel)
-        uninstall_layout.setContentsMargins(10, 8, 10, 8)
-        uninstall_layout.setSpacing(10)
-        uninstall_icon = QLabel()
-        uninstall_icon.setPixmap(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton).pixmap(18, 18))
-        self._uninstall_label = QLabel()
-        self._uninstall_label.setObjectName("PreferenceHint")
-        self._uninstall_label.setWordWrap(True)
-        self._uninstall_button = QPushButton("執行官方解除安裝")
-        self._uninstall_button.clicked.connect(self.run_detected_uninstaller)
-        uninstall_layout.addWidget(uninstall_icon)
-        uninstall_layout.addWidget(self._uninstall_label, 1)
-        uninstall_layout.addWidget(self._uninstall_button)
-        self._uninstall_panel.hide()
-
         self._identity = QLabel()
-        self._identity.setObjectName("PreferenceTitle")
+        self._identity.setObjectName("H1")
         self._identity.setWordWrap(True)
         self._conclusion = QLabel()
-        self._conclusion.setObjectName("PreferenceHint")
+        self._conclusion.setObjectName("Muted")
         self._conclusion.setWordWrap(True)
 
         self._info_tree = QTreeWidget()
         self._info_tree.setColumnCount(2)
         self._info_tree.setHeaderLabels(["資訊", "內容"])
-        self._info_tree.setMinimumWidth(390)
+        self._info_tree.setMinimumWidth(320)
         self._info_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
 
         self._tree = QTreeWidget()
-        self._tree.setColumnCount(5)
-        self._tree.setHeaderLabels(["套用 / 狀態", "清除建議", "動作", "判斷註解", "位置 / 登錄檔"])
+        self._tree.setColumnCount(6)
+        self._tree.setHeaderLabels(["套用 / 狀態", "清除建議", "動作", "判斷註解", "位置 / 登錄檔", "信心"])
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._tree.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
@@ -171,19 +145,23 @@ class SafeCleanupDialog(QDialog):
         self._include_registry.setToolTip("只允許刪除 HKCU 值；HKLM / 系統層只列出。")
         self._include_registry.stateChanged.connect(lambda _state: self._refresh_item_flags())
         self._system_note = QLabel("系統層：需管理員深度清理")
-        self._system_note.setObjectName("PreferenceHint")
+        self._system_note.setObjectName("Muted")
         self._system_note.setToolTip("HKLM / Windows Installer 項目不由一般清理按鈕執行；需後續管理員模式、.reg 備份與還原紀錄。")
 
         self._apply_button = QPushButton("隔離 / 清理勾選項目")
+        self._apply_button.setObjectName("Primary")
         self._apply_button.setDefault(True)
         self._apply_button.clicked.connect(self.apply_selected)
         self._locate_button = QPushButton("檢視 / 定位來源")
+        self._locate_button.setObjectName("Ghost")
         self._locate_button.setToolTip("開啟檔案所在位置；登錄檔項目會用內建檢視器列出 key 內所有值，必要時再外部開啟 Regedit。")
         self._locate_button.clicked.connect(self.locate_selected_item)
         self._locate_button.setEnabled(False)
         quarantine_button = QPushButton("管理隔離區")
+        quarantine_button.setObjectName("Ghost")
         quarantine_button.clicked.connect(self.open_quarantine_browser)
         close_button = QPushButton("關閉")
+        close_button.setObjectName("Ghost")
         close_button.clicked.connect(self.accept)
 
         toggles = QHBoxLayout()
@@ -193,57 +171,124 @@ class SafeCleanupDialog(QDialog):
         toggles.addWidget(self._system_note)
         toggles.addStretch(1)
 
+        self._overview_tab = OverviewTab()
+        self._overview_tab.layer_selected.connect(self._focus_suggestion_layer)
+        self._overview_tab.one_click_requested.connect(self._on_one_click_clean)
+        self._overview_tab.run_uninstaller_requested.connect(self.run_detected_uninstaller)
+        self._uninstall_panel = self._overview_tab.uninstaller_banner
+        self._uninstall_label = self._overview_tab.uninstaller_label
+        self._uninstall_button = self._overview_tab.uninstaller_button
+
+        info_panel = QWidget()
+        info_layout = QVBoxLayout(info_panel)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(8)
+        info_title = QLabel("目標資訊")
+        info_title.setObjectName("H2")
+        info_layout.addWidget(info_title)
+        info_layout.addWidget(self._identity)
+        info_layout.addWidget(self._conclusion)
+        info_layout.addWidget(self._info_tree, 1)
+
+        suggestion_body = QWidget()
+        suggestion_body_layout = QVBoxLayout(suggestion_body)
+        suggestion_body_layout.setContentsMargins(0, 0, 0, 0)
+        suggestion_body_layout.setSpacing(10)
+        suggestion_panel = QWidget()
+        suggestion_layout = QVBoxLayout(suggestion_panel)
+        suggestion_layout.setContentsMargins(0, 0, 0, 0)
+        suggestion_layout.setSpacing(0)
+        suggestion_title = QLabel("清除建議")
+        suggestion_title.setObjectName("H1")
+        suggestion_body_layout.addWidget(suggestion_title)
+        suggestion_body_layout.addWidget(self._summary)
+        suggestion_body_layout.addWidget(self._tree, 1)
+        suggestion_body_layout.addLayout(toggles)
+        suggestion_body_layout.addWidget(self._detail)
+
+        suggestion_splitter = QSplitter(Qt.Orientation.Horizontal)
+        suggestion_splitter.addWidget(info_panel)
+        suggestion_splitter.addWidget(suggestion_body)
+        suggestion_splitter.setStretchFactor(0, 0)
+        suggestion_splitter.setStretchFactor(1, 1)
+        suggestion_splitter.setSizes([340, 820])
+        suggestion_layout.addWidget(suggestion_splitter)
+
+        self._quarantine_tab = QuarantineTab()
+        self._quarantine_tab.open_browser_requested.connect(self.open_quarantine_browser)
+        self._activity_tab = ActivityLogTab()
+
+        self._tabs = QTabWidget()
+        self._tabs.setDocumentMode(True)
+        self._tabs.addTab(self._overview_tab, "概覽")
+        self._tabs.addTab(suggestion_panel, "清除建議")
+        self._tabs.addTab(self._quarantine_tab, "隔離區")
+        self._tabs.addTab(self._activity_tab, "活動紀錄")
+
         buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(10)
         buttons.addWidget(quarantine_button)
         buttons.addStretch(1)
         buttons.addWidget(self._locate_button)
         buttons.addWidget(self._apply_button)
         buttons.addWidget(close_button)
 
-        info_panel = QWidget()
-        info_layout = QVBoxLayout(info_panel)
-        info_layout.setContentsMargins(0, 0, 0, 0)
-        info_layout.setSpacing(8)
-        info_layout.addWidget(self._identity)
-        info_layout.addWidget(self._conclusion)
-        info_layout.addWidget(self._info_tree, 1)
-
-        suggestion_panel = QWidget()
-        suggestion_layout = QVBoxLayout(suggestion_panel)
-        suggestion_layout.setContentsMargins(0, 0, 0, 0)
-        suggestion_layout.setSpacing(8)
-        suggestion_title = QLabel("清除建議")
-        suggestion_title.setObjectName("PreferenceTitle")
-        suggestion_layout.addWidget(suggestion_title)
-        suggestion_layout.addWidget(self._summary)
-        suggestion_layout.addWidget(self._tree, 1)
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(info_panel)
-        splitter.addWidget(suggestion_panel)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        footer_wrap = QFrame()
+        footer_wrap.setObjectName("FooterWrap")
+        footer_layout = QVBoxLayout(footer_wrap)
+        footer_layout.setContentsMargins(20, 12, 20, 16)
+        footer_layout.addLayout(buttons)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-        layout.addWidget(title)
-        layout.addWidget(hint)
-        layout.addLayout(target_controls)
+        layout.setContentsMargins(20, 20, 20, 0)
+        layout.setSpacing(14)
+        layout.addWidget(self._header)
         layout.addWidget(self._scan_progress)
-        layout.addWidget(self._uninstall_panel)
-        layout.addWidget(splitter, 1)
-        layout.addLayout(toggles)
-        layout.addWidget(self._detail)
-        layout.addLayout(buttons)
+        layout.addWidget(self._tabs, 1)
+        layout.addWidget(footer_wrap)
 
-        self.setStyleSheet(preferences_stylesheet())
+        self.setStyleSheet(safe_cleanup_stylesheet(theme_by_name(AppStateStore().theme_name)))
         self._show_scan_placeholder()
         self.refresh_plan()
 
     def open_quarantine_browser(self) -> None:
         dialog = QuarantineBrowserDialog(parent=self)
         dialog.exec()
+
+    def _on_one_click_clean(self) -> None:
+        if self._scan_active:
+            QMessageBox.information(self, "安全清除工作台", "目前仍在分析，請稍候完成後再執行。")
+            return
+        if self._apply_active:
+            QMessageBox.information(self, "安全清除工作台", "目前正在套用清理，請稍候完成。")
+            return
+        selected_ids = default_one_click_ids(self._plan)
+        if not selected_ids:
+            QMessageBox.information(self, "安全清除工作台", "目前沒有符合一鍵安全清除規則的項目。")
+            return
+        dialog = OneClickSummaryDialog(self._plan, selected_ids=selected_ids, parent=self)
+        dialog.setStyleSheet(self.styleSheet())
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._pending_one_click_result = True
+        self._start_apply(selected_ids)
+
+    def _focus_suggestion_layer(self, layer: str) -> None:
+        self._tabs.setCurrentIndex(1)
+        if layer == "uninstaller":
+            self.run_detected_uninstaller()
+            return
+        for index in range(self._tree.topLevelItemCount()):
+            group = self._tree.topLevelItem(index)
+            group_item = self._item_by_id.get(str(group.data(0, Qt.ItemDataRole.UserRole)))
+            if group_item is not None:
+                continue
+            if _layer_label(layer) in group.text(0) or layer in group.text(0):
+                group.setExpanded(True)
+                if group.childCount():
+                    self._tree.setCurrentItem(group.child(0))
+                return
 
     def run_detected_uninstaller(self) -> None:
         if self._scan_active:
@@ -440,12 +485,14 @@ class SafeCleanupDialog(QDialog):
         total = max(total, 1)
         self._scan_progress.setRange(0, total)
         self._scan_progress.setValue(max(0, min(current, total)))
+        self._scan_progress.setFormat(f"{current}/{total}")
         self._summary.setText(f"套用中：{current} / {total}｜{label}")
         self._detail.setPlainText(f"正在套用清理：{label}\n請不要關閉相關檔案或手動移動目標。")
 
     def _on_apply_finished(self, result: object) -> None:
         if not isinstance(result, CleanupApplyResult):
             self._set_apply_controls(False)
+            self._pending_one_click_result = False
             self._detail.setPlainText("套用完成，但回傳結果格式不正確。")
             return
         self._set_apply_controls(False)
@@ -462,12 +509,24 @@ class SafeCleanupDialog(QDialog):
             lines.append("")
             lines.extend(f"錯誤：{error}" for error in result.errors)
         self._detail.setPlainText("\n".join(lines))
-        QMessageBox.information(self, "安全清除工作台", "\n".join(lines[:5]))
+        self._activity_tab.set_text("\n".join(lines))
+        if self._pending_one_click_result:
+            self._pending_one_click_result = False
+            dialog = OneClickResultDialog(result, parent=self)
+            dialog.setStyleSheet(self.styleSheet())
+            dialog.exec()
+            if dialog.open_quarantine_requested:
+                self._tabs.setCurrentIndex(2)
+                self.open_quarantine_browser()
+        else:
+            QMessageBox.information(self, "安全清除工作台", "\n".join(lines[:5]))
         self.refresh_plan()
 
     def _on_apply_failed(self, message: str) -> None:
         self._set_apply_controls(False)
+        self._pending_one_click_result = False
         self._detail.setPlainText(message)
+        self._activity_tab.set_text(message)
         QMessageBox.warning(self, "安全清除工作台", f"套用清理失敗：\n{message.splitlines()[-1] if message.splitlines() else message}")
 
     def _remove_apply_thread(self, thread: QThread, worker: "_CleanupApplyWorker") -> None:
@@ -514,6 +573,7 @@ class SafeCleanupDialog(QDialog):
         self._summary.setText(f"分析中：{name} ({index} / {total})")
         self._scan_progress.setRange(0, total)
         self._scan_progress.setValue(max(0, min(index, total)))
+        self._scan_progress.setFormat(f"{name} ({index}/{total})")
 
     def _on_scan_finished(self, generation: int, plan: CleanupPlan) -> None:
         if generation != self._scan_generation:
@@ -555,10 +615,15 @@ class SafeCleanupDialog(QDialog):
         if active:
             self._scan_progress.setRange(0, scan_stage_count())
             self._scan_progress.setValue(0)
+            self._scan_progress.setFormat("分析中")
         self._cancel_scan_button.setEnabled(active)
         self._refresh_button.setEnabled(not active and not self._apply_active)
         self._apply_button.setEnabled(not active and not self._apply_active)
         self._locate_button.setEnabled(not active and not self._apply_active and _can_locate_item(self._current_plan_item()))
+        self._header.set_scanning(active)
+        self._overview_tab.set_scanning(active)
+        if not active:
+            self._update_one_click_state()
 
     def _set_apply_controls(self, active: bool) -> None:
         self._apply_active = active
@@ -566,6 +631,7 @@ class SafeCleanupDialog(QDialog):
         if active:
             self._scan_progress.setRange(0, 1)
             self._scan_progress.setValue(0)
+            self._scan_progress.setFormat("套用中")
             self._apply_button.setText("套用中...")
             self._summary.setText("套用中：準備處理勾選項目")
         else:
@@ -575,44 +641,58 @@ class SafeCleanupDialog(QDialog):
         self._apply_button.setEnabled(not active and not self._scan_active)
         self._locate_button.setEnabled(not active and _can_locate_item(self._current_plan_item()))
         self._uninstall_button.setEnabled(not active and not self._scan_active)
+        self._header.set_applying(active)
+        if not active:
+            self._update_one_click_state()
+
+    def _update_one_click_state(self) -> None:
+        enabled = bool(default_one_click_ids(self._plan)) and not self._scan_active and not self._apply_active
+        self._header.set_one_click_enabled(enabled)
+        self._overview_tab.one_click_button.setEnabled(enabled)
 
     def _show_scan_placeholder(self) -> None:
         self._tree.blockSignals(True)
         self._tree.clear()
         self._item_by_id = {}
         self._target_path.setText(_target_path_text(self._plan.targets))
+        self._header.set_plan(self._plan)
+        self._header.set_one_click_enabled(False)
         self._identity.setText("正在分析目標")
         self._conclusion.setText("正在掃描目標、關聯檔、捷徑、執行中程序與登錄檔候選。")
         self._summary.setText("分析中...")
         self._uninstall_panel.hide()
-        item = QTreeWidgetItem(["分析中", "請稍候", "無動作", "背景分析進行中，完成後會自動更新清除建議。", ""])
+        self._overview_tab.set_scanning(True)
+        item = QTreeWidgetItem(["分析中", "請稍候", "無動作", "背景分析進行中，完成後會自動更新清除建議。", "", ""])
         item.setFirstColumnSpanned(True)
         self._tree.addTopLevelItem(item)
         self._configure_suggestion_columns()
         self._tree.blockSignals(False)
         self._populate_info_tree()
         self._detail.setPlainText("分析中；大型資料夾或登錄檔候選較多時，視窗仍可移動與關閉。")
+        self._activity_tab.set_text("分析中；大型資料夾或登錄檔候選較多時，視窗仍可移動與關閉。")
 
     def _populate(self) -> None:
         self._tree.blockSignals(True)
         self._tree.clear()
         self._item_by_id = {item.id: item for item in self._plan.items}
         self._target_path.setText(_target_path_text(self._plan.targets))
+        self._header.set_plan(self._plan)
         self._identity.setText(_identity_text(self._plan))
         self._conclusion.setText(_analysis_conclusion(self._plan))
         self._summary.setText(_summary_text(self._plan))
+        self._overview_tab.set_plan(self._plan)
         self._update_uninstaller_panel()
         self._populate_info_tree()
         for layer in (SAFE_LAYER, PROCESS_LAYER, REVIEW_LAYER, REGISTRY_LAYER, BLOCKED_LAYER):
             layer_items = [item for item in self._plan.items if item.layer == layer]
             if not layer_items:
                 continue
-            group = QTreeWidgetItem([_layer_title(layer, len(layer_items)), "", "", "", ""])
+            group = QTreeWidgetItem([_layer_title(layer, len(layer_items)), "", "", "", "", ""])
             group.setIcon(0, self._layer_icon(layer))
             group.setFirstColumnSpanned(True)
             self._tree.addTopLevelItem(group)
             for item in layer_items:
-                child = QTreeWidgetItem(["", item.label, item.action, item.note, _item_location(item)])
+                child = QTreeWidgetItem(["", item.label, item.action, item.note, _item_location(item), _confidence_text(item)])
                 child.setData(0, Qt.ItemDataRole.UserRole, item.id)
                 child.setIcon(1, self._item_icon(item))
                 child.setCheckState(0, Qt.CheckState.Checked if item.checked_default and item.executable else Qt.CheckState.Unchecked)
@@ -622,6 +702,10 @@ class SafeCleanupDialog(QDialog):
         self._configure_suggestion_columns()
         self._tree.blockSignals(False)
         self._refresh_item_flags()
+        self._update_one_click_state()
+        self._activity_tab.set_text(
+            f"分析完成：{datetime.fromtimestamp(self._plan.created_at).strftime('%Y-%m-%d %H:%M:%S')}\n{_summary_text(self._plan)}"
+        )
         if self._tree.topLevelItemCount() > 0 and self._tree.topLevelItem(0).childCount() > 0:
             self._tree.setCurrentItem(self._tree.topLevelItem(0).child(0))
 
@@ -633,7 +717,7 @@ class SafeCleanupDialog(QDialog):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
         if self._suggestion_columns_initialized:
             return
-        default_widths = (88, 360, 110, 680, 860)
+        default_widths = (88, 360, 110, 680, 860, 90)
         for column, width in enumerate(default_widths):
             self._tree.setColumnWidth(column, width)
         self._suggestion_columns_initialized = True
@@ -661,6 +745,11 @@ class SafeCleanupDialog(QDialog):
         safety_group.addChild(_info_item("預設策略", "檔案先移到隔離區；不直接永久刪除"))
         safety_group.addChild(_info_item("系統層待確認", f"{self._plan.count_by_layer(BLOCKED_LAYER)} 項需管理員模式，不在一般模式執行"))
         safety_group.addChild(_info_item("需人工確認", f"{self._plan.count_by_layer(REVIEW_LAYER)} 項"))
+        high_count = sum(1 for item in self._plan.items if confidence_band(item.confidence) == "high")
+        medium_count = sum(1 for item in self._plan.items if confidence_band(item.confidence) == "medium")
+        weak_count = sum(1 for item in self._plan.items if confidence_band(item.confidence) == "weak")
+        safety_group.addChild(_info_item("證據分層", f"高信心 {high_count}｜中信心 {medium_count}｜弱關聯 {weak_count}"))
+        safety_group.addChild(_info_item("自動策略", "低信心項目不會被隱藏；只是不預設勾選，也不進一鍵安全清除。"))
 
         relation_group = QTreeWidgetItem(["關聯資訊", ""])
         relation_group.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirLinkIcon))
@@ -676,6 +765,7 @@ class SafeCleanupDialog(QDialog):
             uninstall_branch.addChild(_info_item("結果", "未找到"))
         for title, kinds in (
             ("疑似安裝資料夾", {"install_folder"}),
+            ("安裝檔暫存", {"leftover_installer"}),
             ("應用程式足跡", {"app_footprint_file", "app_footprint_folder"}),
             ("執行中 / 可能佔用", {"running_process"}),
             ("捷徑", {"shortcut"}),
@@ -757,9 +847,17 @@ class SafeCleanupDialog(QDialog):
             f"層級：{_layer_label(item.layer)}",
             f"類型：{item.kind}",
             f"動作：{item.action}",
+            f"信心：{_confidence_text(item)}",
+            f"證據摘要：{evidence_summary(item)}",
             f"註解：{item.note}",
             f"可執行：{'是' if item.executable else '否'}",
         ]
+        if item.evidence:
+            lines.append("")
+            lines.append("證據帳本：")
+            for evidence in item.evidence:
+                sign = "+" if evidence.weight > 0 else "-" if evidence.weight < 0 else " "
+                lines.append(f"{sign} {evidence.label}：{evidence.detail}")
         if item.path:
             lines.append(f"路徑：{item.path}")
             lines.append(f"大小：{_format_size(item.size_bytes)}")
@@ -919,9 +1017,10 @@ def _context_targets(context: LauncherContext) -> list[Path]:
 
 
 def _primary_uninstaller(plan: CleanupPlan) -> OfficialUninstaller | None:
-    if not plan.official_uninstallers:
-        return None
-    return plan.official_uninstallers[0]
+    for uninstaller in plan.official_uninstallers:
+        if not uninstaller.is_fork_relative and uninstaller.confidence >= 0.6:
+            return uninstaller
+    return None
 
 
 def _target_path_text(targets: tuple[Path, ...]) -> str:
@@ -953,20 +1052,24 @@ def _analysis_conclusion(plan: CleanupPlan) -> str:
     process_count = _count_kinds(plan, {"running_process"})
     registry_count = _count_kinds(plan, {"registry_value", "installer_registry_value"})
     footprint_count = _count_kinds(plan, {"app_footprint_file", "app_footprint_folder"})
+    installer_cache_count = _count_kinds(plan, {"leftover_installer"})
     associated_count = _count_kinds(plan, {"associated_file", "associated_folder"})
     uninstall_count = len(plan.official_uninstallers)
-    if not target.exists() and (footprint_count or registry_count or shortcut_count or uninstall_count):
+    if not target.exists() and (footprint_count or installer_cache_count or registry_count or shortcut_count or uninstall_count):
         return (
             "判斷：目標本體不存在，已進入退役後殘渣掃描。"
             "這通常發生在主程式被其他解除安裝器硬刪後；"
-            f"目前找到官方解除安裝 {uninstall_count}、應用程式足跡 {footprint_count}、捷徑 {shortcut_count}、登錄檔/Installer 殘留 {registry_count}。"
+            f"目前找到官方解除安裝 {uninstall_count}、安裝檔暫存 {installer_cache_count}、應用程式足跡 {footprint_count}、"
+            f"捷徑 {shortcut_count}、登錄檔/Installer 殘留 {registry_count}。"
         )
-    if target.suffix.casefold() == ".exe" and (uninstall_count or install_count or footprint_count or registry_count or shortcut_count):
+    if target.suffix.casefold() == ".exe" and (uninstall_count or install_count or installer_cache_count or footprint_count or registry_count or shortcut_count):
         return (
             "判斷：這看起來像一個應用程式執行檔。建議先跑官方解除安裝，再清殘留；"
-            f"目前找到官方解除安裝 {uninstall_count}、安裝資料夾 {install_count}、應用程式足跡 {footprint_count}、"
+            f"目前找到官方解除安裝 {uninstall_count}、安裝資料夾 {install_count}、安裝檔暫存 {installer_cache_count}、應用程式足跡 {footprint_count}、"
             f"執行中/可能佔用 {process_count}、捷徑 {shortcut_count}、登錄檔候選 {registry_count}。"
         )
+    if installer_cache_count:
+        return f"判斷：找到 {installer_cache_count} 個疑似安裝檔暫存；可先隔離釋放空間，之後仍可從隔離區還原。"
     if footprint_count:
         return f"判斷：找到 {footprint_count} 個疑似應用程式足跡；大型軟體建議逐項確認來源後再隔離。"
     if process_count:
@@ -981,6 +1084,7 @@ def _summary_text(plan: CleanupPlan) -> str:
         f"安全 {plan.count_by_layer(SAFE_LAYER)}｜"
         f"執行中 {plan.count_by_layer(PROCESS_LAYER)}｜"
         f"需確認 {plan.count_by_layer(REVIEW_LAYER)}｜"
+        f"安裝檔暫存 {_count_kinds(plan, {'leftover_installer'})}｜"
         f"足跡 {_count_kinds(plan, {'app_footprint_file', 'app_footprint_folder'})}｜"
         f"登錄檔 {_count_kinds(plan, {'registry_value', 'installer_registry_value'})}｜"
         f"官方解除安裝 {len(plan.official_uninstallers)}｜"
@@ -1016,6 +1120,18 @@ def _item_location(item: CleanupPlanItem) -> str:
     if item.registry_key:
         return f"{item.root_name}\\{item.registry_key}\\{item.registry_value_name or '(Default)'}"
     return ""
+
+
+def _confidence_text(item: CleanupPlanItem) -> str:
+    confidence = max(0.0, min(1.0, item.confidence))
+    band = confidence_band(confidence)
+    if band == "high":
+        label = "高"
+    elif band == "medium":
+        label = "中"
+    else:
+        label = "弱"
+    return f"{label} {int(confidence * 100)}%"
 
 
 def _non_apply_status(item: CleanupPlanItem) -> str:
@@ -1072,7 +1188,7 @@ def _apply_row_style(row: QTreeWidgetItem, item: CleanupPlanItem) -> None:
         REGISTRY_LAYER: "#7c2d12",
         BLOCKED_LAYER: "#6b7280",
     }.get(item.layer, "#0c1320")
-    for column in range(5):
+    for column in range(6):
         row.setForeground(column, QBrush(QColor(color)))
 
 

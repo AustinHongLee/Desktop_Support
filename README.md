@@ -12,7 +12,11 @@ The launcher is intentionally small:
 
 ## Start
 
-一般使用者只需要雙擊根目錄的 `START.vbs`。
+一般使用者建議雙擊根目錄的 `START.cmd`。它會啟動工具列；如果啟動失敗，視窗會停住並顯示 `launcher_startup.log`。
+
+`START.vbs` 仍保留為靜默背景啟動入口，但不建議拿來除錯；它若失敗只會寫入 `%LOCALAPPDATA%\EngineeringLauncher\logs\launcher_startup.log`。
+
+啟動問題請雙擊 `START_DEBUG.cmd`，它會用前景模式啟動並保留錯誤輸出。
 
 右鍵登錄管理請雙擊根目錄的 `RIGHT_CLICK_MANAGER.vbs`。它會開啟管理視窗，讓不熟 regedit 的使用者直接安裝、修復或移除 Explorer 右鍵入口。
 

@@ -20,6 +20,8 @@ class LauncherTray:
         palette_action.triggered.connect(getattr(self._dock, "open_palette"))
         iso_action = QAction("開啟 ISO PDF 命名")
         iso_action.triggered.connect(getattr(self._dock, "open_iso_workbench"))
+        lock_action = QAction("開啟檔案佔用檢查器")
+        lock_action.triggered.connect(getattr(self._dock, "open_file_lock_checker"))
         quit_action = QAction("結束工程工具列")
         quit_action.triggered.connect(self._quit)
         menu.addAction(show_action)
@@ -27,6 +29,7 @@ class LauncherTray:
         menu.addSeparator()
         menu.addAction(palette_action)
         menu.addAction(iso_action)
+        menu.addAction(lock_action)
         menu.addSeparator()
         menu.addAction(quit_action)
 

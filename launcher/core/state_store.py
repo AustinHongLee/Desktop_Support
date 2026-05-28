@@ -11,7 +11,7 @@ from launcher.core.context_model import LauncherContext
 SCHEMA_VERSION = 1
 ISO_NAMING_PROFILE_LIMIT = 50
 DEFAULT_THEME_NAME = "graphite-light"
-SUPPORTED_THEME_NAMES = {"graphite-light", "engineering-blue-2"}
+SUPPORTED_THEME_NAMES = {"graphite-light", "graphite-dark", "engineering-blue-2"}
 
 
 def default_state_path() -> Path:

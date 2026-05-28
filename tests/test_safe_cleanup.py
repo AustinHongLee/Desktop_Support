@@ -25,6 +25,7 @@ from launcher.core.safe_cleanup import (
     ScanCancelled,
     apply_cleanup_plan,
     build_cleanup_plan,
+    confidence_band,
     delete_quarantine_session,
     list_quarantine_sessions,
     run_official_uninstaller,
@@ -48,6 +49,23 @@ class SafeCleanupTests(unittest.TestCase):
         layers = {item.label: item.layer for item in plan.items}
         self.assertEqual(layers["ABC.pdf"], SAFE_LAYER)
         self.assertEqual(layers["ABC_page_001.pdf"], REVIEW_LAYER)
+
+    def test_plan_items_carry_evidence_without_hiding_low_confidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "ABC.pdf"
+            sibling = root / "ABC_page_001.pdf"
+            target.write_text("pdf", encoding="utf-8")
+            sibling.write_text("page", encoding="utf-8")
+
+            with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                plan = build_cleanup_plan(LauncherContext.from_paths([target]), state_path=root / "state.json")
+
+        items = {item.label: item for item in plan.items}
+        self.assertTrue(items["ABC.pdf"].evidence)
+        self.assertTrue(items["ABC_page_001.pdf"].evidence)
+        self.assertEqual(confidence_band(items["ABC_page_001.pdf"].confidence), "medium")
+        self.assertFalse(items["ABC_page_001.pdf"].checked_default)
 
     def test_context_folder_is_review_not_default_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -74,6 +92,199 @@ class SafeCleanupTests(unittest.TestCase):
         install_item = next(item for item in plan.items if item.kind == "install_folder")
         self.assertEqual(install_item.layer, REVIEW_LAYER)
         self.assertEqual(Path(install_item.path), app_root)
+
+    def test_localappdata_program_folder_target_does_not_match_sibling_apps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            programs_root = root / "Programs"
+            app_root = programs_root / "cursor"
+            sibling_root = programs_root / "Microsoft VS Code"
+            app_root.mkdir(parents=True)
+            sibling_root.mkdir(parents=True)
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(root)}):
+                self.assertEqual(safe_cleanup_module._probable_install_folder(app_root), app_root)
+                values = {
+                    "DisplayName": "Microsoft Visual Studio Code (User)",
+                    "InstallLocation": str(sibling_root),
+                    "DisplayIcon": str(sibling_root / "Code.exe"),
+                    "UninstallString": str(sibling_root / "uninstall.exe"),
+                }
+                score, reasons = safe_cleanup_module._uninstaller_match_score(values, [app_root])
+
+        self.assertEqual(score, 0)
+        self.assertEqual(reasons, [])
+
+    def test_localappdata_programs_root_is_not_install_folder_for_direct_exe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            programs_root = root / "Programs"
+            target = programs_root / "Cursor.exe"
+            sibling_root = programs_root / "Microsoft VS Code"
+            programs_root.mkdir(parents=True)
+            target.write_text("x", encoding="utf-8")
+            sibling_root.mkdir()
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(root)}):
+                self.assertIsNone(safe_cleanup_module._probable_install_folder(target))
+                values = {
+                    "DisplayName": "Microsoft Visual Studio Code (User)",
+                    "InstallLocation": str(sibling_root),
+                    "DisplayIcon": str(sibling_root / "Code.exe"),
+                    "UninstallString": str(sibling_root / "uninstall.exe"),
+                }
+                score, reasons = safe_cleanup_module._uninstaller_match_score(values, [target])
+
+        self.assertEqual(score, 0)
+        self.assertEqual(reasons, [])
+
+    def test_folder_target_keeps_own_app_identity_for_footprints(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "LocalAppData"
+            roaming = root / "RoamingAppData"
+            program_data = root / "ProgramData"
+            user_profile = root / "User"
+            target = local / "Programs" / "cursor"
+            cursor_footprint = roaming / "Cursor"
+            target.mkdir(parents=True)
+            cursor_footprint.mkdir(parents=True)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LOCALAPPDATA": str(local),
+                    "APPDATA": str(roaming),
+                    "ProgramData": str(program_data),
+                    "USERPROFILE": str(user_profile),
+                },
+            ):
+                with patch("launcher.core.safe_cleanup._official_uninstallers", return_value=[]):
+                    with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                        plan = build_cleanup_plan(LauncherContext(folder=target, source="test"), state_path=root / "state.json")
+
+        footprints = {Path(item.path): item for item in plan.items if item.kind == "app_footprint_folder"}
+        self.assertIn(cursor_footprint, footprints)
+        self.assertGreaterEqual(footprints[cursor_footprint].confidence, 0.8)
+
+    def test_product_name_finds_nested_updater_pending_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "LocalAppData"
+            roaming = root / "RoamingAppData"
+            program_data = root / "ProgramData"
+            user_profile = root / "User"
+            pending = local / "project-meta-updater" / "pending"
+            pending.mkdir(parents=True)
+            installer = pending / "Heptabase-Setup-1.57.0.exe"
+            metadata = pending / "update-info.json"
+            installer.write_bytes(b"installer")
+            metadata.write_text('{"name":"Heptabase","path":"Heptabase-Setup-1.57.0.exe"}', encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LOCALAPPDATA": str(local),
+                    "APPDATA": str(roaming),
+                    "ProgramData": str(program_data),
+                    "USERPROFILE": str(user_profile),
+                },
+            ):
+                with patch("launcher.core.safe_cleanup._official_uninstallers", return_value=[]):
+                    with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                        plan = build_cleanup_plan(LauncherContext.from_paths([Path("Heptabase")]), state_path=root / "state.json")
+
+        installers = {Path(item.path): item for item in plan.items if item.kind == "leftover_installer"}
+        footprints = {Path(item.path): item for item in plan.items if item.kind == "app_footprint_file"}
+        self.assertIn(installer, installers)
+        self.assertIn(metadata, footprints)
+        self.assertEqual(installers[installer].layer, SAFE_LAYER)
+        self.assertTrue(installers[installer].checked_default)
+        self.assertGreaterEqual(installers[installer].confidence, 0.88)
+        self.assertGreaterEqual(footprints[metadata].confidence, 0.72)
+
+    def test_updater_pending_ignores_unrelated_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "LocalAppData"
+            roaming = root / "RoamingAppData"
+            program_data = root / "ProgramData"
+            user_profile = root / "User"
+            pending = local / "project-meta-updater" / "pending"
+            pending.mkdir(parents=True)
+            unrelated = pending / "VisualStudio-Setup.exe"
+            metadata = pending / "update-info.json"
+            unrelated.write_bytes(b"installer")
+            metadata.write_text('{"name":"Visual Studio","path":"VisualStudio-Setup.exe"}', encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "LOCALAPPDATA": str(local),
+                    "APPDATA": str(roaming),
+                    "ProgramData": str(program_data),
+                    "USERPROFILE": str(user_profile),
+                },
+            ):
+                with patch("launcher.core.safe_cleanup._official_uninstallers", return_value=[]):
+                    with patch("launcher.core.safe_cleanup._registry_reference_items", return_value=[]):
+                        plan = build_cleanup_plan(LauncherContext.from_paths([Path("Heptabase")]), state_path=root / "state.json")
+
+        paths = {Path(item.path) for item in plan.items if item.kind in {"app_footprint_file", "leftover_installer"}}
+        self.assertNotIn(unrelated, paths)
+        self.assertNotIn(metadata, paths)
+
+    def test_fork_relative_uninstaller_does_not_pollute_app_footprints(self) -> None:
+        target = Path("C:/Users/a0976/AppData/Local/Programs/cursor")
+        uninstaller = OfficialUninstaller(
+            id="uninstaller:HKCU:VSCode",
+            root_name="HKCU",
+            registry_key="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\VSCode",
+            display_name="Microsoft Visual Studio Code (User)",
+            uninstall_command="uninstall.exe",
+            install_location="C:\\Users\\a0976\\AppData\\Local\\Programs\\Microsoft VS Code",
+            match_reason="測試",
+            confidence=0.45,
+            is_fork_relative=True,
+        )
+
+        identities = safe_cleanup_module._app_identities([target], (uninstaller,))
+        score, reason = safe_cleanup_module._app_footprint_score(Path("C:/Users/a0976/Documents/Visual Studio 2022"), identities)
+
+        self.assertLess(score, 4)
+        self.assertEqual(reason, "")
+
+    def test_weak_uninstaller_identity_requires_full_phrase_match(self) -> None:
+        target = Path("C:/Tools/demo/Demo.exe")
+        uninstaller = OfficialUninstaller(
+            id="uninstaller:HKCU:Demo",
+            root_name="HKCU",
+            registry_key="Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Demo",
+            display_name="Microsoft Visual Studio Code (User)",
+            uninstall_command="uninstall.exe",
+            match_reason="測試",
+            confidence=0.7,
+        )
+
+        identities = safe_cleanup_module._app_identities([target], (uninstaller,))
+        partial_score, _ = safe_cleanup_module._app_footprint_score(Path("C:/Users/a0976/Documents/Visual Studio 2022"), identities)
+        exact_score, _ = safe_cleanup_module._app_footprint_score(Path("C:/Users/a0976/AppData/Roaming/Microsoft Visual Studio Code"), identities)
+
+        self.assertLess(partial_score, 4)
+        self.assertGreaterEqual(exact_score, 5)
+
+    def test_fork_relative_reason_marks_cursor_vs_code_candidates(self) -> None:
+        target = Path("C:/Users/a0976/AppData/Local/Programs/cursor")
+        reason = safe_cleanup_module._fork_relative_reason(
+            {
+                "DisplayName": "Microsoft Visual Studio Code (User)",
+                "InstallLocation": "C:\\Users\\a0976\\AppData\\Local\\Programs\\Microsoft VS Code",
+            },
+            [target],
+        )
+
+        self.assertIn("fork", reason)
+        self.assertIn("cursor", reason)
 
     def test_exe_under_program_files_suggests_product_root_as_blocked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

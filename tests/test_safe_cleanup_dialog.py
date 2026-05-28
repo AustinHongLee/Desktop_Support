@@ -40,6 +40,10 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertGreater(dialog._info_tree.topLevelItemCount(), 0)
         first_child = dialog._tree.topLevelItem(0).child(0)
         self.assertEqual(first_child.checkState(0), Qt.CheckState.Checked)
+        dialog._tree.setCurrentItem(first_child)
+        dialog._update_detail()
+        self.assertIn("證據帳本", dialog._detail.toPlainText())
+        self.assertIn("證據分層", _tree_texts(dialog._info_tree))
 
     def test_dialog_info_tree_summarizes_related_items(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

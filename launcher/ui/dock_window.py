@@ -30,6 +30,7 @@ from launcher.core.state_store import AppStateStore
 from launcher.ui.command_palette import ActionRequest, CommandPalette
 from launcher.ui.edge_positioner import EdgePositioner, screen_area_from_qrect
 from launcher.ui.explorer_context_menu_dialog import ExplorerContextMenuDialog
+from launcher.ui.file_lock_checker_dialog import FileLockCheckerDialog
 from launcher.ui.iso_pdf_naming_dialog import IsoPdfNamingDialog
 from launcher.ui.job_monitor import ActionRunThread, JobMonitor
 from launcher.ui.plugin_manager_dialog import PluginManagerDialog
@@ -273,6 +274,12 @@ class DockWindow(QWidget):
         dialog = SafeCleanupDialog(self._context, self)
         dialog.exec()
 
+    def open_file_lock_checker(self, action_id: str = "system.file_lock_checker", title: str = "檔案佔用檢查器", category: str = "檔案") -> None:
+        self._state_store.record_action(action_id, title, category)
+        self._state_store.record_context(self._context)
+        dialog = FileLockCheckerDialog(self._context, self)
+        dialog.exec()
+
     def _open_iso_workbench(self, action_id: str, title: str, category: str) -> None:
         self._state_store.record_action(action_id, title, category)
         self._state_store.record_context(self._context)
@@ -295,6 +302,9 @@ class DockWindow(QWidget):
             return
         if action.command.type == "ui_safe_cleanup_dialog":
             self.open_safe_cleanup(action.id, action.title, action.category)
+            return
+        if action.command.type == "ui_file_lock_checker_dialog":
+            self.open_file_lock_checker(action.id, action.title, action.category)
             return
 
         self._state_store.record_action(action.id, action.title, action.category)
@@ -592,6 +602,9 @@ class DockWindow(QWidget):
         safe_cleanup = QAction("安全清除工作台...", menu)
         safe_cleanup.triggered.connect(lambda: self.open_safe_cleanup())
         menu.addAction(safe_cleanup)
+        lock_checker = QAction("檔案佔用檢查器...", menu)
+        lock_checker.triggered.connect(lambda: self.open_file_lock_checker())
+        menu.addAction(lock_checker)
         preferences = QAction("偏好設定...", menu)
         preferences.triggered.connect(self.open_preferences)
         menu.addAction(preferences)
@@ -605,6 +618,10 @@ class DockWindow(QWidget):
         edge_menu = self._build_edge_menu()
         edge_menu.setTitle("位置與收合")
         menu.addMenu(edge_menu)
+        menu.addSeparator()
+        lock_checker = QAction("檔案佔用檢查器...", menu)
+        lock_checker.triggered.connect(lambda: self.open_file_lock_checker())
+        menu.addAction(lock_checker)
         menu.addSeparator()
         quit_action = QAction("關閉工具列", menu)
         quit_action.triggered.connect(QApplication.instance().quit)
@@ -910,6 +927,8 @@ class DockWindow(QWidget):
             QTimer.singleShot(0, self.open_iso_workbench)
         if getattr(request, "command", "") == "open_safe_cleanup":
             QTimer.singleShot(0, self.open_safe_cleanup)
+        if getattr(request, "command", "") == "open_file_lock_checker":
+            QTimer.singleShot(0, self.open_file_lock_checker)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(dock_stylesheet(self._theme()))

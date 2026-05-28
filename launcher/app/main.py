@@ -57,6 +57,9 @@ def main() -> int:
     if args.open_safe_cleanup:
         ContextInbox().submit_open_safe_cleanup(args.set_context, source=args.context_source)
         submitted_context = True
+    elif args.open_file_lock_checker:
+        ContextInbox().submit_open_file_lock_checker(args.set_context, source=args.context_source)
+        submitted_context = True
     elif args.open_iso_workbench:
         ContextInbox().submit_open_iso_workbench(args.set_context, source=args.context_source)
         submitted_context = True
@@ -86,6 +89,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--context-menu-manager", action="store_true", help="open the Explorer right-click registry manager")
     parser.add_argument("--open-iso-workbench", action="store_true", help="open the ISO PDF naming workbench")
     parser.add_argument("--open-safe-cleanup", action="store_true", help="open the safe cleanup workbench")
+    parser.add_argument("--open-file-lock-checker", action="store_true", help="open the file lock checker")
     parser.add_argument("--start-hidden", action="store_true", help="start in the system tray without showing the dock")
     parser.add_argument("--show-existing", action="store_true", help="show the existing launcher instance when one is already running")
     parser.add_argument("--set-context", nargs="+", default=[])

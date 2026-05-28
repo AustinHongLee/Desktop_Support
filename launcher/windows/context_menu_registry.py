@@ -151,6 +151,13 @@ def expected_safe_cleanup_command(pythonw: Path, argument_token: str) -> str:
     )
 
 
+def expected_file_lock_checker_command(pythonw: Path, argument_token: str) -> str:
+    return (
+        f'"{pythonw}" -m launcher.app.main --show-existing --context-source explorer.menu '
+        f'--open-file-lock-checker --set-context "{argument_token}"'
+    )
+
+
 def default_pythonw_path(root: Path | None = None) -> Path:
     return (root or project_root()) / ".venv" / "Scripts" / "pythonw.exe"
 
