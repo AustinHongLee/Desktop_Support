@@ -12,11 +12,15 @@
   "app": {
     "windows": [
       {
-        "title": "Desktop Support Spike",
-        "width": 1180,
-        "height": 760,
-        "minWidth": 960,
-        "minHeight": 620
+        "title": "Desktop Support Dock",
+        "width": 28,
+        "height": 168,
+        "minWidth": 28,
+        "minHeight": 120,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true
       }
     ],
     "security": {

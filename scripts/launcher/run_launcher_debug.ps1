@@ -1,6 +1,8 @@
 param(
     [switch]$Restart,
-    [switch]$NoTail
+    [switch]$Tail,
+    [switch]$NoTail,
+    [int]$TailLines = 80
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,9 +49,11 @@ Write-Host "[debug] Pythonw: $pythonw" -ForegroundColor Cyan
 Write-Host "[debug] ISO log: $isoLog" -ForegroundColor Cyan
 
 Start-Process -FilePath $pythonw -ArgumentList "-m","launcher.app.main","--show-existing" -WorkingDirectory $ProjectRoot -WindowStyle Hidden
-Write-Host "[debug] Launcher started. Open ISO Naming and watch log output below." -ForegroundColor Green
+Write-Host "[debug] Launcher started. Open ISO Naming from the dock/window." -ForegroundColor Green
 
-if (-not $NoTail) {
+if ($Tail -and -not $NoTail) {
     Write-Host "[debug] Tailing ISO workbench log. Press Ctrl+C to stop watching." -ForegroundColor Green
-    Get-Content -Path $isoLog -Wait -Tail 80 -Encoding UTF8
+    Get-Content -Path $isoLog -Wait -Tail $TailLines -Encoding UTF8
+} else {
+    Write-Host "[debug] Log tail is disabled. Use -Tail when you intentionally want this console to keep watching logs." -ForegroundColor DarkGray
 }

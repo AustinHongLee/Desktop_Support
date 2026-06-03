@@ -15,11 +15,14 @@ import {
   FileJson,
   FileSearch,
   FolderOpen,
+  GripVertical,
   GitBranch,
   Gauge,
   HardDrive,
   Home,
   Layers3,
+  Maximize2,
+  Minimize2,
   Network,
   PanelRightOpen,
   PlayCircle,
@@ -41,6 +44,8 @@ import {
   WandSparkles,
   Workflow,
 } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
+import { currentMonitor, getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { useEffect, useMemo, useState } from "react";
 import { loadShutdownReport, type SafeToKill, type ShutdownBlocker, type ShutdownSafetyReport } from "./report";
 
@@ -53,6 +58,7 @@ const LEVEL_SCORE: Record<SafeToKill, number> = {
   Unknown: 72,
 };
 type AppMode = "command" | "iso" | "shutdown" | "cleanup" | "locks";
+type SurfaceMode = "dock" | "cockpit";
 
 const NAV_ITEMS: Array<{ mode: AppMode; label: string }> = [
   { mode: "command", label: "Command" },
@@ -128,6 +134,8 @@ const ISO_ISSUES = [
 ];
 
 export default function App() {
+  const [surface, setSurface] = useState<SurfaceMode>(() => initialSurface());
+  const [dockCollapsed, setDockCollapsed] = useState(() => initialSurface() === "dock");
   const [mode, setMode] = useState<AppMode>("command");
   const [report, setReport] = useState<ShutdownSafetyReport | null>(null);
   const [source, setSource] = useState<"tauri" | "sample">("sample");
@@ -135,6 +143,7 @@ export default function App() {
   const [levelFilter, setLevelFilter] = useState<SafeToKill | "All">("All");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [reportLoaded, setReportLoaded] = useState(false);
 
   async function refresh() {
     setBusy(true);
@@ -143,6 +152,7 @@ export default function App() {
       const result = await loadShutdownReport();
       setReport(result.report);
       setSource(result.source);
+      setReportLoaded(true);
       setSelectedId((current) => {
         if (current && result.report.blockers.some((blocker) => blocker.id === current)) {
           return current;
@@ -157,8 +167,14 @@ export default function App() {
   }
 
   useEffect(() => {
-    void refresh();
-  }, []);
+    if (!reportLoaded && (surface === "cockpit" || !dockCollapsed)) {
+      void refresh();
+    }
+  }, [dockCollapsed, reportLoaded, surface]);
+
+  useEffect(() => {
+    void applyWindowSurface(surface, dockCollapsed);
+  }, [dockCollapsed, surface]);
 
   const blockers = useMemo(() => {
     const items = report?.blockers ?? [];
@@ -170,6 +186,35 @@ export default function App() {
   const riskScore = getRiskScore(report);
   const guardState = getGuardState(report);
   const meta = MODE_META[mode];
+
+  function openCockpit(nextMode: AppMode = "command") {
+    setMode(nextMode);
+    setDockCollapsed(false);
+    setSurface("cockpit");
+    if (!reportLoaded) {
+      void refresh();
+    }
+  }
+
+  function collapseToDock() {
+    setSurface("dock");
+    setDockCollapsed(true);
+  }
+
+  if (surface === "dock") {
+    return (
+      <DockShell
+        busy={busy}
+        collapsed={dockCollapsed}
+        guardState={guardState}
+        openCockpit={openCockpit}
+        refresh={refresh}
+        report={report}
+        setCollapsed={setDockCollapsed}
+        source={source}
+      />
+    );
+  }
 
   return (
     <main className={`shell mode-${mode}`}>
@@ -208,6 +253,10 @@ export default function App() {
               {mode === "command" ? "Tauri shell" : "Concept preview"}
             </div>
           )}
+          <button className="icon-button" onClick={collapseToDock} title="Collapse to desktop dock">
+            <Minimize2 size={16} />
+            <span>Dock</span>
+          </button>
         </div>
       </header>
 
@@ -235,6 +284,125 @@ export default function App() {
         />
       )}
     </main>
+  );
+}
+
+function DockShell({
+  busy,
+  collapsed,
+  guardState,
+  openCockpit,
+  refresh,
+  report,
+  setCollapsed,
+  source,
+}: {
+  busy: boolean;
+  collapsed: boolean;
+  guardState: "safe" | "caution" | "danger";
+  openCockpit: (mode?: AppMode) => void;
+  refresh: () => Promise<void>;
+  report: ShutdownSafetyReport | null;
+  setCollapsed: (collapsed: boolean) => void;
+  source: "tauri" | "sample";
+}) {
+  const blockerCount = report?.blockers.length ?? 0;
+  const dangerCount = countLevel(report, "Dangerous");
+  const cautionCount = countLevel(report, "Caution");
+  const guardLabel = report ? (guardState === "danger" ? "Hold" : guardState === "caution" ? "Review" : "Clear") : "Idle";
+  const contextText = report?.project_root ? compactPath(report.project_root) : "等待目前專案狀態";
+
+  if (collapsed) {
+    return (
+      <main className={`dock-shell collapsed ${guardState}`}>
+        <button
+          className="dock-tail"
+          onClick={() => setCollapsed(false)}
+          onMouseDown={(event) => {
+            if (event.altKey) {
+              void startWindowDrag();
+            }
+          }}
+          title="展開桌面輔助工具列"
+        >
+          <span className="dock-tail-dot" />
+          <span>工具</span>
+          <strong>{blockerCount ? blockerCount : "OK"}</strong>
+        </button>
+      </main>
+    );
+  }
+
+  return (
+    <main className={`dock-shell expanded ${guardState}`} onMouseLeave={() => setCollapsed(true)}>
+      <section className="dock-panel">
+        <header
+          className="dock-head"
+          onMouseDown={(event) => {
+            if (event.altKey) {
+              void startWindowDrag();
+            }
+          }}
+        >
+          <div className="dock-drag-handle" title="Alt + drag">
+            <GripVertical size={16} />
+          </div>
+          <div className="dock-title">
+            <span>Desktop Support</span>
+            <strong>{guardLabel}</strong>
+          </div>
+          <button className="dock-icon-button" onClick={() => setCollapsed(true)} title="收合">
+            <Minimize2 size={15} />
+          </button>
+        </header>
+
+        <div className={`dock-status ${guardState}`}>
+          <div>
+            <span>Runtime guard</span>
+            <strong>{report ? `${blockerCount} blockers` : "not scanned"}</strong>
+          </div>
+          <div className="dock-risk-dots">
+            <span className="danger">{dangerCount}</span>
+            <span className="warn">{cautionCount}</span>
+            <span className="ready">{countLevel(report, "Safe")}</span>
+          </div>
+        </div>
+
+        <div className="dock-action-grid" aria-label="Dock actions">
+          <DockAction icon={<Home size={17} />} label="Command" onClick={() => openCockpit("command")} />
+          <DockAction icon={<FileText size={17} />} label="ISO PDF" onClick={() => openCockpit("iso")} />
+          <DockAction icon={<Power size={17} />} label="Safety" onClick={() => openCockpit("shutdown")} />
+          <DockAction icon={<Trash2 size={17} />} label="Cleanup" onClick={() => openCockpit("cleanup")} />
+          <DockAction icon={<FileSearch size={17} />} label="Locks" onClick={() => openCockpit("locks")} />
+          <DockAction icon={<Maximize2 size={17} />} label="Cockpit" onClick={() => openCockpit("command")} />
+        </div>
+
+        <div className="dock-context">
+          <span>{source === "tauri" ? "Live" : "Sample"}</span>
+          <strong>{contextText}</strong>
+        </div>
+
+        <footer className="dock-foot">
+          <button className="dock-secondary" onClick={refresh} disabled={busy}>
+            <RefreshCcw size={14} />
+            <span>{busy ? "Scan" : "Refresh"}</span>
+          </button>
+          <button className="dock-primary" onClick={() => openCockpit("shutdown")}>
+            <ShieldCheck size={14} />
+            <span>Inspect</span>
+          </button>
+        </footer>
+      </section>
+    </main>
+  );
+}
+
+function DockAction({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button className="dock-action" onClick={onClick} title={label}>
+      {icon}
+      <span>{label}</span>
+    </button>
   );
 }
 
@@ -881,4 +1049,79 @@ function sortBlockers(items: ShutdownBlocker[]): ShutdownBlocker[] {
     const levelDelta = (LEVEL_RANK.get(left.safe_to_kill) ?? 99) - (LEVEL_RANK.get(right.safe_to_kill) ?? 99);
     return levelDelta || left.process_role.localeCompare(right.process_role) || left.pid - right.pid;
   });
+}
+
+function initialSurface(): SurfaceMode {
+  const requested = new URLSearchParams(window.location.search).get("surface");
+  if (requested === "dock" || requested === "cockpit") {
+    return requested;
+  }
+  return isTauri() ? "dock" : "cockpit";
+}
+
+async function applyWindowSurface(surface: SurfaceMode, dockCollapsed: boolean): Promise<void> {
+  if (!isTauri()) {
+    return;
+  }
+
+  const appWindow = getCurrentWindow();
+  try {
+    if (surface === "dock") {
+      const width = dockCollapsed ? 28 : 392;
+      const height = dockCollapsed ? 168 : 438;
+      await appWindow.setSizeConstraints(null);
+      await appWindow.setResizable(false);
+      await appWindow.setDecorations(false);
+      await appWindow.setAlwaysOnBottom(false);
+      await appWindow.setAlwaysOnTop(true);
+      await appWindow.setSkipTaskbar(true);
+      await appWindow.setShadow(!dockCollapsed).catch(() => undefined);
+      await appWindow.setSize(new LogicalSize(width, height));
+      await moveWindowToRightEdge(width, height);
+      await appWindow.show();
+      return;
+    }
+
+    await appWindow.setSkipTaskbar(false);
+    await appWindow.setAlwaysOnTop(false);
+    await appWindow.setResizable(true);
+    await appWindow.setDecorations(true);
+    await appWindow.setSizeConstraints({ minWidth: 960, minHeight: 620 });
+    await appWindow.setSize(new LogicalSize(1180, 760));
+    await appWindow.center();
+    await appWindow.setFocus();
+  } catch (caught) {
+    console.warn("Could not apply Tauri window surface", caught);
+  }
+}
+
+async function moveWindowToRightEdge(width: number, height: number): Promise<void> {
+  const monitor = await currentMonitor();
+  if (!monitor) {
+    return;
+  }
+
+  const scale = monitor.scaleFactor || 1;
+  const workX = monitor.workArea.position.x / scale;
+  const workY = monitor.workArea.position.y / scale;
+  const workWidth = monitor.workArea.size.width / scale;
+  const workHeight = monitor.workArea.size.height / scale;
+  const x = Math.round(workX + workWidth - width - 4);
+  const y = Math.round(workY + Math.max(0, workHeight - height) * 0.42);
+  await getCurrentWindow().setPosition(new LogicalPosition(x, y));
+}
+
+async function startWindowDrag(): Promise<void> {
+  if (!isTauri()) {
+    return;
+  }
+  await getCurrentWindow().startDragging().catch(() => undefined);
+}
+
+function compactPath(path: string): string {
+  const parts = path.replace(/\//g, "\\").split("\\").filter(Boolean);
+  if (parts.length <= 3) {
+    return path;
+  }
+  return `...\\${parts.slice(-3).join("\\")}`;
 }
