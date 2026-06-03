@@ -59,6 +59,11 @@ const LEVEL_SCORE: Record<SafeToKill, number> = {
 };
 type AppMode = "command" | "iso" | "shutdown" | "cleanup" | "locks";
 type SurfaceMode = "dock" | "cockpit";
+type DockEdge = "top" | "bottom" | "left" | "right";
+
+const DOCK_EDGE_STORAGE_KEY = "desktop-support.dock.edge";
+const DOCK_OFFSET_STORAGE_KEY = "desktop-support.dock.offset";
+const DOCK_SNAP_DELAY_MS = 620;
 
 const NAV_ITEMS: Array<{ mode: AppMode; label: string }> = [
   { mode: "command", label: "Command" },
@@ -144,8 +149,13 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [reportLoaded, setReportLoaded] = useState(false);
+  const [dockEdge, setDockEdge] = useState<DockEdge>(() => initialDockEdge());
+  const [dockOffset, setDockOffset] = useState(() => initialDockOffset());
   const surfaceRef = useRef(surface);
   const dockCollapsedRef = useRef(dockCollapsed);
+  const dockDragSnapArmedRef = useRef(false);
+  const dockDragSnapTimerRef = useRef<number | undefined>(undefined);
+  const dockDragDisarmTimerRef = useRef<number | undefined>(undefined);
   const focusExpandArmedRef = useRef(false);
 
   async function refresh() {
@@ -176,8 +186,8 @@ export default function App() {
   }, [dockCollapsed, reportLoaded, surface]);
 
   useEffect(() => {
-    void applyWindowSurface(surface, dockCollapsed);
-  }, [dockCollapsed, surface]);
+    void applyWindowSurface(surface, dockCollapsed, dockEdge, dockOffset);
+  }, [dockCollapsed, dockEdge, dockOffset, surface]);
 
   useEffect(() => {
     surfaceRef.current = surface;
@@ -214,9 +224,62 @@ export default function App() {
     }
 
     let unlisten: (() => void) | undefined;
+    void getCurrentWindow().onMoved(() => {
+      if (!dockDragSnapArmedRef.current || surfaceRef.current !== "dock") {
+        return;
+      }
+
+      if (dockDragSnapTimerRef.current !== undefined) {
+        window.clearTimeout(dockDragSnapTimerRef.current);
+      }
+      dockDragSnapTimerRef.current = window.setTimeout(() => {
+        dockDragSnapTimerRef.current = undefined;
+        if (!dockDragSnapArmedRef.current || surfaceRef.current !== "dock") {
+          return;
+        }
+        dockDragSnapArmedRef.current = false;
+        if (dockDragDisarmTimerRef.current !== undefined) {
+          window.clearTimeout(dockDragDisarmTimerRef.current);
+          dockDragDisarmTimerRef.current = undefined;
+        }
+        void snapDraggedDockToNearestEdge(dockCollapsedRef.current).then((placement) => {
+          if (!placement) {
+            return;
+          }
+          setDockEdge(placement.edge);
+          setDockOffset(placement.offset);
+          saveDockPlacement(placement.edge, placement.offset);
+        });
+      }, DOCK_SNAP_DELAY_MS);
+    }).then((handler) => {
+      unlisten = handler;
+    });
+
+    return () => {
+      if (dockDragSnapTimerRef.current !== undefined) {
+        window.clearTimeout(dockDragSnapTimerRef.current);
+      }
+      if (dockDragDisarmTimerRef.current !== undefined) {
+        window.clearTimeout(dockDragDisarmTimerRef.current);
+        dockDragDisarmTimerRef.current = undefined;
+      }
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    let unlisten: (() => void) | undefined;
     void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
       if (focused && focusExpandArmedRef.current && surfaceRef.current === "dock" && dockCollapsedRef.current) {
-        setDockCollapsed(false);
+        window.setTimeout(() => {
+          if (!dockDragSnapArmedRef.current && surfaceRef.current === "dock" && dockCollapsedRef.current) {
+            setDockCollapsed(false);
+          }
+        }, 80);
       }
     }).then((handler) => {
       unlisten = handler;
@@ -252,12 +315,33 @@ export default function App() {
     setDockCollapsed(true);
   }
 
+  function beginDockDrag() {
+    if (!isTauri()) {
+      return;
+    }
+    dockDragSnapArmedRef.current = true;
+    if (dockDragSnapTimerRef.current !== undefined) {
+      window.clearTimeout(dockDragSnapTimerRef.current);
+      dockDragSnapTimerRef.current = undefined;
+    }
+    if (dockDragDisarmTimerRef.current !== undefined) {
+      window.clearTimeout(dockDragDisarmTimerRef.current);
+    }
+    dockDragDisarmTimerRef.current = window.setTimeout(() => {
+      dockDragSnapArmedRef.current = false;
+      dockDragDisarmTimerRef.current = undefined;
+    }, 10000);
+    void startWindowDrag();
+  }
+
   if (surface === "dock") {
     return (
       <DockShell
         busy={busy}
         collapsed={dockCollapsed}
+        dockEdge={dockEdge}
         guardState={guardState}
+        onDockDragStart={beginDockDrag}
         openCockpit={openCockpit}
         refresh={refresh}
         report={report}
@@ -341,7 +425,9 @@ export default function App() {
 function DockShell({
   busy,
   collapsed,
+  dockEdge,
   guardState,
+  onDockDragStart,
   openCockpit,
   refresh,
   report,
@@ -350,7 +436,9 @@ function DockShell({
 }: {
   busy: boolean;
   collapsed: boolean;
+  dockEdge: DockEdge;
   guardState: "safe" | "caution" | "danger";
+  onDockDragStart: () => void;
   openCockpit: (mode?: AppMode) => void;
   refresh: () => Promise<void>;
   report: ShutdownSafetyReport | null;
@@ -365,13 +453,13 @@ function DockShell({
 
   if (collapsed) {
     return (
-      <main className={`dock-shell collapsed ${guardState}`}>
+      <main className={`dock-shell collapsed ${guardState} edge-${dockEdge}`}>
         <button
           className="dock-tail"
           onClick={() => setCollapsed(false)}
           onMouseDown={(event) => {
             if (event.altKey) {
-              void startWindowDrag();
+              onDockDragStart();
               return;
             }
             setCollapsed(false);
@@ -387,7 +475,7 @@ function DockShell({
             onMouseDown={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              void startWindowDrag();
+              onDockDragStart();
             }}
             title="拖曳位置"
           >
@@ -402,14 +490,14 @@ function DockShell({
   }
 
   return (
-    <main className={`dock-shell expanded ${guardState}`}>
+    <main className={`dock-shell expanded ${guardState} edge-${dockEdge}`}>
       <section className="dock-panel">
         <header className="dock-head">
           <div
             className="dock-drag-handle"
             onMouseDown={(event) => {
               event.preventDefault();
-              void startWindowDrag();
+              onDockDragStart();
             }}
             title="拖曳位置"
           >
@@ -1127,15 +1215,14 @@ function initialSurface(): SurfaceMode {
   return isTauri() ? "dock" : "cockpit";
 }
 
-async function applyWindowSurface(surface: SurfaceMode, dockCollapsed: boolean): Promise<void> {
+async function applyWindowSurface(surface: SurfaceMode, dockCollapsed: boolean, dockEdge: DockEdge, dockOffset: number): Promise<void> {
   if (!isTauri()) {
     return;
   }
 
   const appWindow = getCurrentWindow();
   if (surface === "dock") {
-    const width = dockCollapsed ? 28 : 392;
-    const height = dockCollapsed ? 168 : 438;
+    const { width, height } = dockSizeForEdge(dockEdge, dockCollapsed);
     await safeWindowCall(appWindow.setSizeConstraints(null));
     await safeWindowCall(appWindow.setMinSize(null));
     await safeWindowCall(appWindow.setMaxSize(null));
@@ -1145,7 +1232,7 @@ async function applyWindowSurface(surface: SurfaceMode, dockCollapsed: boolean):
     await safeWindowCall(appWindow.setAlwaysOnTop(true));
     await safeWindowCall(appWindow.setSkipTaskbar(dockCollapsed));
     await safeWindowCall(appWindow.setShadow(!dockCollapsed));
-    await resizeDockFromCurrentPosition(width, height, dockCollapsed);
+    await snapDockToEdge(width, height, dockEdge, dockOffset);
     await safeWindowCall(appWindow.show());
     if (!dockCollapsed) {
       await safeWindowCall(appWindow.setFocus());
@@ -1163,46 +1250,132 @@ async function applyWindowSurface(surface: SurfaceMode, dockCollapsed: boolean):
   await safeWindowCall(appWindow.setFocus());
 }
 
-async function resizeDockFromCurrentPosition(width: number, height: number, collapsed: boolean): Promise<void> {
+async function snapDockToEdge(width: number, height: number, edge: DockEdge, offset: number): Promise<void> {
   const appWindow = getCurrentWindow();
   const scale = await appWindow.scaleFactor().catch(() => 1);
-  const position = await appWindow.outerPosition().catch(() => undefined);
-  const size = await appWindow.innerSize().catch(() => undefined);
   const monitor = await currentMonitor().catch(() => undefined);
-  const nextWidth = Math.round(width * scale);
-  const nextHeight = Math.round(height * scale);
-  const previousWidth = size?.width ?? nextWidth;
-  const widthDelta = Math.abs(nextWidth - previousWidth);
-  let nextX = position?.x;
-  let nextY = position?.y;
-
-  if (position && widthDelta > 0) {
-    nextX = collapsed ? position.x + widthDelta : position.x - widthDelta;
-  }
-
-  if (monitor) {
-    const margin = Math.round(4 * scale);
-    const workX = monitor.workArea.position.x;
-    const workY = monitor.workArea.position.y;
-    const workWidth = monitor.workArea.size.width;
-    const workHeight = monitor.workArea.size.height;
-
-    if (collapsed || nextX === undefined || nextY === undefined) {
-      nextX = workX + workWidth - nextWidth - margin;
-      nextY = workY + Math.round(Math.max(0, workHeight - nextHeight) * 0.42);
-    }
-
-    nextX = clamp(nextX, workX, workX + Math.max(0, workWidth - nextWidth));
-    nextY = clamp(nextY, workY, workY + Math.max(0, workHeight - nextHeight));
-  }
-
   await safeWindowCall(appWindow.setSize(new LogicalSize(width, height)));
 
-  if (nextX === undefined || nextY === undefined) {
+  if (!monitor) {
     return;
   }
 
-  await safeWindowCall(appWindow.setPosition(new PhysicalPosition(nextX, nextY)));
+  const actualSize = await appWindow.outerSize().catch(() => undefined);
+  const size = actualSize ?? {
+    width: Math.round(width * scale),
+    height: Math.round(height * scale),
+  };
+  const placement = dockPlacementForEdge(monitor.workArea, edge, size, offset);
+  await safeWindowCall(appWindow.setPosition(new PhysicalPosition(placement.x, placement.y)));
+}
+
+async function snapDraggedDockToNearestEdge(collapsed: boolean): Promise<{ edge: DockEdge; offset: number } | null> {
+  if (!isTauri()) {
+    return null;
+  }
+
+  const appWindow = getCurrentWindow();
+  const scale = await appWindow.scaleFactor().catch(() => 1);
+  const monitor = await currentMonitor().catch(() => undefined);
+  const position = await appWindow.outerPosition().catch(() => undefined);
+  const size = await appWindow.outerSize().catch(() => undefined);
+  if (!monitor || !position || !size) {
+    return null;
+  }
+
+  const center = {
+    x: position.x + Math.round(size.width / 2),
+    y: position.y + Math.round(size.height / 2),
+  };
+  const edge = nearestDockEdge(monitor.workArea, center.x, center.y);
+  const logicalSize = dockSizeForEdge(edge, collapsed);
+  const snapSize = {
+    width: Math.round(logicalSize.width * scale),
+    height: Math.round(logicalSize.height * scale),
+  };
+  return {
+    edge,
+    offset: dockOffsetFromPoint(monitor.workArea, edge, center.x, center.y, snapSize),
+  };
+}
+
+function dockSizeForEdge(edge: DockEdge, collapsed: boolean): { width: number; height: number } {
+  if (!collapsed) {
+    return { width: 392, height: 438 };
+  }
+  return edge === "top" || edge === "bottom" ? { width: 168, height: 28 } : { width: 28, height: 168 };
+}
+
+function dockPlacementForEdge(
+  area: { position: { x: number; y: number }; size: { width: number; height: number } },
+  edge: DockEdge,
+  dockSize: { width: number; height: number },
+  offset: number,
+): { x: number; y: number } {
+  const workX = area.position.x;
+  const workY = area.position.y;
+  const workWidth = area.size.width;
+  const workHeight = area.size.height;
+  const maxX = workX + Math.max(0, workWidth - dockSize.width);
+  const maxY = workY + Math.max(0, workHeight - dockSize.height);
+  const clampedOffset = clamp(offset, 0, 1);
+
+  if (edge === "top" || edge === "bottom") {
+    return {
+      x: clamp(workX + Math.round(Math.max(0, workWidth - dockSize.width) * clampedOffset), workX, maxX),
+      y: edge === "top" ? workY : maxY,
+    };
+  }
+
+  return {
+    x: edge === "left" ? workX : maxX,
+    y: clamp(workY + Math.round(Math.max(0, workHeight - dockSize.height) * clampedOffset), workY, maxY),
+  };
+}
+
+function nearestDockEdge(
+  area: { position: { x: number; y: number }; size: { width: number; height: number } },
+  pointX: number,
+  pointY: number,
+): DockEdge {
+  const distances: Record<DockEdge, number> = {
+    top: Math.abs(pointY - area.position.y),
+    bottom: Math.abs(pointY - (area.position.y + area.size.height)),
+    left: Math.abs(pointX - area.position.x),
+    right: Math.abs(pointX - (area.position.x + area.size.width)),
+  };
+  return (Object.entries(distances).sort((left, right) => left[1] - right[1])[0]?.[0] as DockEdge | undefined) ?? "right";
+}
+
+function dockOffsetFromPoint(
+  area: { position: { x: number; y: number }; size: { width: number; height: number } },
+  edge: DockEdge,
+  pointX: number,
+  pointY: number,
+  dockSize: { width: number; height: number },
+): number {
+  if (edge === "top" || edge === "bottom") {
+    const available = Math.max(1, area.size.width - dockSize.width);
+    return clamp((pointX - area.position.x - dockSize.width / 2) / available, 0, 1);
+  }
+
+  const available = Math.max(1, area.size.height - dockSize.height);
+  return clamp((pointY - area.position.y - dockSize.height / 2) / available, 0, 1);
+}
+
+function initialDockEdge(): DockEdge {
+  const saved = window.localStorage.getItem(DOCK_EDGE_STORAGE_KEY);
+  return saved === "top" || saved === "bottom" || saved === "left" || saved === "right" ? saved : "right";
+}
+
+function initialDockOffset(): number {
+  const saved = Number(window.localStorage.getItem(DOCK_OFFSET_STORAGE_KEY));
+  return Number.isFinite(saved) ? clamp(saved, 0, 1) : 0.42;
+}
+
+function saveDockPlacement(edge: DockEdge, offset: number): void {
+  window.localStorage.setItem(DOCK_EDGE_STORAGE_KEY, edge);
+  window.localStorage.setItem(DOCK_OFFSET_STORAGE_KEY, String(clamp(offset, 0, 1)));
 }
 
 function clamp(value: number, min: number, max: number): number {

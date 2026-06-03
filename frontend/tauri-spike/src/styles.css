@@ -109,6 +109,33 @@ button {
   cursor: pointer;
 }
 
+.dock-shell.edge-left .dock-tail {
+  border-right: 1px solid var(--line-strong);
+  border-left: 0;
+  border-radius: 0 13px 13px 0;
+}
+
+.dock-shell.edge-top .dock-tail,
+.dock-shell.edge-bottom .dock-tail {
+  width: 168px;
+  height: 28px;
+  grid-template-columns: 24px 1fr auto;
+  grid-template-rows: 1fr;
+  padding: 4px 10px;
+}
+
+.dock-shell.edge-top .dock-tail {
+  border-right: 1px solid var(--line-strong);
+  border-top: 0;
+  border-radius: 0 0 13px 13px;
+}
+
+.dock-shell.edge-bottom .dock-tail {
+  border-right: 1px solid var(--line-strong);
+  border-bottom: 0;
+  border-radius: 13px 13px 0 0;
+}
+
 .dock-tail::before {
   content: "";
   position: absolute;
@@ -116,6 +143,28 @@ button {
   border-radius: 9px 0 0 9px;
   border-left: 1px solid rgba(47, 245, 200, 0.24);
   pointer-events: none;
+}
+
+.dock-shell.edge-left .dock-tail::before {
+  border-right: 1px solid rgba(47, 245, 200, 0.24);
+  border-left: 0;
+  border-radius: 0 9px 9px 0;
+}
+
+.dock-shell.edge-top .dock-tail::before,
+.dock-shell.edge-bottom .dock-tail::before {
+  inset: 3px 8px;
+  border-left: 0;
+}
+
+.dock-shell.edge-top .dock-tail::before {
+  border-bottom: 1px solid rgba(47, 245, 200, 0.24);
+  border-radius: 0 0 9px 9px;
+}
+
+.dock-shell.edge-bottom .dock-tail::before {
+  border-top: 1px solid rgba(47, 245, 200, 0.24);
+  border-radius: 9px 9px 0 0;
 }
 
 .dock-shell.caution .dock-tail {
@@ -182,6 +231,11 @@ button {
   letter-spacing: 0;
 }
 
+.dock-shell.edge-top .dock-tail-label,
+.dock-shell.edge-bottom .dock-tail-label {
+  writing-mode: horizontal-tb;
+}
+
 .dock-tail strong {
   color: var(--mint);
   font-family: "Cascadia Mono", "Consolas", monospace;
@@ -212,6 +266,24 @@ button {
   box-shadow: 0 0 36px rgba(47, 245, 200, 0.16), inset 0 0 30px rgba(47, 245, 200, 0.06);
   backdrop-filter: blur(18px);
   overflow: hidden;
+}
+
+.dock-shell.edge-left .dock-panel {
+  border-right: 1px solid var(--line-strong);
+  border-left: 0;
+  border-radius: 0 16px 16px 0;
+}
+
+.dock-shell.edge-top .dock-panel {
+  border-right: 1px solid var(--line-strong);
+  border-top: 0;
+  border-radius: 0 0 16px 16px;
+}
+
+.dock-shell.edge-bottom .dock-panel {
+  border-right: 1px solid var(--line-strong);
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
 }
 
 .dock-head,
