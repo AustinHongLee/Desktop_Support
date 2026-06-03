@@ -1,12 +1,15 @@
 import {
   AlertTriangle,
+  Activity,
   Braces,
+  Cpu,
   Clock3,
   FileJson,
   FolderOpen,
   GitBranch,
   PlayCircle,
   RefreshCcw,
+  Route,
   ShieldAlert,
   ShieldCheck,
   TerminalSquare,
@@ -15,6 +18,7 @@ import { useEffect, useMemo, useState } from "react";
 import { loadShutdownReport, type SafeToKill, type ShutdownBlocker, type ShutdownSafetyReport } from "./report";
 
 const LEVEL_ORDER: SafeToKill[] = ["Dangerous", "Unknown", "Caution", "Safe"];
+const LEVEL_RANK = new Map(LEVEL_ORDER.map((level, index) => [level, index]));
 
 export default function App() {
   const [report, setReport] = useState<ShutdownSafetyReport | null>(null);
@@ -35,7 +39,7 @@ export default function App() {
         if (current && result.report.blockers.some((blocker) => blocker.id === current)) {
           return current;
         }
-        return result.report.blockers[0]?.id ?? "";
+        return sortBlockers(result.report.blockers)[0]?.id ?? "";
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -51,10 +55,7 @@ export default function App() {
   const blockers = useMemo(() => {
     const items = report?.blockers ?? [];
     const filtered = levelFilter === "All" ? items : items.filter((blocker) => blocker.safe_to_kill === levelFilter);
-    return [...filtered].sort((left, right) => {
-      const levelDelta = LEVEL_ORDER.indexOf(left.safe_to_kill) - LEVEL_ORDER.indexOf(right.safe_to_kill);
-      return levelDelta || left.process_role.localeCompare(right.process_role) || left.pid - right.pid;
-    });
+    return sortBlockers(filtered);
   }, [levelFilter, report]);
 
   const selected = blockers.find((blocker) => blocker.id === selectedId) ?? blockers[0] ?? null;
@@ -62,9 +63,10 @@ export default function App() {
   return (
     <main className="shell">
       <header className="topbar">
-        <div>
+        <div className="brand-block">
           <div className="eyebrow">Tauri + React spike</div>
           <h1>Shutdown Safety Inspector</h1>
+          <div className="report-line">{report?.scan_reason ?? "scan"} · {report?.created_at ?? "waiting for report"}</div>
         </div>
         <div className="toolbar">
           <button className="icon-button" onClick={refresh} disabled={busy} title="Refresh report">
@@ -78,17 +80,20 @@ export default function App() {
       {error ? <div className="error-line">{error}</div> : null}
 
       <section className="summary-band" aria-label="Report summary">
-        <Metric label="Blockers" value={report?.blockers.length ?? 0} icon={<ShieldAlert size={18} />} />
-        <Metric label="Safe" value={countLevel(report, "Safe")} icon={<ShieldCheck size={18} />} tone="safe" />
-        <Metric label="Caution" value={countLevel(report, "Caution")} icon={<AlertTriangle size={18} />} tone="caution" />
+        <Metric label="Blockers" value={report?.blockers.length ?? 0} icon={<Activity size={18} />} />
         <Metric label="Dangerous" value={countLevel(report, "Dangerous")} icon={<ShieldAlert size={18} />} tone="danger" />
+        <Metric label="Caution" value={countLevel(report, "Caution")} icon={<AlertTriangle size={18} />} tone="caution" />
         <Metric label="Unknown" value={countLevel(report, "Unknown")} icon={<Braces size={18} />} tone="unknown" />
+        <Metric label="Safe" value={countLevel(report, "Safe")} icon={<ShieldCheck size={18} />} tone="safe" />
       </section>
 
       <section className="workspace">
         <aside className="left-panel">
           <div className="panel-heading">
-            <span>Blockers</span>
+            <div>
+              <span>Process queue</span>
+              <small>{blockers.length} shown</small>
+            </div>
             <select value={levelFilter} onChange={(event) => setLevelFilter(event.target.value as SafeToKill | "All")}>
               <option value="All">All levels</option>
               {LEVEL_ORDER.map((level) => (
@@ -107,7 +112,10 @@ export default function App() {
               >
                 <span className={`level-dot ${blocker.safe_to_kill.toLowerCase()}`} />
                 <span className="row-main">
-                  <span className="row-title">{blocker.process_name || "process"}</span>
+                  <span className="row-title">
+                    <Cpu size={14} />
+                    {blocker.process_name || "process"}
+                  </span>
                   <span className="row-subtitle">
                     PID {blocker.pid} · {blocker.process_role}
                   </span>
@@ -142,10 +150,11 @@ function Metric({ label, value, icon, tone = "neutral" }: { label: string; value
 function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: ShutdownSafetyReport | null }) {
   return (
     <div className="detail-grid">
-      <div className="detail-header">
+      <div className={`detail-header ${blocker.safe_to_kill.toLowerCase()}`}>
         <div>
           <div className="eyebrow">Selected process</div>
           <h2>{blocker.process_name || "process"}</h2>
+          <p>{blocker.process_role} · PID {blocker.pid}</p>
         </div>
         <span className={`large-level ${blocker.safe_to_kill.toLowerCase()}`}>{blocker.safe_to_kill}</span>
       </div>
@@ -186,7 +195,7 @@ function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: 
             {blocker.relationships.map((edge, index) => (
               <div className="graph-edge" key={`${edge.source}-${edge.target}-${index}`}>
                 <span>{edge.source || "unknown"}</span>
-                <strong>{edge.relation}</strong>
+                <strong><Route size={14} />{edge.relation}</strong>
                 <span>{edge.target || "unknown"}</span>
               </div>
             ))}
@@ -271,4 +280,11 @@ function PathGroup({ icon, label, values }: { icon: React.ReactNode; label: stri
 
 function countLevel(report: ShutdownSafetyReport | null, level: SafeToKill): number {
   return report?.blockers.filter((blocker) => blocker.safe_to_kill === level).length ?? 0;
+}
+
+function sortBlockers(items: ShutdownBlocker[]): ShutdownBlocker[] {
+  return [...items].sort((left, right) => {
+    const levelDelta = (LEVEL_RANK.get(left.safe_to_kill) ?? 99) - (LEVEL_RANK.get(right.safe_to_kill) ?? 99);
+    return levelDelta || left.process_role.localeCompare(right.process_role) || left.pid - right.pid;
+  });
 }
