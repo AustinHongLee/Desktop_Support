@@ -2,24 +2,34 @@ import {
   AlertTriangle,
   Activity,
   Braces,
+  ChevronRight,
+  CircleAlert,
+  CircleCheck,
+  ClipboardCheck,
   Cpu,
   Clock3,
   Crosshair,
+  FileText,
   FileJson,
   FolderOpen,
   GitBranch,
   Gauge,
+  Layers3,
   Network,
+  PanelRightOpen,
   PlayCircle,
   Power,
   Radio,
   RefreshCcw,
   Route,
   ScanLine,
+  SearchCheck,
   Server,
   ShieldAlert,
   ShieldCheck,
+  Table2,
   TerminalSquare,
+  WandSparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { loadShutdownReport, type SafeToKill, type ShutdownBlocker, type ShutdownSafetyReport } from "./report";
@@ -32,8 +42,33 @@ const LEVEL_SCORE: Record<SafeToKill, number> = {
   Dangerous: 96,
   Unknown: 72,
 };
+type AppMode = "shutdown" | "iso";
+
+const ISO_STEPS = [
+  { label: "來源", state: "ready", meta: "combine.pdf · 24 pages" },
+  { label: "拆頁", state: "ready", meta: "24 single-page PDFs" },
+  { label: "ISO", state: "ready", meta: "ISO List · 64 rows" },
+  { label: "判讀", state: "warn", meta: "3 rows need review" },
+  { label: "命名", state: "ready", meta: "21 ready · 3 held" },
+  { label: "更名", state: "idle", meta: "dry-run pending" },
+];
+
+const ISO_ROWS = [
+  { page: "P001", serial: "1037", confidence: "96", status: "Ready", oldName: "combine_p001.pdf", newName: "1037--2-S11-P-20911-003.pdf" },
+  { page: "P002", serial: "1038", confidence: "94", status: "Ready", oldName: "combine_p002.pdf", newName: "1038--2-S11-P-20911-004.pdf" },
+  { page: "P003", serial: "1040", confidence: "71", status: "Review", oldName: "combine_p003.pdf", newName: "1040--candidate-match.pdf" },
+  { page: "P004", serial: "1041", confidence: "88", status: "Ready", oldName: "combine_p004.pdf", newName: "1041--2-S11-P-20911-006.pdf" },
+  { page: "P005", serial: "?", confidence: "42", status: "Hold", oldName: "combine_p005.pdf", newName: "needs-manual-confirm.pdf" },
+];
+
+const ISO_ISSUES = [
+  { code: "W002", title: "ISO List 無此流水號", detail: "P003 · 1040 有視覺結果但 list 無完全匹配", tone: "warn" },
+  { code: "W005", title: "OCR / CV 不一致", detail: "P005 · OCR=1037, CV=103", tone: "danger" },
+  { code: "I003", title: "自動找到 ISO List", detail: "同層資料夾命中 iso_list_2026.xlsx", tone: "ready" },
+];
 
 export default function App() {
+  const [mode, setMode] = useState<AppMode>("iso");
   const [report, setReport] = useState<ShutdownSafetyReport | null>(null);
   const [source, setSource] = useState<"tauri" | "sample">("sample");
   const [selectedId, setSelectedId] = useState("");
@@ -76,28 +111,51 @@ export default function App() {
   const guardState = getGuardState(report);
 
   return (
-    <main className="shell">
+    <main className={`shell mode-${mode}`}>
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark">
-            <Power size={20} />
+            {mode === "shutdown" ? <Power size={20} /> : <FileText size={20} />}
           </div>
           <div className="brand-block">
-            <div className="eyebrow">Tauri shutdown cockpit</div>
-            <h1>Shutdown Safety Inspector</h1>
-            <div className="report-line">{report?.scan_reason ?? "scan"} · {report?.created_at ?? "waiting for report"}</div>
+            <div className="eyebrow">{mode === "shutdown" ? "Tauri shutdown cockpit" : "Tauri ISO autopilot"}</div>
+            <h1>{mode === "shutdown" ? "Shutdown Safety Inspector" : "ISO PDF 拆頁命名"}</h1>
+            <div className="report-line">
+              {mode === "shutdown" ? `${report?.scan_reason ?? "scan"} · ${report?.created_at ?? "waiting for report"}` : "source → split → detect → rename plan"}
+            </div>
           </div>
         </div>
         <div className="toolbar">
-          <button className="icon-button" onClick={refresh} disabled={busy} title="Refresh report">
-            <RefreshCcw size={17} />
-            <span>{busy ? "Refreshing" : "Refresh"}</span>
-          </button>
-          <div className={`source-pill ${source}`}>{source === "tauri" ? "Live Python report" : "Browser sample"}</div>
+          <div className="mode-switch" aria-label="Workbench mode">
+            <button className={mode === "iso" ? "active" : ""} onClick={() => setMode("iso")}>
+              <FileText size={15} />
+              <span>ISO PDF</span>
+            </button>
+            <button className={mode === "shutdown" ? "active" : ""} onClick={() => setMode("shutdown")}>
+              <Power size={15} />
+              <span>Shutdown</span>
+            </button>
+          </div>
+          {mode === "shutdown" ? (
+            <>
+              <button className="icon-button" onClick={refresh} disabled={busy} title="Refresh report">
+                <RefreshCcw size={17} />
+                <span>{busy ? "Refreshing" : "Refresh"}</span>
+              </button>
+              <div className={`source-pill ${source}`}>{source === "tauri" ? "Live Python report" : "Browser sample"}</div>
+            </>
+          ) : (
+            <div className="source-pill sample">Concept preview</div>
+          )}
         </div>
       </header>
 
       {error ? <div className="error-line">{error}</div> : null}
+
+      {mode === "iso" ? (
+        <IsoPdfAutopilot />
+      ) : (
+        <>
 
       <section className="status-deck" aria-label="Report summary">
         <div className={`risk-core ${guardState}`}>
@@ -173,6 +231,8 @@ export default function App() {
           {selected ? <BlockerDetail blocker={selected} report={report} /> : <div className="empty-detail">Select a blocker.</div>}
         </section>
       </section>
+        </>
+      )}
     </main>
   );
 }
@@ -274,6 +334,150 @@ function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: 
       <Section title="Command line">
         <pre className="command-block">{blocker.command_line || blocker.command_summary}</pre>
       </Section>
+    </div>
+  );
+}
+
+function IsoPdfAutopilot() {
+  return (
+    <section className="iso-board">
+      <div className="iso-hero">
+        <div className="iso-copy">
+          <div className="eyebrow">Autopilot sequence</div>
+          <h2>ISO PDF 拆頁命名</h2>
+          <p>24 頁待處理 · 21 筆可直接更名 · 3 筆需要人工確認</p>
+        </div>
+        <div className="iso-command">
+          <button className="launch-button">
+            <WandSparkles size={18} />
+            <span>開始一鍵命名</span>
+          </button>
+          <button className="icon-button">
+            <PanelRightOpen size={16} />
+            <span>工程師模式</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="iso-flow" aria-label="ISO workflow steps">
+        {ISO_STEPS.map((step, index) => (
+          <div className={`iso-step ${step.state}`} key={step.label}>
+            <div className="step-index">{String(index + 1).padStart(2, "0")}</div>
+            <div>
+              <strong>{step.label}</strong>
+              <span>{step.meta}</span>
+            </div>
+            {index < ISO_STEPS.length - 1 ? <ChevronRight size={16} /> : null}
+          </div>
+        ))}
+      </div>
+
+      <div className="iso-grid">
+        <aside className="iso-side">
+          <StatusTile icon={<FileText size={18} />} title="合併 PDF" value="PIPING_ISO_2026.pdf" tone="ready" />
+          <StatusTile icon={<Layers3 size={18} />} title="拆頁輸出" value=".runtime/temp/iso_pages" tone="ready" />
+          <StatusTile icon={<Table2 size={18} />} title="ISO List" value="iso_list_2026.xlsx · Sheet ISO" tone="ready" />
+          <StatusTile icon={<SearchCheck size={18} />} title="判讀 ROI" value="右下角圖框 · profile matched" tone="warn" />
+
+          <div className="iso-side-card">
+            <h3>Quality gates</h3>
+            <Gate label="PDF 可讀" state="ready" />
+            <Gate label="ISO 欄位已套用" state="ready" />
+            <Gate label="命名衝突檢查" state="warn" />
+            <Gate label="檔案鎖定檢查" state="idle" />
+          </div>
+        </aside>
+
+        <section className="iso-main">
+          <div className="iso-main-header">
+            <div>
+              <div className="eyebrow">Rename plan</div>
+              <h2>命名草稿雷達</h2>
+            </div>
+            <div className="iso-score">
+              <span>Match</span>
+              <strong>87%</strong>
+            </div>
+          </div>
+
+          <div className="iso-table">
+            <div className="iso-table-head">
+              <span>Page</span>
+              <span>Serial</span>
+              <span>Confidence</span>
+              <span>Status</span>
+              <span>New filename</span>
+            </div>
+            {ISO_ROWS.map((row) => (
+              <div className={`iso-table-row ${row.status.toLowerCase()}`} key={row.page}>
+                <span>{row.page}</span>
+                <strong>{row.serial}</strong>
+                <span className="confidence-bar" style={{ "--confidence": `${row.confidence}%` } as React.CSSProperties}>
+                  {row.confidence}%
+                </span>
+                <span className={`plan-state ${row.status.toLowerCase()}`}>{row.status}</span>
+                <code>{row.newName}</code>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <aside className="iso-preview">
+          <div className="preview-sheet">
+            <div className="sheet-grid" />
+            <div className="sheet-titleblock">
+              <Crosshair size={34} />
+              <span>ROI</span>
+            </div>
+            <div className="sheet-tag">P005</div>
+          </div>
+
+          <div className="issue-stack">
+            <h3>Review queue</h3>
+            {ISO_ISSUES.map((issue) => (
+              <div className={`issue-card ${issue.tone}`} key={issue.code}>
+                {issue.tone === "ready" ? <CircleCheck size={16} /> : issue.tone === "warn" ? <CircleAlert size={16} /> : <AlertTriangle size={16} />}
+                <div>
+                  <strong>{issue.code} · {issue.title}</strong>
+                  <span>{issue.detail}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="iso-actions">
+            <button className="action-button">
+              <ClipboardCheck size={15} />
+              <span>開啟更名確認</span>
+            </button>
+            <button className="action-button">
+              <FolderOpen size={15} />
+              <span>開啟輸出資料夾</span>
+            </button>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function StatusTile({ icon, title, value, tone }: { icon: React.ReactNode; title: string; value: string; tone: string }) {
+  return (
+    <div className={`status-tile ${tone}`}>
+      <div className="status-icon">{icon}</div>
+      <div>
+        <span>{title}</span>
+        <strong>{value}</strong>
+      </div>
+    </div>
+  );
+}
+
+function Gate({ label, state }: { label: string; state: string }) {
+  return (
+    <div className={`gate ${state}`}>
+      {state === "ready" ? <CircleCheck size={15} /> : state === "warn" ? <CircleAlert size={15} /> : <ScanLine size={15} />}
+      <span>{label}</span>
     </div>
   );
 }
