@@ -45,8 +45,8 @@ import {
   Workflow,
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
-import { currentMonitor, getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
-import { useEffect, useMemo, useState } from "react";
+import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { loadShutdownReport, type SafeToKill, type ShutdownBlocker, type ShutdownSafetyReport } from "./report";
 
 const LEVEL_ORDER: SafeToKill[] = ["Dangerous", "Unknown", "Caution", "Safe"];
@@ -144,6 +144,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [reportLoaded, setReportLoaded] = useState(false);
+  const surfaceRef = useRef(surface);
+  const dockCollapsedRef = useRef(dockCollapsed);
+  const focusExpandArmedRef = useRef(false);
 
   async function refresh() {
     setBusy(true);
@@ -177,15 +180,44 @@ export default function App() {
   }, [dockCollapsed, surface]);
 
   useEffect(() => {
+    surfaceRef.current = surface;
+    dockCollapsedRef.current = dockCollapsed;
+  }, [dockCollapsed, surface]);
+
+  useEffect(() => {
     if (!isTauri()) {
       return;
     }
 
     let unlisten: (() => void) | undefined;
+    const armFocusExpand = window.setTimeout(() => {
+      focusExpandArmedRef.current = true;
+    }, 900);
+
     void getCurrentWindow().onCloseRequested((event) => {
       event.preventDefault();
       setSurface("dock");
       setDockCollapsed(true);
+    }).then((handler) => {
+      unlisten = handler;
+    });
+
+    return () => {
+      window.clearTimeout(armFocusExpand);
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+      if (focused && focusExpandArmedRef.current && surfaceRef.current === "dock" && dockCollapsedRef.current) {
+        setDockCollapsed(false);
+      }
     }).then((handler) => {
       unlisten = handler;
     });
@@ -340,7 +372,9 @@ function DockShell({
           onMouseDown={(event) => {
             if (event.altKey) {
               void startWindowDrag();
+              return;
             }
+            setCollapsed(false);
           }}
           title="展開桌面輔助工具列"
         >
@@ -1084,50 +1118,88 @@ async function applyWindowSurface(surface: SurfaceMode, dockCollapsed: boolean):
   }
 
   const appWindow = getCurrentWindow();
-  try {
-    if (surface === "dock") {
-      const width = dockCollapsed ? 28 : 392;
-      const height = dockCollapsed ? 168 : 438;
-      await appWindow.setSizeConstraints(null);
-      await appWindow.setResizable(false);
-      await appWindow.setDecorations(false);
-      await appWindow.setAlwaysOnBottom(false);
-      await appWindow.setAlwaysOnTop(true);
-      await appWindow.setSkipTaskbar(true);
-      await appWindow.setShadow(!dockCollapsed).catch(() => undefined);
-      await appWindow.setSize(new LogicalSize(width, height));
-      await moveWindowToRightEdge(width, height);
-      await appWindow.show();
-      return;
+  if (surface === "dock") {
+    const width = dockCollapsed ? 28 : 392;
+    const height = dockCollapsed ? 168 : 438;
+    await safeWindowCall(appWindow.setSizeConstraints(null));
+    await safeWindowCall(appWindow.setMinSize(null));
+    await safeWindowCall(appWindow.setMaxSize(null));
+    await safeWindowCall(appWindow.setResizable(false));
+    await safeWindowCall(appWindow.setDecorations(false));
+    await safeWindowCall(appWindow.setAlwaysOnBottom(false));
+    await safeWindowCall(appWindow.setAlwaysOnTop(true));
+    await safeWindowCall(appWindow.setSkipTaskbar(dockCollapsed));
+    await safeWindowCall(appWindow.setShadow(!dockCollapsed));
+    await resizeDockFromCurrentPosition(width, height, dockCollapsed);
+    await safeWindowCall(appWindow.show());
+    if (!dockCollapsed) {
+      await safeWindowCall(appWindow.setFocus());
     }
-
-    await appWindow.setSkipTaskbar(false);
-    await appWindow.setAlwaysOnTop(false);
-    await appWindow.setResizable(true);
-    await appWindow.setDecorations(true);
-    await appWindow.setSizeConstraints({ minWidth: 960, minHeight: 620 });
-    await appWindow.setSize(new LogicalSize(1180, 760));
-    await appWindow.center();
-    await appWindow.setFocus();
-  } catch (caught) {
-    console.warn("Could not apply Tauri window surface", caught);
-  }
-}
-
-async function moveWindowToRightEdge(width: number, height: number): Promise<void> {
-  const monitor = await currentMonitor();
-  if (!monitor) {
     return;
   }
 
-  const scale = monitor.scaleFactor || 1;
-  const workX = monitor.workArea.position.x / scale;
-  const workY = monitor.workArea.position.y / scale;
-  const workWidth = monitor.workArea.size.width / scale;
-  const workHeight = monitor.workArea.size.height / scale;
-  const x = Math.round(workX + workWidth - width - 4);
-  const y = Math.round(workY + Math.max(0, workHeight - height) * 0.42);
-  await getCurrentWindow().setPosition(new LogicalPosition(x, y));
+  await safeWindowCall(appWindow.setSkipTaskbar(false));
+  await safeWindowCall(appWindow.setAlwaysOnTop(false));
+  await safeWindowCall(appWindow.setResizable(true));
+  await safeWindowCall(appWindow.setDecorations(true));
+  await safeWindowCall(appWindow.setSizeConstraints({ minWidth: 960, minHeight: 620 }));
+  await safeWindowCall(appWindow.setSize(new LogicalSize(1180, 760)));
+  await safeWindowCall(appWindow.center());
+  await safeWindowCall(appWindow.setFocus());
+}
+
+async function resizeDockFromCurrentPosition(width: number, height: number, collapsed: boolean): Promise<void> {
+  const appWindow = getCurrentWindow();
+  const scale = await appWindow.scaleFactor().catch(() => 1);
+  const position = await appWindow.outerPosition().catch(() => undefined);
+  const size = await appWindow.innerSize().catch(() => undefined);
+  const monitor = await currentMonitor().catch(() => undefined);
+  const nextWidth = Math.round(width * scale);
+  const nextHeight = Math.round(height * scale);
+  const previousWidth = size?.width ?? nextWidth;
+  const widthDelta = Math.abs(nextWidth - previousWidth);
+  let nextX = position?.x;
+  let nextY = position?.y;
+
+  if (position && widthDelta > 0) {
+    nextX = collapsed ? position.x + widthDelta : position.x - widthDelta;
+  }
+
+  if (monitor) {
+    const margin = Math.round(4 * scale);
+    const workX = monitor.workArea.position.x;
+    const workY = monitor.workArea.position.y;
+    const workWidth = monitor.workArea.size.width;
+    const workHeight = monitor.workArea.size.height;
+
+    if (collapsed || nextX === undefined || nextY === undefined) {
+      nextX = workX + workWidth - nextWidth - margin;
+      nextY = workY + Math.round(Math.max(0, workHeight - nextHeight) * 0.42);
+    }
+
+    nextX = clamp(nextX, workX, workX + Math.max(0, workWidth - nextWidth));
+    nextY = clamp(nextY, workY, workY + Math.max(0, workHeight - nextHeight));
+  }
+
+  await safeWindowCall(appWindow.setSize(new LogicalSize(width, height)));
+
+  if (nextX === undefined || nextY === undefined) {
+    return;
+  }
+
+  await safeWindowCall(appWindow.setPosition(new PhysicalPosition(nextX, nextY)));
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+async function safeWindowCall(action: Promise<unknown>): Promise<void> {
+  try {
+    await action;
+  } catch (caught) {
+    console.warn("Tauri window call failed", caught);
+  }
 }
 
 async function startWindowDrag(): Promise<void> {
