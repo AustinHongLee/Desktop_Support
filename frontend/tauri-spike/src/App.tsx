@@ -4,12 +4,19 @@ import {
   Braces,
   Cpu,
   Clock3,
+  Crosshair,
   FileJson,
   FolderOpen,
   GitBranch,
+  Gauge,
+  Network,
   PlayCircle,
+  Power,
+  Radio,
   RefreshCcw,
   Route,
+  ScanLine,
+  Server,
   ShieldAlert,
   ShieldCheck,
   TerminalSquare,
@@ -19,6 +26,12 @@ import { loadShutdownReport, type SafeToKill, type ShutdownBlocker, type Shutdow
 
 const LEVEL_ORDER: SafeToKill[] = ["Dangerous", "Unknown", "Caution", "Safe"];
 const LEVEL_RANK = new Map(LEVEL_ORDER.map((level, index) => [level, index]));
+const LEVEL_SCORE: Record<SafeToKill, number> = {
+  Safe: 18,
+  Caution: 54,
+  Dangerous: 96,
+  Unknown: 72,
+};
 
 export default function App() {
   const [report, setReport] = useState<ShutdownSafetyReport | null>(null);
@@ -59,14 +72,21 @@ export default function App() {
   }, [levelFilter, report]);
 
   const selected = blockers.find((blocker) => blocker.id === selectedId) ?? blockers[0] ?? null;
+  const riskScore = getRiskScore(report);
+  const guardState = getGuardState(report);
 
   return (
     <main className="shell">
       <header className="topbar">
-        <div className="brand-block">
-          <div className="eyebrow">Tauri + React spike</div>
-          <h1>Shutdown Safety Inspector</h1>
-          <div className="report-line">{report?.scan_reason ?? "scan"} · {report?.created_at ?? "waiting for report"}</div>
+        <div className="brand-lockup">
+          <div className="brand-mark">
+            <Power size={20} />
+          </div>
+          <div className="brand-block">
+            <div className="eyebrow">Tauri shutdown cockpit</div>
+            <h1>Shutdown Safety Inspector</h1>
+            <div className="report-line">{report?.scan_reason ?? "scan"} · {report?.created_at ?? "waiting for report"}</div>
+          </div>
         </div>
         <div className="toolbar">
           <button className="icon-button" onClick={refresh} disabled={busy} title="Refresh report">
@@ -79,12 +99,34 @@ export default function App() {
 
       {error ? <div className="error-line">{error}</div> : null}
 
-      <section className="summary-band" aria-label="Report summary">
-        <Metric label="Blockers" value={report?.blockers.length ?? 0} icon={<Activity size={18} />} />
-        <Metric label="Dangerous" value={countLevel(report, "Dangerous")} icon={<ShieldAlert size={18} />} tone="danger" />
-        <Metric label="Caution" value={countLevel(report, "Caution")} icon={<AlertTriangle size={18} />} tone="caution" />
-        <Metric label="Unknown" value={countLevel(report, "Unknown")} icon={<Braces size={18} />} tone="unknown" />
-        <Metric label="Safe" value={countLevel(report, "Safe")} icon={<ShieldCheck size={18} />} tone="safe" />
+      <section className="status-deck" aria-label="Report summary">
+        <div className={`risk-core ${guardState}`}>
+          <div className="risk-ring" style={{ "--risk": `${riskScore}%` } as React.CSSProperties}>
+            <div>
+              <span>Risk</span>
+              <strong>{riskScore}</strong>
+            </div>
+          </div>
+          <div className="risk-copy">
+            <div className="eyebrow">Guard state</div>
+            <h2>{guardState === "danger" ? "Hold shutdown" : guardState === "caution" ? "Manual review" : "Clear path"}</h2>
+            <p>{report?.blockers.length ?? 0} blocker signals in current runtime scan</p>
+          </div>
+        </div>
+        <div className="metric-grid">
+          <Metric label="Blockers" value={report?.blockers.length ?? 0} icon={<Activity size={18} />} />
+          <Metric label="Dangerous" value={countLevel(report, "Dangerous")} icon={<ShieldAlert size={18} />} tone="danger" />
+          <Metric label="Caution" value={countLevel(report, "Caution")} icon={<AlertTriangle size={18} />} tone="caution" />
+          <Metric label="Unknown" value={countLevel(report, "Unknown")} icon={<Braces size={18} />} tone="unknown" />
+          <Metric label="Safe" value={countLevel(report, "Safe")} icon={<ShieldCheck size={18} />} tone="safe" />
+        </div>
+        <div className="signal-grid" aria-label="Runtime channels">
+          <Signal icon={<Server size={16} />} label="Process tree" value={String(report?.blockers.length ?? 0)} />
+          <Signal icon={<Radio size={16} />} label="Runtime locks" value={String(report?.blockers.reduce((total, blocker) => total + blocker.lock_files.length, 0) ?? 0)} />
+          <Signal icon={<Network size={16} />} label="Graph edges" value={String(report?.blockers.reduce((total, blocker) => total + blocker.relationships.length, 0) ?? 0)} />
+          <Signal icon={<Gauge size={16} />} label="Safe policy" value="armed" />
+          <Signal icon={<ScanLine size={16} />} label="Scan mode" value={source} />
+        </div>
       </section>
 
       <section className="workspace">
@@ -107,7 +149,7 @@ export default function App() {
             {blockers.map((blocker) => (
               <button
                 key={blocker.id}
-                className={`blocker-row ${selected?.id === blocker.id ? "active" : ""}`}
+                className={`blocker-row ${blocker.safe_to_kill.toLowerCase()} ${selected?.id === blocker.id ? "active" : ""}`}
                 onClick={() => setSelectedId(blocker.id)}
               >
                 <span className={`level-dot ${blocker.safe_to_kill.toLowerCase()}`} />
@@ -147,10 +189,23 @@ function Metric({ label, value, icon, tone = "neutral" }: { label: string; value
   );
 }
 
+function Signal({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="signal">
+      <div className="signal-icon">{icon}</div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: ShutdownSafetyReport | null }) {
   return (
     <div className="detail-grid">
       <div className={`detail-header ${blocker.safe_to_kill.toLowerCase()}`}>
+        <div className="target-reticle" aria-hidden="true">
+          <Crosshair size={34} />
+        </div>
         <div>
           <div className="eyebrow">Selected process</div>
           <h2>{blocker.process_name || "process"}</h2>
@@ -280,6 +335,25 @@ function PathGroup({ icon, label, values }: { icon: React.ReactNode; label: stri
 
 function countLevel(report: ShutdownSafetyReport | null, level: SafeToKill): number {
   return report?.blockers.filter((blocker) => blocker.safe_to_kill === level).length ?? 0;
+}
+
+function getRiskScore(report: ShutdownSafetyReport | null): number {
+  const blockers = report?.blockers ?? [];
+  if (!blockers.length) {
+    return 0;
+  }
+  return Math.max(...blockers.map((blocker) => LEVEL_SCORE[blocker.safe_to_kill]));
+}
+
+function getGuardState(report: ShutdownSafetyReport | null): "safe" | "caution" | "danger" {
+  const score = getRiskScore(report);
+  if (score >= 90) {
+    return "danger";
+  }
+  if (score >= 50) {
+    return "caution";
+  }
+  return "safe";
 }
 
 function sortBlockers(items: ShutdownBlocker[]): ShutdownBlocker[] {
