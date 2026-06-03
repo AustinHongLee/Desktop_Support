@@ -378,8 +378,23 @@ function DockShell({
           }}
           title="展開桌面輔助工具列"
         >
-          <span className="dock-tail-dot" />
-          <span>工具</span>
+          <span
+            className="dock-tail-grip"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              void startWindowDrag();
+            }}
+            title="拖曳位置"
+          >
+            <GripVertical size={15} />
+            <span className="dock-tail-dot" />
+          </span>
+          <span className="dock-tail-label">工具</span>
           <strong>{blockerCount ? blockerCount : "OK"}</strong>
         </button>
       </main>
@@ -389,15 +404,15 @@ function DockShell({
   return (
     <main className={`dock-shell expanded ${guardState}`}>
       <section className="dock-panel">
-        <header
-          className="dock-head"
-          onMouseDown={(event) => {
-            if (event.altKey) {
+        <header className="dock-head">
+          <div
+            className="dock-drag-handle"
+            onMouseDown={(event) => {
+              event.preventDefault();
               void startWindowDrag();
-            }
-          }}
-        >
-          <div className="dock-drag-handle" title="Alt + drag">
+            }}
+            title="拖曳位置"
+          >
             <GripVertical size={16} />
           </div>
           <div className="dock-title">

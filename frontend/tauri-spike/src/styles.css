@@ -93,7 +93,7 @@ button {
   width: 28px;
   height: 168px;
   display: grid;
-  grid-template-rows: 18px 1fr auto;
+  grid-template-rows: 24px 1fr auto;
   align-items: center;
   justify-items: center;
   gap: 8px;
@@ -106,6 +106,7 @@ button {
     linear-gradient(180deg, rgba(47, 245, 200, 0.2), rgba(255, 255, 255, 0.04)),
     rgba(7, 9, 8, 0.96);
   box-shadow: 0 0 28px rgba(47, 245, 200, 0.2), inset 0 0 18px rgba(47, 245, 200, 0.08);
+  cursor: pointer;
 }
 
 .dock-tail::before {
@@ -127,9 +128,37 @@ button {
   box-shadow: 0 0 26px rgba(255, 79, 123, 0.22), inset 0 0 18px rgba(255, 79, 123, 0.08);
 }
 
+.dock-tail-grip {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 24px;
+  border-radius: 8px;
+  color: var(--mint);
+  cursor: grab;
+  touch-action: none;
+}
+
+.dock-tail-grip:hover {
+  background: rgba(47, 245, 200, 0.12);
+}
+
+.dock-tail-grip:active {
+  cursor: grabbing;
+}
+
+.dock-tail-grip svg {
+  pointer-events: none;
+}
+
 .dock-tail-dot {
-  width: 8px;
-  height: 8px;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--lime);
   box-shadow: 0 0 12px var(--lime);
@@ -145,7 +174,7 @@ button {
   box-shadow: 0 0 12px var(--rose);
 }
 
-.dock-tail span:not(.dock-tail-dot) {
+.dock-tail-label {
   writing-mode: vertical-rl;
   color: var(--text);
   font-size: 12px;
@@ -209,6 +238,15 @@ button {
   border-radius: 8px;
   color: var(--mint);
   background: rgba(255, 255, 255, 0.045);
+}
+
+.dock-drag-handle {
+  cursor: grab;
+  user-select: none;
+}
+
+.dock-drag-handle:active {
+  cursor: grabbing;
 }
 
 .dock-title {
