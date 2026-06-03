@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 
 export type SafeToKill = "Safe" | "Caution" | "Dangerous" | "Unknown";
 
@@ -135,5 +135,5 @@ function toStrings(value: unknown): string[] {
 }
 
 function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
+  return isTauri();
 }
