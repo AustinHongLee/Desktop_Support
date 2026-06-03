@@ -176,6 +176,25 @@ export default function App() {
     void applyWindowSurface(surface, dockCollapsed);
   }, [dockCollapsed, surface]);
 
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow().onCloseRequested((event) => {
+      event.preventDefault();
+      setSurface("dock");
+      setDockCollapsed(true);
+    }).then((handler) => {
+      unlisten = handler;
+    });
+
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
   const blockers = useMemo(() => {
     const items = report?.blockers ?? [];
     const filtered = levelFilter === "All" ? items : items.filter((blocker) => blocker.safe_to_kill === levelFilter);
@@ -334,7 +353,7 @@ function DockShell({
   }
 
   return (
-    <main className={`dock-shell expanded ${guardState}`} onMouseLeave={() => setCollapsed(true)}>
+    <main className={`dock-shell expanded ${guardState}`}>
       <section className="dock-panel">
         <header
           className="dock-head"
