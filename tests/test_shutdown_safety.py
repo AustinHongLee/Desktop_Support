@@ -143,6 +143,79 @@ class ShutdownSafetyCoreTests(unittest.TestCase):
 
         self.assertEqual(report.blockers, ())
 
+    def test_scan_does_not_report_app_main_lock_from_other_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            layout = runtime_layout(root).ensure()
+            metadata = JobMetadata(
+                job_id="app-main-9001",
+                component="launcher.app",
+                process_role="App 主程序",
+                pid=9001,
+                parent_pid=1,
+                command_summary=f"python -m launcher.app.main --project-root {root}",
+                started_at="now",
+                safe_to_kill="Dangerous",
+            )
+            _write(layout.jobs / "app-main-9001.json", metadata.to_payload())
+            _write(
+                layout.running / "app-main-9001_9001.json",
+                RuntimeProcessLock(
+                    job_id="app-main-9001",
+                    pid=9001,
+                    parent_pid=1,
+                    process_name="python.exe",
+                    process_role="App 主程序",
+                    command_summary=metadata.command_summary,
+                    started_at="now",
+                    safe_to_kill="Dangerous",
+                ).to_payload(),
+            )
+            snapshot = (
+                ProcessSnapshot(
+                    pid=9001,
+                    process_name="python.exe",
+                    parent_pid=1,
+                    command_line=f"python -m launcher.app.main --project-root {root}",
+                ),
+            )
+
+            report = scan_shutdown_blockers(project_root_path=root, process_snapshot=snapshot)
+
+        self.assertEqual(report.blockers, ())
+
+    def test_scan_does_not_report_app_main_command_without_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = (
+                ProcessSnapshot(
+                    pid=9002,
+                    process_name="python.exe",
+                    parent_pid=1,
+                    command_line=f"python -m launcher.app.main --show-existing --project-root {root}",
+                ),
+            )
+
+            report = scan_shutdown_blockers(project_root_path=root, process_snapshot=snapshot)
+
+        self.assertEqual(report.blockers, ())
+
+    def test_scan_does_not_report_shutdown_inspector_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = (
+                ProcessSnapshot(
+                    pid=9003,
+                    process_name="python.exe",
+                    parent_pid=1,
+                    command_line=f"python -m launcher.app.shutdown_safety_inspector --print-json --project-root {root}",
+                ),
+            )
+
+            report = scan_shutdown_blockers(project_root_path=root, process_snapshot=snapshot)
+
+        self.assertEqual(report.blockers, ())
+
     def test_scan_classifies_safe_caution_dangerous_and_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

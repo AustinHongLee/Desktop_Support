@@ -597,9 +597,11 @@ def scan_shutdown_blockers(
             continue
         command_line_contains_root = _contains_project_root(process, root_token)
         lock = locks.get(process.pid)
+        metadata = _metadata_for_process(process.pid, lock, jobs)
+        if _is_app_main_process(process, metadata, lock):
+            continue
         if not command_line_contains_root and lock is None:
             continue
-        metadata = _metadata_for_process(process.pid, lock, jobs)
         blocker = _build_blocker(
             process,
             root=root,
@@ -712,12 +714,17 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--kill-safe", action="store_true", help="gracefully stop Safe blockers only")
     parser.add_argument("--kill-all-project-owned", action="store_true", help="force stop every killable project-owned blocker")
     parser.add_argument("--json-report", action="store_true", help="print the JSON report path")
+    parser.add_argument("--print-json", action="store_true", help="print the full JSON report to stdout")
     parser.add_argument("--mock-shutdown-event", action="store_true", help="scan as if Windows requested shutdown")
     args = parser.parse_args(argv)
 
     reason = "mock.shutdown" if args.mock_shutdown_event else "manual.cli"
     report = scan_shutdown_blockers(scan_reason=reason)
     report_path = write_report(report)
+    report = replace(report, report_path=str(report_path))
+    if args.print_json:
+        print(json.dumps(report.to_payload(), ensure_ascii=True))
+        return 0
     print(report_to_table(report))
     print(f"\nJSON report: {report_path}")
     if args.dry_run:
@@ -1032,6 +1039,19 @@ def _metadata_for_process(pid: int, lock: RuntimeProcessLock | None, jobs: dict[
         if metadata.pid == pid:
             return metadata
     return None
+
+
+def _is_app_main_process(process: ProcessSnapshot, metadata: JobMetadata | None, lock: RuntimeProcessLock | None) -> bool:
+    command = (process.command_line or process.command_summary or "").casefold()
+    if "launcher.app.main" in command or "launcher.app.shutdown_safety_inspector" in command:
+        return True
+    if metadata is not None:
+        if metadata.job_id.startswith("app-main-") or metadata.process_role == "App 主程序":
+            return True
+    if lock is not None:
+        if lock.job_id.startswith("app-main-") or lock.process_role == "App 主程序":
+            return True
+    return False
 
 
 def _metadata_temp_dirs(metadata: JobMetadata | None, root: Path) -> tuple[str, ...]:
