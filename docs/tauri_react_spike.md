@@ -12,7 +12,8 @@ It does not replace the PyQt launcher yet. The intended migration shape is:
 
 - React/Vite frontend builds.
 - Rust/Cargo and Visual Studio Build Tools are installed locally.
-- Tauri debug exe builds successfully.
+- Tauri debug/release exe builds successfully.
+- Python backend is packaged as a PyInstaller sidecar.
 - The Tauri app starts as a small right-edge dock tail, expands into a compact dock panel, then opens the full cockpit on demand.
 - Shutdown Safety Inspector is backend-connected through a Rust command that calls:
 
@@ -24,7 +25,7 @@ ISO PDF, Cleanup, and Locks are cockpit UI prototypes only; their Python workflo
 
 ## Build
 
-Use the project build script so Cargo is added to `PATH` consistently:
+Use the project build script so Cargo is added to `PATH` consistently and the Python backend sidecar is rebuilt:
 
 ```powershell
 .\scripts\tauri\build_desktop_app.ps1 -Configuration Debug
@@ -34,21 +35,42 @@ Debug output:
 
 ```text
 frontend\tauri-spike\src-tauri\target\debug\desktop-support-tauri-spike.exe
+frontend\tauri-spike\src-tauri\target\debug\desktop-support-backend.exe
+```
+
+Release build:
+
+```powershell
+.\scripts\tauri\build_desktop_app.ps1 -Configuration Release
 ```
 
 Release output:
 
-```powershell
-.\scripts\tauri\build_desktop_app.ps1 -Configuration Release
+```text
+frontend\tauri-spike\src-tauri\target\release\desktop-support-tauri-spike.exe
+frontend\tauri-spike\src-tauri\target\release\desktop-support-backend.exe
 ```
 
 ## Runtime Model
 
 Browser preview uses `public/sample-shutdown-report.json`.
 
-Tauri mode calls the Python backend through Rust and renders the live Shutdown Safety Inspector report. The current exe is runnable, but it is not a fully standalone product yet because it expects the project folder and Python environment to exist.
+Tauri mode calls the backend through Rust and renders the live Shutdown Safety Inspector report.
 
-For a true standalone installer/exe, package the Python backend as a sidecar, then have Rust call that sidecar instead of `python -m ...`.
+Runtime lookup order:
+
+1. `DESKTOP_SUPPORT_BACKEND_EXE`, when explicitly set.
+2. `desktop-support-backend.exe` beside the Tauri exe.
+3. Tauri resource / `binaries` locations.
+4. Development fallback: `.venv\Scripts\python.exe` or `python` with `python -m launcher.app.shutdown_safety_inspector`.
+
+Project root lookup order:
+
+1. `DESKTOP_SUPPORT_PROJECT_ROOT`, when explicitly set.
+2. The local repository root, when running from the checked-out project.
+3. The Tauri exe folder, for portable standalone runtime.
+
+The bundled sidecar removes the need for a local Python install for Shutdown Safety Inspector. ISO PDF, Cleanup, and Locks still need their backend commands connected before those workbenches are complete.
 
 ## Tail Safety
 

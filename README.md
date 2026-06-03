@@ -31,11 +31,11 @@ The launcher is intentionally small:
 Tauri / React spike 目前是替代 UI 實驗，不會取代 PyQt launcher。它啟動時走桌面 dock 小尾巴，點開後才展開未來感 cockpit：
 
 ```powershell
-.\scripts\tauri\build_desktop_app.ps1 -Configuration Debug
-.\frontend\tauri-spike\src-tauri\target\debug\desktop-support-tauri-spike.exe
+.\scripts\tauri\build_desktop_app.ps1 -Configuration Release
+.\frontend\tauri-spike\src-tauri\target\release\desktop-support-tauri-spike.exe
 ```
 
-目前這個 exe 會呼叫本專案 Python backend，因此需要保留專案資料夾與 Python 環境。真正單檔/安裝包化的下一步是把 Python backend 打成 Tauri sidecar。
+這個 build 會同時用 PyInstaller 打包 `desktop-support-backend.exe`，並放在 Tauri exe 同資料夾。Tauri 會優先呼叫 sidecar；開發環境找不到 sidecar 時才 fallback 到本機 Python。若要掃描既有專案 runtime，請保留專案資料夾，或用 `DESKTOP_SUPPORT_PROJECT_ROOT` 指向要檢查的 runtime root。
 
 ## Explorer Right-Click Context
 

@@ -710,6 +710,7 @@ def report_to_table(report: ShutdownSafetyReport) -> str:
 
 def run_cli(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Inspect project-owned shutdown blockers.")
+    parser.add_argument("--project-root", help="project runtime root to inspect")
     parser.add_argument("--dry-run", action="store_true", help="print blockers without stopping processes")
     parser.add_argument("--kill-safe", action="store_true", help="gracefully stop Safe blockers only")
     parser.add_argument("--kill-all-project-owned", action="store_true", help="force stop every killable project-owned blocker")
@@ -718,9 +719,10 @@ def run_cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--mock-shutdown-event", action="store_true", help="scan as if Windows requested shutdown")
     args = parser.parse_args(argv)
 
+    root = Path(args.project_root).resolve(strict=False) if args.project_root else None
     reason = "mock.shutdown" if args.mock_shutdown_event else "manual.cli"
-    report = scan_shutdown_blockers(scan_reason=reason)
-    report_path = write_report(report)
+    report = scan_shutdown_blockers(project_root_path=root, scan_reason=reason)
+    report_path = write_report(report, project_root_path=root)
     report = replace(report, report_path=str(report_path))
     if args.print_json:
         print(json.dumps(report.to_payload(), ensure_ascii=True))
@@ -734,6 +736,7 @@ def run_cli(argv: list[str] | None = None) -> int:
         kill_safe=args.kill_safe,
         force_all_project_owned=args.kill_all_project_owned,
         dry_run=False,
+        project_root_path=root or report.project_root,
     )
     if args.kill_safe or args.kill_all_project_owned:
         print(f"Attempted: {len(result.attempted_pids)}  Stopped: {len(result.stopped_pids)}  Skipped: {len(result.skipped)}")
@@ -1043,7 +1046,13 @@ def _metadata_for_process(pid: int, lock: RuntimeProcessLock | None, jobs: dict[
 
 def _is_app_main_process(process: ProcessSnapshot, metadata: JobMetadata | None, lock: RuntimeProcessLock | None) -> bool:
     command = (process.command_line or process.command_summary or "").casefold()
-    if "launcher.app.main" in command or "launcher.app.shutdown_safety_inspector" in command:
+    process_name = (process.process_name or Path(process.executable_path).name or "").casefold()
+    if (
+        "launcher.app.main" in command
+        or "launcher.app.shutdown_safety_inspector" in command
+        or "launcher.app.tauri_backend" in command
+        or process_name == "desktop-support-backend.exe"
+    ):
         return True
     if metadata is not None:
         if metadata.job_id.startswith("app-main-") or metadata.process_role == "App 主程序":

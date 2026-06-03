@@ -18,6 +18,7 @@ from launcher.core.shutdown_safety import (
     ShutdownSafetyReport,
     apply_shutdown_policy,
     runtime_layout,
+    run_cli,
     scan_shutdown_blockers,
 )
 
@@ -215,6 +216,50 @@ class ShutdownSafetyCoreTests(unittest.TestCase):
             report = scan_shutdown_blockers(project_root_path=root, process_snapshot=snapshot)
 
         self.assertEqual(report.blockers, ())
+
+    def test_scan_does_not_report_tauri_backend_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            snapshot = (
+                ProcessSnapshot(
+                    pid=9004,
+                    process_name="desktop-support-backend.exe",
+                    parent_pid=1,
+                    command_line=f"desktop-support-backend.exe --print-json --project-root {root}",
+                ),
+                ProcessSnapshot(
+                    pid=9005,
+                    process_name="python.exe",
+                    parent_pid=1,
+                    command_line=f"python -m launcher.app.tauri_backend --print-json --project-root {root}",
+                ),
+            )
+
+            report = scan_shutdown_blockers(project_root_path=root, process_snapshot=snapshot)
+
+        self.assertEqual(report.blockers, ())
+
+    def test_run_cli_uses_explicit_project_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve(strict=False)
+            report = ShutdownSafetyReport(
+                project_root=str(root),
+                scan_reason="manual.cli",
+                created_at="now",
+                blockers=(),
+            )
+            report_path = root / ".runtime" / "logs" / "shutdown_safety_report_test.json"
+
+            with (
+                patch("launcher.core.shutdown_safety.scan_shutdown_blockers", return_value=report) as scan,
+                patch("launcher.core.shutdown_safety.write_report", return_value=report_path) as write_report,
+                patch("builtins.print"),
+            ):
+                code = run_cli(["--project-root", str(root), "--print-json"])
+
+        self.assertEqual(code, 0)
+        scan.assert_called_once_with(project_root_path=root, scan_reason="manual.cli")
+        write_report.assert_called_once_with(report, project_root_path=root)
 
     def test_scan_classifies_safe_caution_dangerous_and_unknown(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

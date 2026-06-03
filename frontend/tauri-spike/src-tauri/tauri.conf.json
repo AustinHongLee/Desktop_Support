@@ -30,6 +30,9 @@
   "bundle": {
     "active": false,
     "targets": "all",
-    "icon": []
+    "icon": [],
+    "externalBin": [
+      "binaries/desktop-support-backend"
+    ]
   }
 }
