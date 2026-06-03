@@ -1,6 +1,8 @@
 import {
   AlertTriangle,
   Activity,
+  Bot,
+  Boxes,
   Braces,
   ChevronRight,
   CircleAlert,
@@ -11,9 +13,12 @@ import {
   Crosshair,
   FileText,
   FileJson,
+  FileSearch,
   FolderOpen,
   GitBranch,
   Gauge,
+  HardDrive,
+  Home,
   Layers3,
   Network,
   PanelRightOpen,
@@ -25,11 +30,16 @@ import {
   ScanLine,
   SearchCheck,
   Server,
+  Settings,
+  Shield,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
   Table2,
   TerminalSquare,
+  Trash2,
   WandSparkles,
+  Workflow,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { loadShutdownReport, type SafeToKill, type ShutdownBlocker, type ShutdownSafetyReport } from "./report";
@@ -42,7 +52,57 @@ const LEVEL_SCORE: Record<SafeToKill, number> = {
   Dangerous: 96,
   Unknown: 72,
 };
-type AppMode = "shutdown" | "iso";
+type AppMode = "command" | "iso" | "shutdown" | "cleanup" | "locks";
+
+const NAV_ITEMS: Array<{ mode: AppMode; label: string }> = [
+  { mode: "command", label: "Command" },
+  { mode: "iso", label: "ISO PDF" },
+  { mode: "shutdown", label: "Shutdown" },
+  { mode: "cleanup", label: "Cleanup" },
+  { mode: "locks", label: "Locks" },
+];
+
+const MODE_META: Record<AppMode, { eyebrow: string; title: string; line: string }> = {
+  command: {
+    eyebrow: "Desktop support command center",
+    title: "桌面輔助系統",
+    line: "tools · runtime · jobs · safety cockpit",
+  },
+  iso: {
+    eyebrow: "Tauri ISO autopilot",
+    title: "ISO PDF 拆頁命名",
+    line: "source → split → detect → rename plan",
+  },
+  shutdown: {
+    eyebrow: "Tauri shutdown cockpit",
+    title: "Shutdown Safety Inspector",
+    line: "scan · process guard · dependency graph",
+  },
+  cleanup: {
+    eyebrow: "Safe cleanup command deck",
+    title: "安全清除工作台",
+    line: "scan · quarantine · restore · verify",
+  },
+  locks: {
+    eyebrow: "File relationship radar",
+    title: "檔案關係與鎖定雷達",
+    line: "producer · reader · lock · output graph",
+  },
+};
+
+const COMMAND_TOOLS = [
+  { mode: "iso" as AppMode, title: "ISO PDF 拆頁命名", status: "Concept", detail: "Autopilot flow · rename plan · ROI review", tone: "warn" },
+  { mode: "shutdown" as AppMode, title: "Shutdown Safety Inspector", status: "Live", detail: "Process tree · lock files · safe-to-kill policy", tone: "ready" },
+  { mode: "cleanup" as AppMode, title: "安全清除工作台", status: "Prototype", detail: "Quarantine-first cleanup · restore trail", tone: "ready" },
+  { mode: "locks" as AppMode, title: "檔案關係排查", status: "Prototype", detail: "Dependency graph · lock holder · provenance", tone: "warn" },
+];
+
+const COMMAND_FEED = [
+  { code: "SYS", title: "Tauri shell ready", detail: "React cockpit can host multiple workbenches", tone: "ready" },
+  { code: "ISO", title: "Autopilot concept online", detail: "拆頁、判讀、命名、review queue 已有視覺稿", tone: "warn" },
+  { code: "PWR", title: "Shutdown backend connected", detail: "Native shell calls Python scanner through Rust command", tone: "ready" },
+  { code: "NEXT", title: "Pipeline bridge pending", detail: "下一步把 ISO Python workflow 接到 Tauri command", tone: "idle" },
+];
 
 const ISO_STEPS = [
   { label: "來源", state: "ready", meta: "combine.pdf · 24 pages" },
@@ -68,7 +128,7 @@ const ISO_ISSUES = [
 ];
 
 export default function App() {
-  const [mode, setMode] = useState<AppMode>("iso");
+  const [mode, setMode] = useState<AppMode>("command");
   const [report, setReport] = useState<ShutdownSafetyReport | null>(null);
   const [source, setSource] = useState<"tauri" | "sample">("sample");
   const [selectedId, setSelectedId] = useState("");
@@ -109,32 +169,31 @@ export default function App() {
   const selected = blockers.find((blocker) => blocker.id === selectedId) ?? blockers[0] ?? null;
   const riskScore = getRiskScore(report);
   const guardState = getGuardState(report);
+  const meta = MODE_META[mode];
 
   return (
     <main className={`shell mode-${mode}`}>
       <header className="topbar">
         <div className="brand-lockup">
           <div className="brand-mark">
-            {mode === "shutdown" ? <Power size={20} /> : <FileText size={20} />}
+            {modeIcon(mode, 20)}
           </div>
           <div className="brand-block">
-            <div className="eyebrow">{mode === "shutdown" ? "Tauri shutdown cockpit" : "Tauri ISO autopilot"}</div>
-            <h1>{mode === "shutdown" ? "Shutdown Safety Inspector" : "ISO PDF 拆頁命名"}</h1>
+            <div className="eyebrow">{meta.eyebrow}</div>
+            <h1>{meta.title}</h1>
             <div className="report-line">
-              {mode === "shutdown" ? `${report?.scan_reason ?? "scan"} · ${report?.created_at ?? "waiting for report"}` : "source → split → detect → rename plan"}
+              {mode === "shutdown" ? `${report?.scan_reason ?? "scan"} · ${report?.created_at ?? "waiting for report"}` : meta.line}
             </div>
           </div>
         </div>
         <div className="toolbar">
           <div className="mode-switch" aria-label="Workbench mode">
-            <button className={mode === "iso" ? "active" : ""} onClick={() => setMode("iso")}>
-              <FileText size={15} />
-              <span>ISO PDF</span>
-            </button>
-            <button className={mode === "shutdown" ? "active" : ""} onClick={() => setMode("shutdown")}>
-              <Power size={15} />
-              <span>Shutdown</span>
-            </button>
+            {NAV_ITEMS.map((item) => (
+              <button className={mode === item.mode ? "active" : ""} key={item.mode} onClick={() => setMode(item.mode)}>
+                {modeIcon(item.mode, 15)}
+                <span>{item.label}</span>
+              </button>
+            ))}
           </div>
           {mode === "shutdown" ? (
             <>
@@ -145,18 +204,63 @@ export default function App() {
               <div className={`source-pill ${source}`}>{source === "tauri" ? "Live Python report" : "Browser sample"}</div>
             </>
           ) : (
-            <div className="source-pill sample">Concept preview</div>
+            <div className={`source-pill ${mode === "command" ? "tauri" : "sample"}`}>
+              {mode === "command" ? "Tauri shell" : "Concept preview"}
+            </div>
           )}
         </div>
       </header>
 
       {error ? <div className="error-line">{error}</div> : null}
 
-      {mode === "iso" ? (
+      {mode === "command" ? (
+        <CommandCenter setMode={setMode} report={report} source={source} />
+      ) : mode === "iso" ? (
         <IsoPdfAutopilot />
+      ) : mode === "cleanup" ? (
+        <SafeCleanupCockpit />
+      ) : mode === "locks" ? (
+        <FileLockCockpit />
       ) : (
-        <>
+        <ShutdownCockpit
+          blockers={blockers}
+          levelFilter={levelFilter}
+          report={report}
+          riskScore={riskScore}
+          guardState={guardState}
+          selected={selected}
+          setLevelFilter={setLevelFilter}
+          setSelectedId={setSelectedId}
+          source={source}
+        />
+      )}
+    </main>
+  );
+}
 
+function ShutdownCockpit({
+  blockers,
+  guardState,
+  levelFilter,
+  report,
+  riskScore,
+  selected,
+  setLevelFilter,
+  setSelectedId,
+  source,
+}: {
+  blockers: ShutdownBlocker[];
+  guardState: "safe" | "caution" | "danger";
+  levelFilter: SafeToKill | "All";
+  report: ShutdownSafetyReport | null;
+  riskScore: number;
+  selected: ShutdownBlocker | null;
+  setLevelFilter: (level: SafeToKill | "All") => void;
+  setSelectedId: (id: string) => void;
+  source: "tauri" | "sample";
+}) {
+  return (
+    <>
       <section className="status-deck" aria-label="Report summary">
         <div className={`risk-core ${guardState}`}>
           <div className="risk-ring" style={{ "--risk": `${riskScore}%` } as React.CSSProperties}>
@@ -231,9 +335,206 @@ export default function App() {
           {selected ? <BlockerDetail blocker={selected} report={report} /> : <div className="empty-detail">Select a blocker.</div>}
         </section>
       </section>
-        </>
-      )}
-    </main>
+    </>
+  );
+}
+
+function CommandCenter({
+  report,
+  setMode,
+  source,
+}: {
+  report: ShutdownSafetyReport | null;
+  setMode: (mode: AppMode) => void;
+  source: "tauri" | "sample";
+}) {
+  const liveBlockers = report?.blockers.length ?? 0;
+  return (
+    <section className="command-board">
+      <div className="command-hero">
+        <div>
+          <div className="eyebrow">Mission control</div>
+          <h2>所有工作流集中到一個桌面控制台</h2>
+          <p>從 PDF 命名、關機防護、安全清除到檔案關係排查，統一用同一套 cockpit 操作。</p>
+        </div>
+        <div className="command-core">
+          <span>System pulse</span>
+          <strong>{source === "tauri" ? "LIVE" : "SIM"}</strong>
+        </div>
+      </div>
+
+      <div className="command-metrics">
+        <CommandMetric icon={<Workflow size={18} />} label="Workbenches" value="5" />
+        <CommandMetric icon={<Shield size={18} />} label="Live blockers" value={String(liveBlockers)} />
+        <CommandMetric icon={<Boxes size={18} />} label="Runtime lanes" value="4" />
+        <CommandMetric icon={<Bot size={18} />} label="Automation" value="armed" />
+      </div>
+
+      <div className="command-grid">
+        <section className="tool-matrix">
+          <div className="section-heading">
+            <div>
+              <div className="eyebrow">Tool matrix</div>
+              <h2>工作台入口</h2>
+            </div>
+          </div>
+          <div className="tool-card-grid">
+            {COMMAND_TOOLS.map((tool) => (
+              <button className={`tool-card ${tool.tone}`} key={tool.mode} onClick={() => setMode(tool.mode)}>
+                <div className="tool-card-icon">{modeIcon(tool.mode, 20)}</div>
+                <div>
+                  <span>{tool.status}</span>
+                  <strong>{tool.title}</strong>
+                  <p>{tool.detail}</p>
+                </div>
+                <ChevronRight size={17} />
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <aside className="ops-panel">
+          <h3>Operations feed</h3>
+          {COMMAND_FEED.map((item) => (
+            <div className={`ops-feed-item ${item.tone}`} key={`${item.code}-${item.title}`}>
+              <span>{item.code}</span>
+              <div>
+                <strong>{item.title}</strong>
+                <p>{item.detail}</p>
+              </div>
+            </div>
+          ))}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function CommandMetric({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="command-metric">
+      <div className="metric-icon">{icon}</div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function SafeCleanupCockpit() {
+  return (
+    <section className="feature-board cleanup-board">
+      <div className="feature-hero">
+        <div>
+          <div className="eyebrow">Quarantine-first cleanup</div>
+          <h2>安全清除工作台</h2>
+          <p>先評估風險，再移入隔離區；每個動作都保留 rollback 路徑與證據。</p>
+        </div>
+        <button className="launch-button">
+          <Trash2 size={18} />
+          <span>開始掃描</span>
+        </button>
+      </div>
+
+      <div className="feature-grid">
+        <section className="cleanup-stack">
+          <CleanupLane title="低風險暫存" count="128" tone="ready" detail="可隔離，保留 7 天復原" />
+          <CleanupLane title="需要確認" count="16" tone="warn" detail="可能關聯快取、模型或輸出資料" />
+          <CleanupLane title="阻擋項目" count="3" tone="danger" detail="檔案鎖定、profile handle 或工作中 job" />
+        </section>
+        <section className="cleanup-radar">
+          <div className="radar-dial">
+            <Sparkles size={28} />
+            <strong>72</strong>
+            <span>cleanup confidence</span>
+          </div>
+          <div className="cleanup-checks">
+            <Gate label="Quarantine manifest" state="ready" />
+            <Gate label="Restore path verified" state="ready" />
+            <Gate label="File locks pending" state="warn" />
+            <Gate label="System folders excluded" state="ready" />
+          </div>
+        </section>
+        <aside className="cleanup-detail">
+          <h3>Selected suggestion</h3>
+          <KeyValue label="Layer" value="Project runtime temp" />
+          <KeyValue label="Action" value="Move to quarantine" />
+          <KeyValue label="Consequence" value="Job can rebuild cache on next launch" />
+          <KeyValue label="Rollback" value="Available through manifest" />
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function CleanupLane({ count, detail, title, tone }: { count: string; detail: string; title: string; tone: string }) {
+  return (
+    <div className={`cleanup-lane ${tone}`}>
+      <div>
+        <span>{title}</span>
+        <strong>{count}</strong>
+      </div>
+      <p>{detail}</p>
+    </div>
+  );
+}
+
+function FileLockCockpit() {
+  return (
+    <section className="feature-board lock-board">
+      <div className="feature-hero">
+        <div>
+          <div className="eyebrow">Relationship graph</div>
+          <h2>檔案關係與鎖定雷達</h2>
+          <p>用 producer / reader / temp / output 關係看懂誰咬著檔案，誰會被連帶影響。</p>
+        </div>
+        <button className="launch-button">
+          <FileSearch size={18} />
+          <span>掃描檔案關係</span>
+        </button>
+      </div>
+
+      <div className="lock-grid">
+        <aside className="lock-source-list">
+          <StatusTile icon={<HardDrive size={18} />} title="Output" value="exports/isometric/P005.pdf" tone="warn" />
+          <StatusTile icon={<Cpu size={18} />} title="Holder" value="python.exe · PID 3188" tone="warn" />
+          <StatusTile icon={<FolderOpen size={18} />} title="Temp" value=".runtime/temp/iso_pages" tone="ready" />
+          <StatusTile icon={<Settings size={18} />} title="Component" value="iso.naming.autopilot" tone="ready" />
+        </aside>
+        <section className="graph-canvas">
+          <div className="graph-node producer">ISO List</div>
+          <div className="graph-node worker">Detector</div>
+          <div className="graph-node temp">Temp pages</div>
+          <div className="graph-node output">Renamed PDF</div>
+          <div className="graph-link link-a" />
+          <div className="graph-link link-b" />
+          <div className="graph-link link-c" />
+        </section>
+        <aside className="lock-findings">
+          <h3>Findings</h3>
+          <div className="issue-card warn">
+            <CircleAlert size={16} />
+            <div>
+              <strong>stdout pipe active</strong>
+              <span>worker process still streaming OCR logs</span>
+            </div>
+          </div>
+          <div className="issue-card ready">
+            <CircleCheck size={16} />
+            <div>
+              <strong>project-owned process</strong>
+              <span>command line contains project root</span>
+            </div>
+          </div>
+          <div className="issue-card danger">
+            <AlertTriangle size={16} />
+            <div>
+              <strong>output incomplete</strong>
+              <span>rename plan has not been applied yet</span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
   );
 }
 
@@ -558,6 +859,21 @@ function getGuardState(report: ShutdownSafetyReport | null): "safe" | "caution" 
     return "caution";
   }
   return "safe";
+}
+
+function modeIcon(mode: AppMode, size: number): React.ReactNode {
+  switch (mode) {
+    case "command":
+      return <Home size={size} />;
+    case "iso":
+      return <FileText size={size} />;
+    case "shutdown":
+      return <Power size={size} />;
+    case "cleanup":
+      return <Trash2 size={size} />;
+    case "locks":
+      return <FileSearch size={size} />;
+  }
 }
 
 function sortBlockers(items: ShutdownBlocker[]): ShutdownBlocker[] {
