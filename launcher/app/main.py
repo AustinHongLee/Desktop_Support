@@ -16,9 +16,12 @@ def _run_pyqt(*, start_hidden: bool = False, force_show: bool = False) -> int:
     from PyQt6.QtWidgets import QApplication
 
     from launcher.app.bootstrap import LauncherBootstrap
+    from launcher.core.shutdown_safety import register_current_app_process, unregister_current_app_process
 
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    register_current_app_process()
+    app.aboutToQuit.connect(unregister_current_app_process)
 
     dock, _tray = LauncherBootstrap().create()
     if force_show and not start_hidden:
@@ -60,6 +63,9 @@ def main() -> int:
     elif args.open_file_lock_checker:
         ContextInbox().submit_open_file_lock_checker(args.set_context, source=args.context_source)
         submitted_context = True
+    elif args.open_shutdown_safety_inspector:
+        ContextInbox().submit_open_shutdown_safety_inspector(args.set_context, source=args.context_source)
+        submitted_context = True
     elif args.open_iso_workbench:
         ContextInbox().submit_open_iso_workbench(args.set_context, source=args.context_source)
         submitted_context = True
@@ -90,6 +96,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--open-iso-workbench", action="store_true", help="open the ISO PDF naming workbench")
     parser.add_argument("--open-safe-cleanup", action="store_true", help="open the safe cleanup workbench")
     parser.add_argument("--open-file-lock-checker", action="store_true", help="open the file lock checker")
+    parser.add_argument("--open-shutdown-safety-inspector", action="store_true", help="open the Shutdown Safety Inspector")
     parser.add_argument("--start-hidden", action="store_true", help="start in the system tray without showing the dock")
     parser.add_argument("--show-existing", action="store_true", help="show the existing launcher instance when one is already running")
     parser.add_argument("--set-context", nargs="+", default=[])

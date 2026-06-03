@@ -10,8 +10,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QDialog, QHeaderView  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QDialog  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
 from launcher.core.safe_cleanup import BLOCKED_LAYER, PROCESS_LAYER, REGISTRY_LAYER, SAFE_LAYER, CleanupPlan, CleanupPlanItem, InstalledApplication, OfficialUninstaller  # noqa: E402
@@ -38,10 +37,9 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertEqual(dialog._target_path.text(), str(target))
         self.assertIn("a.txt", dialog._identity.text())
         self.assertGreater(dialog._info_tree.topLevelItemCount(), 0)
-        first_child = dialog._tree.topLevelItem(0).child(0)
-        self.assertEqual(first_child.checkState(0), Qt.CheckState.Checked)
-        dialog._tree.setCurrentItem(first_child)
-        dialog._update_detail()
+        card = next(iter(dialog._suggestion_tab._item_cards.values()))
+        self.assertTrue(card.is_checked())
+        dialog._suggestion_tab.focus_layer(SAFE_LAYER)
         self.assertIn("證據帳本", dialog._detail.toPlainText())
         self.assertIn("證據分層", _tree_texts(dialog._info_tree))
 
@@ -63,7 +61,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
         self.assertIn("同名 / 衍生檔", labels)
         self.assertIn("ABC_page_001.pdf", labels)
 
-    def test_suggestion_columns_are_resizable_and_scrollable(self) -> None:
+    def test_suggestion_tab_replaces_legacy_table_surface(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             target = root / "very_long_name.txt"
@@ -73,15 +71,9 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
                 _wait_for_scan(dialog)
 
-        header = dialog._tree.header()
-        self.assertFalse(header.stretchLastSection())
-        self.assertEqual(dialog._tree.horizontalScrollBarPolicy(), Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.assertEqual(header.sectionResizeMode(3), QHeaderView.ResizeMode.Interactive)
-        self.assertEqual(header.sectionResizeMode(4), QHeaderView.ResizeMode.Interactive)
-        original_width = dialog._tree.columnWidth(3)
-        dialog._tree.setColumnWidth(3, original_width + 123)
-        dialog._populate()
-        self.assertEqual(dialog._tree.columnWidth(3), original_width + 123)
+        self.assertFalse(hasattr(dialog, "_tree"))
+        self.assertTrue(dialog._suggestion_tab.plan_items())
+        self.assertTrue(dialog._suggestion_tab.selected_item_ids())
 
     def test_blocked_hklm_evidence_is_collapsed_and_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -107,18 +99,11 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
                 _wait_for_scan(dialog)
 
-        group = dialog._tree.topLevelItem(0)
-        child = group.child(0)
-        self.assertIn("系統層待管理員確認", group.text(0))
-        self.assertFalse(group.isExpanded())
-        self.assertEqual(child.text(2), "需管理員清理")
-        self.assertEqual(child.text(0), "管理員")
-        self.assertTrue(bool(child.flags() & Qt.ItemFlag.ItemIsEnabled))
-        self.assertTrue(bool(child.flags() & Qt.ItemFlag.ItemIsSelectable))
-        self.assertFalse(bool(child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
+        dialog._suggestion_tab.focus_layer(BLOCKED_LAYER)
+        card = dialog._suggestion_tab._item_cards[hklm_item.id]
+        self.assertFalse(card.is_checked())
+        self.assertFalse(dialog._suggestion_tab.selected_item_ids())
         self.assertIn("系統待確認 1", dialog._summary.text())
-        dialog._tree.setCurrentItem(child)
-        dialog._update_detail()
         self.assertIn("重裝影響：可能", dialog._detail.toPlainText())
         self.assertIn("為什麼不能打勾", dialog._detail.toPlainText())
 
@@ -146,8 +131,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
                 _wait_for_scan(dialog)
 
-            child = dialog._tree.topLevelItem(0).child(0)
-            dialog._tree.setCurrentItem(child)
+            dialog._suggestion_tab.focus_layer(BLOCKED_LAYER)
 
             opened: list[CleanupPlanItem] = []
 
@@ -245,23 +229,16 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
                 _wait_for_scan(dialog)
 
-        registry_child = None
-        for index in range(dialog._tree.topLevelItemCount()):
-            group = dialog._tree.topLevelItem(index)
-            if "登錄檔" in group.text(0):
-                registry_child = group.child(0)
-                break
-        self.assertIsNotNone(registry_child)
-        assert registry_child is not None
-        self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsEnabled))
-        self.assertFalse(bool(registry_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
-        self.assertEqual(registry_child.text(0), "需允許")
+        card = dialog._suggestion_tab._item_cards[registry_item.id]
+        self.assertFalse(card.is_checked())
+        card.set_checked(True)
+        self.assertFalse(card.is_checked())
 
-        dialog._include_registry.setChecked(True)
+        dialog._suggestion_tab._sidebar._unlock_checks[REGISTRY_LAYER].setChecked(True)
+        card.set_checked(True)
 
-        self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsEnabled))
-        self.assertTrue(bool(registry_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
-        self.assertEqual(registry_child.text(0), "")
+        self.assertTrue(card.is_checked())
+        self.assertIn(registry_item.id, dialog._suggestion_tab.selected_item_ids())
 
     def test_process_items_are_disabled_until_close_toggle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -287,23 +264,15 @@ class SafeCleanupDialogTests(unittest.TestCase):
                     dialog = SafeCleanupDialog(LauncherContext.from_paths([target]))
                     _wait_for_scan(dialog)
 
-        process_child = None
-        for index in range(dialog._tree.topLevelItemCount()):
-            group = dialog._tree.topLevelItem(index)
-            if "執行中" in group.text(0):
-                process_child = group.child(0)
-                break
-        self.assertIsNotNone(process_child)
-        assert process_child is not None
-        self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
-        self.assertFalse(bool(process_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
-        self.assertEqual(process_child.text(0), "需允許")
+        card = dialog._suggestion_tab._item_cards[process_item.id]
+        self.assertFalse(card.is_checked())
+        card.set_checked(True)
+        self.assertFalse(card.is_checked())
 
-        dialog._include_process.setChecked(True)
+        dialog._suggestion_tab._sidebar._unlock_checks[PROCESS_LAYER].setChecked(True)
+        card.set_checked(True)
 
-        self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsEnabled))
-        self.assertTrue(bool(process_child.flags() & Qt.ItemFlag.ItemIsUserCheckable))
-        self.assertEqual(process_child.text(0), "")
+        self.assertTrue(card.is_checked())
         self.assertIn("執行中", dialog._summary.text())
 
     def test_dialog_accepts_typed_residue_target(self) -> None:
@@ -460,7 +429,7 @@ class SafeCleanupDialogTests(unittest.TestCase):
                 _wait_for_scan(dialog)
 
         self.assertIn("分析已取消", dialog._summary.text())
-        self.assertNotIn("late result", _tree_texts(dialog._tree))
+        self.assertNotIn("late result", {item.label for item in dialog._suggestion_tab.plan_items().values()})
 
 def _tree_texts(tree) -> set[str]:  # noqa: ANN001
     texts: set[str] = set()

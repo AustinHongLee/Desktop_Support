@@ -4,15 +4,17 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from openpyxl import Workbook  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel, QMessageBox  # noqa: E402
 from pypdf import PdfWriter  # noqa: E402
 
 from launcher.core.context_model import LauncherContext  # noqa: E402
 from launcher.plugins.iso_tools.iso_naming import IsoRecord  # noqa: E402
+from launcher.plugins.iso_tools.serial_vision import SerialVisionResult  # noqa: E402
 from launcher.ui.iso_pdf_naming_dialog import IsoPdfNamingDialog  # noqa: E402
 
 
@@ -70,6 +72,50 @@ class IsoWorkflowStatusTests(unittest.TestCase):
             self.assertEqual(len(dialog._records), 2)
             self.assertEqual(dialog._workflow_source_chip.property("state"), "ready")
             self.assertEqual(dialog._workflow_iso_chip.property("state"), "ready")
+
+    def test_problem_guidance_points_to_manual_edit_and_apply_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            pdf = folder / "page_001.pdf"
+            pdf.write_bytes(b"%PDF-1.4\n")
+            dialog = IsoPdfNamingDialog(LauncherContext(folder=folder, source="test"))
+
+            dialog._records = [IsoRecord("1", "PIPE-A")]
+            dialog._regenerate_names()
+            dialog._set_review_issue(0, "信心太低 0.52")
+            dialog._refresh_statuses()
+
+            self.assertIn("sort/流水號", dialog._review_guidance_label.text())
+            self.assertIn("確認此列", dialog._review_guidance_label.text())
+            self.assertFalse(dialog._apply_rename_button.isEnabled())
+
+            dialog._clear_review_issue(0)
+            dialog._refresh_statuses()
+
+            self.assertIn("套用更名", dialog._review_guidance_label.text())
+            self.assertTrue(dialog._apply_rename_button.isEnabled())
+
+    def test_user_can_adopt_low_confidence_detected_serial_after_confirming(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            pdf = folder / "page_001.pdf"
+            pdf.write_bytes(b"%PDF-1.4\n")
+            dialog = IsoPdfNamingDialog(LauncherContext(folder=folder, source="test"))
+
+            dialog._records = [IsoRecord("2", "PIPE-B")]
+            dialog._regenerate_names()
+            dialog._set_review_issue(0, "信心太低 0.50")
+            result = SerialVisionResult("2", 0.50, "低信心測試")
+            dialog._vision_results[pdf] = result
+            dialog._set_vision_cell(0, result)
+            dialog._table.setCurrentCell(0, 3)
+
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                dialog._apply_detected_serial_to_row()
+
+            self.assertEqual(dialog._table.item(0, 3).text(), "2")
+            self.assertEqual(dialog._table.item(0, 4).text(), "PIPE-B")
+            self.assertNotIn(pdf, dialog._review_issues)
 
 
 if __name__ == "__main__":

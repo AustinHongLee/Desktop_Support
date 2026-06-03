@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import QWidget
 
 from launcher.core.safe_cleanup import BLOCKED_LAYER, PROCESS_LAYER, REGISTRY_LAYER, REVIEW_LAYER, SAFE_LAYER, CleanupPlan
 
+RISK_METER_ANIMATION_ENABLED = True
 _LAYERS = (SAFE_LAYER, PROCESS_LAYER, REVIEW_LAYER, REGISTRY_LAYER, BLOCKED_LAYER)
 _COLORS = {
     SAFE_LAYER: "#10b981",
@@ -27,7 +28,7 @@ class RiskMeter(QWidget):
     def __init__(self, parent=None) -> None:  # noqa: ANN001
         super().__init__(parent)
         self._counts = {layer: 0 for layer in _LAYERS}
-        self.setMinimumHeight(34)
+        self.setMinimumHeight(52)
 
     def set_plan(self, plan: CleanupPlan | None) -> None:
         if plan is None:
@@ -37,7 +38,15 @@ class RiskMeter(QWidget):
         self.update()
 
     def sizeHint(self) -> QSize:
-        return QSize(260, 38)
+        return QSize(260, 54)
+
+    def warning_text(self) -> str:
+        warnings: list[str] = []
+        if self._counts[REGISTRY_LAYER] > 0:
+            warnings.append(f"含 {self._counts[REGISTRY_LAYER]} 項 Windows 設定殘留，需手動確認")
+        if self._counts[BLOCKED_LAYER] > 0:
+            warnings.append(f"含 {self._counts[BLOCKED_LAYER]} 項系統層，只列出不清理")
+        return "；".join(warnings)
 
     def paintEvent(self, event) -> None:  # noqa: ANN001
         super().paintEvent(event)
@@ -58,16 +67,11 @@ class RiskMeter(QWidget):
         if total:
             x = float(bar_rect.left())
             painter.setClipPath(path)
-            remaining = float(width)
-            for index, layer in enumerate(_LAYERS):
-                count = self._counts[layer]
-                if count <= 0:
+            widths = self._segment_widths(float(width), total)
+            for layer in _LAYERS:
+                segment_width = widths[layer]
+                if segment_width <= 0:
                     continue
-                if index == len(_LAYERS) - 1:
-                    segment_width = remaining
-                else:
-                    segment_width = max(1.0, width * count / total)
-                    remaining -= segment_width
                 painter.fillRect(int(x), bar_rect.top(), int(segment_width + 0.5), bar_height, QColor(_COLORS[layer]))
                 x += segment_width
             painter.setClipping(False)
@@ -80,4 +84,22 @@ class RiskMeter(QWidget):
             parts = [f"{_LABELS[layer]} {self._counts[layer]}" for layer in _LAYERS]
             text = "｜".join(parts) + f"｜總計 {total} 項"
         painter.drawText(0, bar_y + bar_height + 4, self.width(), self.height() - bar_height - 4, Qt.AlignmentFlag.AlignLeft, text)
+        warning = self.warning_text()
+        if warning:
+            painter.setPen(QPen(QColor("#b91c1c")))
+            painter.drawText(0, bar_y + bar_height + 22, self.width(), self.height() - bar_height - 4, Qt.AlignmentFlag.AlignLeft, warning)
 
+    def _segment_widths(self, width: float, total: int) -> dict[str, float]:
+        widths = {layer: (width * self._counts[layer] / total if self._counts[layer] > 0 else 0.0) for layer in _LAYERS}
+        floor = max(8.0, width * 0.05)
+        for layer in (REGISTRY_LAYER, BLOCKED_LAYER):
+            if self._counts[layer] > 0 and widths[layer] < floor:
+                missing = floor - widths[layer]
+                widths[layer] = floor
+                donors = [candidate for candidate in (SAFE_LAYER, REVIEW_LAYER, PROCESS_LAYER) if widths[candidate] > 1.0]
+                donor_total = sum(widths[candidate] for candidate in donors)
+                if donor_total > 0:
+                    for donor in donors:
+                        widths[donor] = max(1.0, widths[donor] - missing * widths[donor] / donor_total)
+        scale = width / max(width, sum(widths.values()))
+        return {layer: value * scale for layer, value in widths.items()}

@@ -114,6 +114,17 @@
       "command": {
         "type": "ui_file_lock_checker_dialog"
       }
+    },
+    {
+      "id": "system.shutdown_safety_inspector",
+      "title": "Shutdown Safety Inspector",
+      "category": "系統",
+      "description": "關閉 app、登出、重開機或關機前列出本專案 process/job/lock/temp/file dependency blocker，並提供等待、正常停止、強制停止或取消關閉。",
+      "icon": "shield-alert",
+      "risk": "medium",
+      "command": {
+        "type": "ui_shutdown_safety_dialog"
+      }
     }
   ]
 }

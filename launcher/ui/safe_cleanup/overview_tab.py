@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QScro
 
 from launcher.core.safe_cleanup import BLOCKED_LAYER, PROCESS_LAYER, REGISTRY_LAYER, REVIEW_LAYER, SAFE_LAYER, CleanupPlan
 from launcher.ui.components.card import Card
+from launcher.ui.safe_cleanup.layer_language import SAFETY_GUARANTEE_TEXT, language_for_layer
 from launcher.ui.safe_cleanup.one_click_dialogs import default_one_click_ids
 from launcher.ui.safe_cleanup.stat_card import StatCard
 
@@ -29,11 +30,11 @@ class OverviewTab(QWidget):
         grid.setVerticalSpacing(10)
 
         specs = (
-            (SAFE_LAYER, "安全可清"),
-            (PROCESS_LAYER, "執行中 / 佔用"),
-            (REVIEW_LAYER, "需要人工確認"),
-            (REGISTRY_LAYER, "登錄檔 HKCU"),
-            (BLOCKED_LAYER, "系統層待管理員"),
+            (SAFE_LAYER, language_for_layer(SAFE_LAYER).title),
+            (REVIEW_LAYER, language_for_layer(REVIEW_LAYER).title),
+            (PROCESS_LAYER, language_for_layer(PROCESS_LAYER).title),
+            (REGISTRY_LAYER, language_for_layer(REGISTRY_LAYER).title),
+            (BLOCKED_LAYER, language_for_layer(BLOCKED_LAYER).title),
             ("uninstaller", "官方解除安裝"),
         )
         for index, (layer, title) in enumerate(specs):
@@ -66,7 +67,7 @@ class OverviewTab(QWidget):
         cta_row = QHBoxLayout()
         cta_row.setContentsMargins(0, 0, 0, 0)
         cta_row.setSpacing(12)
-        cta_text = QLabel("預設只會隔離安全層與需確認層，不會碰 HKCU 登錄檔、執行中程序或系統層。")
+        cta_text = QLabel(f"一鍵只會處理高信心、預設建議項目。{SAFETY_GUARANTEE_TEXT}")
         cta_text.setObjectName("Muted")
         cta_text.setWordWrap(True)
         self._one_click_button = QPushButton("一鍵安全清除")
@@ -89,10 +90,10 @@ class OverviewTab(QWidget):
 
     def set_plan(self, plan: CleanupPlan) -> None:
         self._cards[SAFE_LAYER].set_value(plan.count_by_layer(SAFE_LAYER), f"估計可釋出 {_format_size(_layer_size(plan, SAFE_LAYER))}")
-        self._cards[PROCESS_LAYER].set_value(plan.count_by_layer(PROCESS_LAYER), "需手動關閉或明確允許")
-        self._cards[REVIEW_LAYER].set_value(plan.count_by_layer(REVIEW_LAYER), "資料夾與衍生檔需人工確認")
-        self._cards[REGISTRY_LAYER].set_value(plan.count_by_layer(REGISTRY_LAYER), "不進一鍵流程")
-        self._cards[BLOCKED_LAYER].set_value(plan.count_by_layer(BLOCKED_LAYER), "需另外啟動管理員深度清理")
+        self._cards[REVIEW_LAYER].set_value(plan.count_by_layer(REVIEW_LAYER), "預設不勾，清前確認")
+        self._cards[PROCESS_LAYER].set_value(plan.count_by_layer(PROCESS_LAYER), "需明確允許後手動勾")
+        self._cards[REGISTRY_LAYER].set_value(plan.count_by_layer(REGISTRY_LAYER), "需二次確認")
+        self._cards[BLOCKED_LAYER].set_value(plan.count_by_layer(BLOCKED_LAYER), "只列出，不清理")
         self._cards["uninstaller"].set_value(len(plan.official_uninstallers), "建議先跑官方解除安裝")
 
         primary = _primary_uninstaller(plan)

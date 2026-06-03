@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QFileInfo, QPoint, QTimer, Qt
@@ -37,9 +38,13 @@ from launcher.ui.plugin_manager_dialog import PluginManagerDialog
 from launcher.ui.preferences_dialog import PreferencesDialog
 from launcher.ui.rename_dialog import RenameDialog
 from launcher.ui.safe_cleanup_dialog import SafeCleanupDialog
+from launcher.ui.shutdown_safety_dialog import ShutdownSafetyDialog
 from launcher.ui.theme import Theme, dock_stylesheet, theme_by_name
 from launcher.windows.clipboard import set_clipboard_text
 from launcher.windows.explorer_context import get_open_explorer_contexts
+
+WM_QUERYENDSESSION = 0x0011
+WM_ENDSESSION = 0x0016
 
 
 class DockWindow(QWidget):
@@ -63,6 +68,8 @@ class DockWindow(QWidget):
         self._icon_provider = QFileIconProvider()
         self._positioner = EdgePositioner()
         self._toolbar_buttons: list[QToolButton] = []
+        self._shutdown_dialogs: list[ShutdownSafetyDialog] = []
+        self._shutdown_safety_bypass = False
         self._drag_anchor: QPoint | None = None
         self._tail_drag_offset: float | None = None
         self._tail_drag_edge: str | None = None
@@ -219,6 +226,30 @@ class DockWindow(QWidget):
             return
         super().mouseReleaseEvent(event)
 
+    def closeEvent(self, event) -> None:  # noqa: ANN001
+        if self._shutdown_safety_bypass:
+            event.accept()
+            return
+        if self._run_shutdown_safety_before_close("app.close"):
+            self._shutdown_safety_bypass = True
+            event.accept()
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+            return
+        event.ignore()
+
+    def nativeEvent(self, event_type, message):  # noqa: ANN001
+        if sys.platform == "win32":
+            message_id = _windows_message_id(message)
+            if message_id == WM_QUERYENDSESSION:
+                self._handle_windows_shutdown_event("WM_QUERYENDSESSION")
+                return True, 1
+            if message_id == WM_ENDSESSION:
+                self._handle_windows_shutdown_event("WM_ENDSESSION")
+                return True, 0
+        return False, 0
+
     def refresh_context(self) -> None:
         self._context = self._context_service.current_context()
         self._update_context_label()
@@ -280,6 +311,24 @@ class DockWindow(QWidget):
         dialog = FileLockCheckerDialog(self._context, self)
         dialog.exec()
 
+    def open_shutdown_safety_inspector(
+        self,
+        action_id: str = "system.shutdown_safety_inspector",
+        title: str = "Shutdown Safety Inspector",
+        category: str = "系統",
+    ) -> None:
+        self._state_store.record_action(action_id, title, category)
+        self._state_store.record_context(self._context)
+        dialog = ShutdownSafetyDialog(self, scan_reason="manual.app_button")
+        dialog.exec()
+
+    def request_shutdown_safe_quit(self) -> None:
+        if self._shutdown_safety_bypass or self._run_shutdown_safety_before_close("app.quit"):
+            self._shutdown_safety_bypass = True
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+
     def _open_iso_workbench(self, action_id: str, title: str, category: str) -> None:
         self._state_store.record_action(action_id, title, category)
         self._state_store.record_context(self._context)
@@ -305,6 +354,9 @@ class DockWindow(QWidget):
             return
         if action.command.type == "ui_file_lock_checker_dialog":
             self.open_file_lock_checker(action.id, action.title, action.category)
+            return
+        if action.command.type == "ui_shutdown_safety_dialog":
+            self.open_shutdown_safety_inspector(action.id, action.title, action.category)
             return
 
         self._state_store.record_action(action.id, action.title, action.category)
@@ -605,6 +657,9 @@ class DockWindow(QWidget):
         lock_checker = QAction("檔案佔用檢查器...", menu)
         lock_checker.triggered.connect(lambda: self.open_file_lock_checker())
         menu.addAction(lock_checker)
+        shutdown_safety = QAction("Shutdown Safety Inspector...", menu)
+        shutdown_safety.triggered.connect(lambda: self.open_shutdown_safety_inspector())
+        menu.addAction(shutdown_safety)
         preferences = QAction("偏好設定...", menu)
         preferences.triggered.connect(self.open_preferences)
         menu.addAction(preferences)
@@ -622,9 +677,12 @@ class DockWindow(QWidget):
         lock_checker = QAction("檔案佔用檢查器...", menu)
         lock_checker.triggered.connect(lambda: self.open_file_lock_checker())
         menu.addAction(lock_checker)
+        shutdown_safety = QAction("Shutdown Safety Inspector...", menu)
+        shutdown_safety.triggered.connect(lambda: self.open_shutdown_safety_inspector())
+        menu.addAction(shutdown_safety)
         menu.addSeparator()
         quit_action = QAction("關閉工具列", menu)
-        quit_action.triggered.connect(QApplication.instance().quit)
+        quit_action.triggered.connect(self.request_shutdown_safe_quit)
         menu.addAction(quit_action)
         return menu
 
@@ -929,12 +987,36 @@ class DockWindow(QWidget):
             QTimer.singleShot(0, self.open_safe_cleanup)
         if getattr(request, "command", "") == "open_file_lock_checker":
             QTimer.singleShot(0, self.open_file_lock_checker)
+        if getattr(request, "command", "") == "open_shutdown_safety_inspector":
+            QTimer.singleShot(0, self.open_shutdown_safety_inspector)
 
     def _apply_style(self) -> None:
         self.setStyleSheet(dock_stylesheet(self._theme()))
 
     def _theme(self) -> Theme:
         return theme_by_name(self._state_store.theme_name)
+
+    def _run_shutdown_safety_before_close(self, reason: str) -> bool:
+        from launcher.core.shutdown_safety import scan_shutdown_blockers, write_report
+
+        report = scan_shutdown_blockers(scan_reason=reason)
+        write_report(report)
+        if not report.blockers:
+            return True
+        dialog = ShutdownSafetyDialog(self, scan_reason=reason, allow_cancel=True, report=report)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def _handle_windows_shutdown_event(self, reason: str) -> None:
+        from launcher.core.shutdown_safety import apply_shutdown_policy, scan_shutdown_blockers, write_report
+
+        report = scan_shutdown_blockers(scan_reason=f"windows.{reason.lower()}")
+        write_report(report)
+        apply_shutdown_policy(report, kill_safe=True)
+        if reason == "WM_ENDSESSION":
+            self._shutdown_safety_bypass = True
+            app = QApplication.instance()
+            if app is not None:
+                QTimer.singleShot(0, app.quit)
 
 
 def _source_label(source: str) -> str:
@@ -955,6 +1037,26 @@ def _source_label(source: str) -> str:
         "self-test": "測試",
     }
     return labels.get(source, source.replace(".", " "))
+
+
+def _windows_message_id(message) -> int:  # noqa: ANN001
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MSG(ctypes.Structure):
+            _fields_ = [
+                ("hwnd", wintypes.HWND),
+                ("message", wintypes.UINT),
+                ("wParam", wintypes.WPARAM),
+                ("lParam", wintypes.LPARAM),
+                ("time", wintypes.DWORD),
+                ("pt", wintypes.POINT),
+            ]
+
+        return int(MSG.from_address(int(message)).message)
+    except Exception:
+        return 0
 
 
 class _ContextWakeRequest:

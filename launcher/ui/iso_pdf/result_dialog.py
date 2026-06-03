@@ -44,7 +44,7 @@ class IsoAutopilotResultDialog(QDialog):
 
         close_button = QPushButton("關閉")
         close_button.clicked.connect(lambda: self._finish("close"))
-        problems_button = QPushButton("查看問題列")
+        problems_button = QPushButton("查看並修正問題列")
         problems_button.setEnabled(summary.can_view_problems)
         problems_button.clicked.connect(lambda: self._finish("problems"))
         rename_button = QPushButton("開啟更名確認")

@@ -41,6 +41,10 @@ class ContextInbox:
         context = _context_from_shell_paths(paths, source=source)
         return self._write_payload({"command": "open_file_lock_checker", "context": context.to_payload()})
 
+    def submit_open_shutdown_safety_inspector(self, paths: list[str | Path], *, source: str = "explorer.menu") -> str:
+        context = _context_from_shell_paths(paths, source=source)
+        return self._write_payload({"command": "open_shutdown_safety_inspector", "context": context.to_payload()})
+
     def _write_payload(self, request: dict[str, Any]) -> str:
         request_id = uuid.uuid4().hex
         payload = {

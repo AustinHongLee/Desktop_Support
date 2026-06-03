@@ -14,6 +14,7 @@ from launcher.core.action_model import ActionDefinition
 from launcher.core.context_model import LauncherContext
 from launcher.core.job_model import JobEvent, JobResult
 from launcher.core.paths import project_root
+from launcher.core.shutdown_safety import ProcessGuard
 
 EventCallback = Callable[[JobEvent], None]
 
@@ -69,9 +70,11 @@ class ActionRunner:
         }
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
+        command = [sys.executable, "-m", "launcher.workers.worker_host", "--project-root", str(project_root())]
+        guard = ProcessGuard.for_action(action.id, action.title, context, command=command)
         try:
             process = subprocess.Popen(
-                [sys.executable, "-m", "launcher.workers.worker_host"],
+                command,
                 cwd=str(project_root()),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -81,6 +84,7 @@ class ActionRunner:
                 errors="replace",
                 env=env,
             )
+            guard.record_started(process)
         except OSError as exc:
             finished_at = datetime.now()
             event = JobEvent(
@@ -90,6 +94,7 @@ class ActionRunner:
             )
             if on_event:
                 on_event(event)
+            guard.mark_failed(reason=str(exc))
             return JobResult(
                 action_id=action.id,
                 return_code=-1,
@@ -110,7 +115,8 @@ class ActionRunner:
                 data={"exception": exc.__class__.__name__},
             )
             _emit_event(event, on_event)
-            _terminate_process(process)
+            _terminate_process(process, guard=guard)
+            guard.mark_failed(reason=str(exc))
             return JobResult(
                 action_id=action.id,
                 return_code=process.wait(),
@@ -128,6 +134,7 @@ class ActionRunner:
         return_code = self._drain_worker(
             action,
             process,
+            guard,
             lines,
             events,
             on_event,
@@ -138,6 +145,12 @@ class ActionRunner:
         if failure_event is not None:
             events.append(failure_event)
             _emit_event(failure_event, on_event)
+        if any(event.type in {"cancelled", "timeout"} for event in events):
+            guard.mark_interrupted(return_code=return_code, reason="cancelled or timeout")
+        elif return_code == 0:
+            guard.mark_completed(return_code=return_code)
+        else:
+            guard.mark_failed(return_code=return_code, reason="worker non-zero exit")
         finished_at = datetime.now()
         return JobResult(
             action_id=action.id,
@@ -161,6 +174,7 @@ class ActionRunner:
         self,
         action: ActionDefinition,
         process: subprocess.Popen[str],
+        guard: ProcessGuard,
         lines: queue.Queue[str | None],
         events: list[JobEvent],
         on_event: EventCallback | None,
@@ -200,7 +214,7 @@ class ActionRunner:
                 )
                 events.append(event)
                 _emit_event(event, on_event)
-                _terminate_process(process)
+                _terminate_process(process, guard=guard)
                 timeout_reported = True
 
             return_code = process.poll()
@@ -249,7 +263,10 @@ def _request_terminate(process: subprocess.Popen[str]) -> None:
         pass
 
 
-def _terminate_process(process: subprocess.Popen[str], *, grace_seconds: float = 1.5) -> None:
+def _terminate_process(process: subprocess.Popen[str], *, grace_seconds: float = 1.5, guard: ProcessGuard | None = None) -> None:
+    if guard is not None:
+        guard.terminate_process_tree(process, grace_seconds=grace_seconds)
+        return
     _request_terminate(process)
     try:
         process.wait(timeout=grace_seconds)

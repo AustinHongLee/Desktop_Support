@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QTreeWidget, QTreeWidgetItem
 
-from launcher.core.safe_cleanup import PROCESS_LAYER, REGISTRY_LAYER, REVIEW_LAYER, SAFE_LAYER, CleanupApplyResult, CleanupPlan, is_default_cleanup_candidate
+from launcher.core.safe_cleanup import REVIEW_LAYER, SAFE_LAYER, CleanupApplyResult, CleanupPlan, evidence_summary, is_default_cleanup_candidate
 from launcher.ui.components.card import Card
+from launcher.ui.safe_cleanup.layer_language import SAFETY_GUARANTEE_TEXT
 
 
 def default_one_click_ids(plan: CleanupPlan) -> set[str]:
@@ -26,7 +27,7 @@ class OneClickSummaryDialog(QDialog):
         target_name = plan.targets[0].name if plan.targets else "目前目標"
         title = QLabel(f"即將安全清除：{target_name}")
         title.setObjectName("H1")
-        hint = QLabel("將依預設規則處理項目：只選安全層與需確認層，且所有檔案/資料夾都會先移到隔離區。")
+        hint = QLabel("一鍵只處理高信心、預設建議項目；其他可疑殘留仍保留在清除建議中等你確認。")
         hint.setObjectName("Muted")
         hint.setWordWrap(True)
 
@@ -38,9 +39,18 @@ class OneClickSummaryDialog(QDialog):
         row.addWidget(_mini_card("暫不處理", f"{deferred_count}", "執行中 / 登錄檔 / 系統層"))
         row.addWidget(_mini_card("保留期", "30 天", "可從隔離區檢查與還原"))
 
-        warning = QLabel("不會處理 HKLM / Windows Installer 殘留；管理員深度清理入口即將推出。")
+        warning = QLabel(f"{SAFETY_GUARANTEE_TEXT}\n不會處理 HKLM / Windows Installer 殘留；管理員深度清理入口即將推出。")
         warning.setObjectName("Muted")
         warning.setWordWrap(True)
+
+        review_tree = QTreeWidget()
+        review_tree.setColumnCount(2)
+        review_tree.setHeaderLabels(["需確認項目", "證據摘要"])
+        review_items = [item for item in plan.items if item.id in selected_ids and item.layer == REVIEW_LAYER]
+        for item in review_items:
+            review_tree.addTopLevelItem(QTreeWidgetItem([item.label, evidence_summary(item)]))
+        review_tree.setVisible(bool(review_items))
+        review_tree.setMinimumHeight(120)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Ok)
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
@@ -54,6 +64,7 @@ class OneClickSummaryDialog(QDialog):
         layout.addWidget(title)
         layout.addWidget(hint)
         layout.addLayout(row)
+        layout.addWidget(review_tree)
         layout.addWidget(warning)
         layout.addWidget(buttons)
 

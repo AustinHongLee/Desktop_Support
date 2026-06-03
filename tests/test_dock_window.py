@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,6 +15,7 @@ from launcher.core.context_model import LauncherContext  # noqa: E402
 from launcher.core.context_service import ContextService  # noqa: E402
 from launcher.core.registry import ActionRegistry  # noqa: E402
 from launcher.core.runner import ActionRunner  # noqa: E402
+from launcher.core.shutdown_safety import ShutdownSafetyReport  # noqa: E402
 from launcher.core.state_store import AppStateStore  # noqa: E402
 from launcher.ui.dock_window import DockWindow, _tail_offset_from_point  # noqa: E402
 from launcher.ui.edge_positioner import ScreenArea  # noqa: E402
@@ -156,6 +158,46 @@ class DockWindowTests(unittest.TestCase):
         self.assertIn("右鍵選單管理...", action_texts)
         self.assertIn("安全清除工作台...", action_texts)
         self.assertIn("檔案佔用檢查器...", action_texts)
+        self.assertIn("Shutdown Safety Inspector...", action_texts)
+
+    def test_native_event_returns_false_for_unhandled_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            window = _make_window(state)
+
+        self.assertEqual(window.nativeEvent(b"unknown", object()), (False, 0))
+
+    def test_close_safety_allows_close_without_dialog_when_no_blockers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            window = _make_window(state)
+            report = ShutdownSafetyReport(project_root=str(tmp), scan_reason="app.close", created_at="now", blockers=())
+
+            with patch("launcher.core.shutdown_safety.scan_shutdown_blockers", return_value=report):
+                with patch("launcher.core.shutdown_safety.write_report"):
+                    with patch("launcher.ui.dock_window.ShutdownSafetyDialog") as dialog:
+                        allowed = window._run_shutdown_safety_before_close("app.close")
+
+        self.assertTrue(allowed)
+        dialog.assert_not_called()
+
+    def test_windows_shutdown_event_does_not_open_dialog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = AppStateStore(Path(tmp) / "state.json")
+            window = _make_window(state)
+            report = ShutdownSafetyReport(project_root=str(tmp), scan_reason="windows", created_at="now", blockers=())
+
+            with patch("launcher.core.shutdown_safety.scan_shutdown_blockers", return_value=report):
+                with patch("launcher.core.shutdown_safety.write_report"):
+                    with patch("launcher.core.shutdown_safety.apply_shutdown_policy") as apply_policy:
+                        with patch("launcher.ui.dock_window.ShutdownSafetyDialog") as dialog:
+                            with patch("launcher.ui.dock_window.QTimer.singleShot") as single_shot:
+                                window._handle_windows_shutdown_event("WM_ENDSESSION")
+
+        apply_policy.assert_called_once()
+        dialog.assert_not_called()
+        single_shot.assert_called_once()
+        self.assertTrue(window._shutdown_safety_bypass)
 
     def test_wake_request_shows_collapsed_hidden_window(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

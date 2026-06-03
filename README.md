@@ -79,6 +79,52 @@ PyQt6 dock / tray / command palette
         -> plugin implementation
 ```
 
+## Shutdown Safety Inspector
+
+Shutdown Safety Inspector 是關閉保護 UI：使用者要關閉 app，或 Windows 送出 `WM_QUERYENDSESSION` / `WM_ENDSESSION` 時，它會先掃描本專案 runtime，列出誰還握著 process、job、lock、temp/output/log 或檔案關係。
+
+它的目標是降低 orphan process、file handle、temp lock 造成使用者登出時 profile/hive 無法卸載的風險。它不能修復 Windows profile、User Profile Service 1512/1517、`ProfileList` 或 registry hive；也不修改 Windows Registry、不刪 profile、不關 Explorer/GIMP/Windows service/非本專案程序。
+
+Runtime schema:
+
+```text
+.runtime/
+  running/*.json          active process lock
+  jobs/*.json             job metadata / status
+  logs/safety.log         safety events
+  logs/shutdown_safety_report_*.json
+  relationships/*.json    file relationship / dependency graph edges
+  temp/*                  job temp folders
+```
+
+每個 job metadata 包含 `job_id`、`component`、`process_role`、`pid`、`parent_pid`、`command_summary`、`input_files`、`output_files`、`temp_dirs`、`started_at`、`safe_to_kill`、`kill_consequence`、`cleanup_strategy`。`ActionRunner` 會透過 `ProcessGuard` 啟動 worker，記錄 process lock、job metadata、stdout/stderr/stdin pipe 清理策略，並在完成、失敗或中斷後更新狀態與移除 stale lock。
+
+UI flow:
+
+1. 掃描本專案 process：只列出 command line 含 project root，或 `.runtime\running` 中仍 active 的 PID。
+2. 合併 `.runtime\jobs`、`.runtime\temp`、`.runtime\relationships`，顯示 PID、ProcessName、Parent PID、CommandLine 摘要、啟動時間、job id、lock/temp/output/log、dependency graph、判斷原因與 child process tree。
+3. 標示「他是誰」：App 主程序、Worker process、ffmpeg encoder、Python model runner、File watcher、Background downloader、Unknown but project-owned。
+4. 標示 SafeToKill：
+   - `Safe`：可正常停止，最多重跑工作。
+   - `Caution`：可關，但輸出檔可能不完整、cache/temp 可能要重建、job 可能要 rollback。
+   - `Dangerous`：預設不自動關，可能正在寫重要檔案或資料庫。
+   - `Unknown`：資訊不足，只列出不自動處理。
+5. 使用者可選 Wait、Graceful stop、Force stop、Open log、Open related folder、Inspect dependency graph、Ignore once、Cancel shutdown / close。
+
+自動策略：`Safe` 可預設 graceful stop；`Caution` 需要確認才 force stop；`Dangerous` / `Unknown` 預設不殺。Windows shutdown event 的時間通常很短，因此事件中只快速寫入 JSON report、嘗試停止 Safe blocker，然後放行，不永久阻止 Windows 關機。停止程序一律不用 `shell=True`；`taskkill.exe` 只用參數陣列，且拒絕停止 command line 不含本專案路徑的 PID。
+
+手動檢查：
+
+```powershell
+.\scripts\shutdown_safety_inspector.ps1
+.\scripts\shutdown_safety_inspector.ps1 -DryRun
+.\scripts\shutdown_safety_inspector.ps1 -KillSafe
+.\scripts\shutdown_safety_inspector.ps1 -KillAllProjectOwned
+.\scripts\shutdown_safety_inspector.ps1 -DryRun -MockShutdownEvent
+```
+
+app 內可從「更多」或指令面板開啟 `Shutdown Safety Inspector`。Windows shutdown event 已由 PyQt native event handler 接入 `WM_QUERYENDSESSION` / `WM_ENDSESSION`；這是保護性檢查與清理，不做真正關機測試。
+
 ## Plugin Shape
 
 ```text

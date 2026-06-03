@@ -36,7 +36,7 @@ class IsoAutopilotResultDialogTests(unittest.TestCase):
         self.assertIn("16", labels)
         self.assertIn("需確認", labels)
         self.assertTrue(buttons["開啟更名確認"].isEnabled())
-        self.assertTrue(buttons["查看問題列"].isEnabled())
+        self.assertTrue(buttons["查看並修正問題列"].isEnabled())
 
     def test_result_dialog_disables_unavailable_actions(self) -> None:
         summary = IsoAutopilotResultSummary(
@@ -52,7 +52,7 @@ class IsoAutopilotResultDialogTests(unittest.TestCase):
         buttons = {button.text(): button for button in dialog.findChildren(QPushButton)}
 
         self.assertFalse(buttons["開啟更名確認"].isEnabled())
-        self.assertFalse(buttons["查看問題列"].isEnabled())
+        self.assertFalse(buttons["查看並修正問題列"].isEnabled())
 
     def test_preferences_stylesheet_includes_result_metric_rules(self) -> None:
         stylesheet = preferences_stylesheet()

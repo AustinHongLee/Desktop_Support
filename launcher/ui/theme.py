@@ -729,6 +729,68 @@ def safe_cleanup_stylesheet(theme: Theme = DEFAULT_LIGHT) -> str:
         background: {theme.surface_card_hover};
         border-color: {theme.border_strong};
     }}
+    QFrame#ItemCard {{
+        background: {theme.surface_card};
+        border: 1px solid {theme.border};
+        border-left: 5px solid {theme.border_strong};
+        border-radius: {theme.radius_md};
+    }}
+    QFrame#ItemCard[hovered="true"], QFrame#ItemCard[selected="true"] {{
+        background: {theme.surface_card_hover};
+        border-color: {theme.primary};
+    }}
+    QFrame#ItemCard[locked="true"] {{
+        background: {theme.surface_sunken};
+    }}
+    QFrame#ItemCard[layer="safe"] {{
+        border-left-color: {theme.layer_safe_fg};
+    }}
+    QFrame#ItemCard[layer="review"] {{
+        border-left-color: {theme.layer_review_fg};
+    }}
+    QFrame#ItemCard[layer="process"] {{
+        border-left-color: {theme.layer_process_fg};
+    }}
+    QFrame#ItemCard[layer="registry"] {{
+        border-left-color: {theme.layer_registry_fg};
+    }}
+    QFrame#ItemCard[layer="blocked"] {{
+        border-left-color: {theme.layer_blocked_fg};
+    }}
+    QLabel#CardTitle {{
+        color: {theme.text};
+        font-size: 14px;
+        font-weight: 700;
+    }}
+    QLabel#ImpactText {{
+        color: {theme.primary};
+        background: {theme.primary_soft};
+        border: 1px solid {theme.primary};
+        border-radius: {theme.radius_pill};
+        padding: 3px 8px;
+        font-weight: 700;
+    }}
+    QLabel#EvidenceLine {{
+        color: {theme.text};
+        background: {theme.surface_alt};
+        border: 1px solid {theme.border};
+        border-radius: {theme.radius_sm};
+        padding: 5px 8px;
+    }}
+    QLabel#SectionHeader {{
+        color: {theme.text};
+        font-size: 15px;
+        font-weight: 800;
+        padding: 8px 4px 4px 4px;
+    }}
+    QLabel#LockPill {{
+        background: {theme.surface_alt};
+        color: {theme.muted_text};
+        border: 1px solid {theme.border};
+        border-radius: {theme.radius_pill};
+        padding: 2px 8px;
+        font-weight: 700;
+    }}
     QFrame#FooterWrap {{
         background: {theme.surface};
         border-top: 1px solid {theme.border};
@@ -810,6 +872,24 @@ def safe_cleanup_stylesheet(theme: Theme = DEFAULT_LIGHT) -> str:
     QPushButton#Ghost:hover {{
         background: {theme.surface_alt};
         border-color: {theme.border_strong};
+    }}
+    QPushButton#FilterButton {{
+        background: transparent;
+        color: {theme.text};
+        border: 1px solid transparent;
+        border-radius: {theme.radius_sm};
+        padding: 8px 10px;
+        text-align: left;
+    }}
+    QPushButton#FilterButton:hover {{
+        background: {theme.surface_alt};
+        border-color: {theme.border};
+    }}
+    QPushButton#FilterButton:checked {{
+        background: {theme.primary_soft};
+        border-color: {theme.primary};
+        color: {theme.primary};
+        font-weight: 700;
     }}
     QLineEdit {{
         background: {theme.surface_card};

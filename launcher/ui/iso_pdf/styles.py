@@ -72,6 +72,34 @@ def workbench_stylesheet() -> str:
         color: #455565;
         font-weight: 600;
     }
+    QLabel#ReviewGuidance {
+        background: #f5f8fb;
+        color: #263746;
+        border: 1px solid #d0dbe5;
+        border-radius: 4px;
+        padding: 7px 8px;
+        font-weight: 600;
+    }
+    QLabel#ReviewGuidance[state="ready"] {
+        background: #dcfce7;
+        color: #166534;
+        border-color: #86efac;
+    }
+    QLabel#ReviewGuidance[state="warn"] {
+        background: #fef3c7;
+        color: #92400e;
+        border-color: #fcd34d;
+    }
+    QLabel#ReviewGuidance[state="blocked"] {
+        background: #fee2e2;
+        color: #991b1b;
+        border-color: #fca5a5;
+    }
+    QLabel#ReviewGuidance[state="empty"] {
+        background: #f0f2f5;
+        color: #6b7280;
+        border-color: #d8dde3;
+    }
     QCheckBox {
         color: #17202a;
         spacing: 8px;
@@ -315,5 +343,10 @@ def workbench_stylesheet() -> str:
     }
     QPushButton[primary="true"]:hover {
         background: #1b5fca;
+    }
+    QPushButton[primary="true"]:disabled {
+        background: #d8dde3;
+        color: #6b7280;
+        border-color: #c7ced6;
     }
     """

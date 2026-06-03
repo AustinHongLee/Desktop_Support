@@ -47,6 +47,9 @@ class LauncherTray:
         self._dock.activateWindow()
 
     def _quit(self) -> None:
+        if hasattr(self._dock, "request_shutdown_safe_quit"):
+            getattr(self._dock, "request_shutdown_safe_quit")()
+            return
         app = QApplication.instance()
         if app is not None:
             app.quit()

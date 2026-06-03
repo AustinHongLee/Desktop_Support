@@ -153,13 +153,19 @@ try {
     if (-not $Foreground) {
         $python = Resolve-LauncherPython
         $processArgs = Normalize-ArgumentList -Values (@($python.Args) + @($launcherArgs))
+        $stamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
+        $projectLogDir = Get-ProjectLogDir
+        $stdoutPath = Join-Path $projectLogDir "launcher_stdout_$stamp.log"
+        $stderrPath = Join-Path $projectLogDir "launcher_stderr_$stamp.log"
         $process = Start-Process `
             -FilePath $python.Exe `
             -ArgumentList $processArgs `
             -WorkingDirectory $ProjectRoot `
             -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
             -PassThru
-        Write-LauncherLog "Started background launcher via python. Pid=$($process.Id) Args=$($processArgs -join ' ')"
+        Write-LauncherLog "Started background launcher via python. Pid=$($process.Id) Args=$($processArgs -join ' ') Stdout=$stdoutPath Stderr=$stderrPath"
         return
     }
 

@@ -11,7 +11,7 @@ from PyQt6.QtCore import QFileInfo, QObject, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
+    QApplication,
     QDialog,
     QFileDialog,
     QFileIconProvider,
@@ -21,10 +21,8 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QSplitter,
     QStyle,
     QTabWidget,
     QTreeWidget,
@@ -50,7 +48,6 @@ from launcher.core.safe_cleanup import (
     apply_cleanup_plan,
     build_cleanup_plan,
     confidence_band,
-    evidence_summary,
     run_official_uninstaller,
     scan_stage_count,
 )
@@ -58,10 +55,12 @@ from launcher.ui.installed_app_picker_dialog import InstalledApplicationPickerDi
 from launcher.ui.quarantine_browser_dialog import QuarantineBrowserDialog
 from launcher.ui.registry_source_dialog import RegistrySourceDialog
 from launcher.ui.safe_cleanup.activity_log_tab import ActivityLogTab
+from launcher.ui.safe_cleanup.confirm_dialogs import RiskActionConfirmDialog
 from launcher.ui.safe_cleanup.header_card import TargetHeaderCard
 from launcher.ui.safe_cleanup.one_click_dialogs import OneClickResultDialog, OneClickSummaryDialog, default_one_click_ids
 from launcher.ui.safe_cleanup.overview_tab import OverviewTab
 from launcher.ui.safe_cleanup.quarantine_tab import QuarantineTab
+from launcher.ui.safe_cleanup.suggestion_tab import SuggestionTab
 from launcher.ui.theme import safe_cleanup_stylesheet, theme_by_name
 
 
@@ -80,7 +79,6 @@ class SafeCleanupDialog(QDialog):
         self._apply_active = False
         self._apply_threads: list[QThread] = []
         self._apply_workers: list[_CleanupApplyWorker] = []
-        self._suggestion_columns_initialized = False
         self._pending_one_click_result = False
 
         self.setWindowTitle("安全清除工作台")
@@ -121,32 +119,11 @@ class SafeCleanupDialog(QDialog):
         self._info_tree.setMinimumWidth(320)
         self._info_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
 
-        self._tree = QTreeWidget()
-        self._tree.setColumnCount(6)
-        self._tree.setHeaderLabels(["套用 / 狀態", "清除建議", "動作", "判斷註解", "位置 / 登錄檔", "信心"])
-        self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self._tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._tree.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
-        self._tree.setTextElideMode(Qt.TextElideMode.ElideRight)
-        self._tree.itemSelectionChanged.connect(self._update_detail)
-        self._tree.itemChanged.connect(self._on_item_changed)
-
-        self._detail = QPlainTextEdit()
-        self._detail.setReadOnly(True)
-        self._detail.setMinimumHeight(110)
-
-        self._include_review = QCheckBox("允許執行需確認層")
-        self._include_review.setToolTip("資料夾與疑似衍生檔需要人工確認才可加入隔離。")
-        self._include_review.stateChanged.connect(lambda _state: self._refresh_item_flags())
-        self._include_process = QCheckBox("允許嘗試關閉執行中程序")
-        self._include_process.setToolTip("只會嘗試正常 taskkill，不使用強制 /F；失敗時請手動關閉。")
-        self._include_process.stateChanged.connect(lambda _state: self._refresh_item_flags())
-        self._include_registry = QCheckBox("允許登錄檔 HKCU 清理")
-        self._include_registry.setToolTip("只允許刪除 HKCU 值；HKLM / 系統層只列出。")
-        self._include_registry.stateChanged.connect(lambda _state: self._refresh_item_flags())
-        self._system_note = QLabel("系統層：需管理員深度清理")
-        self._system_note.setObjectName("Muted")
-        self._system_note.setToolTip("HKLM / Windows Installer 項目不由一般清理按鈕執行；需後續管理員模式、.reg 備份與還原紀錄。")
+        self._suggestion_tab = SuggestionTab()
+        self._suggestion_tab.selection_changed.connect(self._on_suggestion_selection_changed)
+        self._suggestion_tab.locate_requested.connect(lambda _item: self.locate_selected_item())
+        self._suggestion_tab.copy_requested.connect(self._copy_item_info)
+        self._detail = self._suggestion_tab.detail_text_edit
 
         self._apply_button = QPushButton("隔離 / 清理勾選項目")
         self._apply_button.setObjectName("Primary")
@@ -164,13 +141,6 @@ class SafeCleanupDialog(QDialog):
         close_button.setObjectName("Ghost")
         close_button.clicked.connect(self.accept)
 
-        toggles = QHBoxLayout()
-        toggles.addWidget(self._include_review)
-        toggles.addWidget(self._include_process)
-        toggles.addWidget(self._include_registry)
-        toggles.addWidget(self._system_note)
-        toggles.addStretch(1)
-
         self._overview_tab = OverviewTab()
         self._overview_tab.layer_selected.connect(self._focus_suggestion_layer)
         self._overview_tab.one_click_requested.connect(self._on_one_click_clean)
@@ -179,40 +149,17 @@ class SafeCleanupDialog(QDialog):
         self._uninstall_label = self._overview_tab.uninstaller_label
         self._uninstall_button = self._overview_tab.uninstaller_button
 
-        info_panel = QWidget()
-        info_layout = QVBoxLayout(info_panel)
-        info_layout.setContentsMargins(0, 0, 0, 0)
-        info_layout.setSpacing(8)
-        info_title = QLabel("目標資訊")
-        info_title.setObjectName("H2")
-        info_layout.addWidget(info_title)
-        info_layout.addWidget(self._identity)
-        info_layout.addWidget(self._conclusion)
-        info_layout.addWidget(self._info_tree, 1)
-
-        suggestion_body = QWidget()
-        suggestion_body_layout = QVBoxLayout(suggestion_body)
-        suggestion_body_layout.setContentsMargins(0, 0, 0, 0)
-        suggestion_body_layout.setSpacing(10)
         suggestion_panel = QWidget()
         suggestion_layout = QVBoxLayout(suggestion_panel)
         suggestion_layout.setContentsMargins(0, 0, 0, 0)
-        suggestion_layout.setSpacing(0)
+        suggestion_layout.setSpacing(10)
         suggestion_title = QLabel("清除建議")
         suggestion_title.setObjectName("H1")
-        suggestion_body_layout.addWidget(suggestion_title)
-        suggestion_body_layout.addWidget(self._summary)
-        suggestion_body_layout.addWidget(self._tree, 1)
-        suggestion_body_layout.addLayout(toggles)
-        suggestion_body_layout.addWidget(self._detail)
-
-        suggestion_splitter = QSplitter(Qt.Orientation.Horizontal)
-        suggestion_splitter.addWidget(info_panel)
-        suggestion_splitter.addWidget(suggestion_body)
-        suggestion_splitter.setStretchFactor(0, 0)
-        suggestion_splitter.setStretchFactor(1, 1)
-        suggestion_splitter.setSizes([340, 820])
-        suggestion_layout.addWidget(suggestion_splitter)
+        suggestion_layout.addWidget(suggestion_title)
+        suggestion_layout.addWidget(self._identity)
+        suggestion_layout.addWidget(self._conclusion)
+        suggestion_layout.addWidget(self._summary)
+        suggestion_layout.addWidget(self._suggestion_tab, 1)
 
         self._quarantine_tab = QuarantineTab()
         self._quarantine_tab.open_browser_requested.connect(self.open_quarantine_browser)
@@ -279,16 +226,7 @@ class SafeCleanupDialog(QDialog):
         if layer == "uninstaller":
             self.run_detected_uninstaller()
             return
-        for index in range(self._tree.topLevelItemCount()):
-            group = self._tree.topLevelItem(index)
-            group_item = self._item_by_id.get(str(group.data(0, Qt.ItemDataRole.UserRole)))
-            if group_item is not None:
-                continue
-            if _layer_label(layer) in group.text(0) or layer in group.text(0):
-                group.setExpanded(True)
-                if group.childCount():
-                    self._tree.setCurrentItem(group.child(0))
-                return
+        self._suggestion_tab.focus_layer(layer)
 
     def run_detected_uninstaller(self) -> None:
         if self._scan_active:
@@ -427,15 +365,13 @@ class SafeCleanupDialog(QDialog):
         if blocked_count:
             QMessageBox.warning(self, "安全清除工作台", "系統層項目需管理員深度清理，不由一般清理按鈕執行。")
             return
-        if review_count and not self._include_review.isChecked():
-            QMessageBox.warning(self, "安全清除工作台", "需確認層尚未允許執行。")
-            return
-        if process_count and not self._include_process.isChecked():
-            QMessageBox.warning(self, "安全清除工作台", "執行中程序關閉尚未允許。")
-            return
-        if registry_count and not self._include_registry.isChecked():
-            QMessageBox.warning(self, "安全清除工作台", "登錄檔 HKCU 清理尚未允許執行。")
-            return
+        if process_count or registry_count:
+            risk_dialog = RiskActionConfirmDialog(self._plan, selected_ids, parent=self)
+            risk_dialog.setStyleSheet(self.styleSheet())
+            if risk_dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            selected_ids = risk_dialog.confirmed_ids()
+            selected = [self._item_by_id[item_id] for item_id in selected_ids if item_id in self._item_by_id]
         answer = QMessageBox.question(
             self,
             "確認安全清除",
@@ -457,13 +393,23 @@ class SafeCleanupDialog(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "安全清除工作台", f"無法定位此項目：\n{exc}")
 
+    def _on_suggestion_selection_changed(self, item: object) -> None:
+        plan_item = item if isinstance(item, CleanupPlanItem) else None
+        self._locate_button.setEnabled(not self._apply_active and _can_locate_item(plan_item))
+
+    def _copy_item_info(self, item: object) -> None:
+        if not isinstance(item, CleanupPlanItem):
+            return
+        QApplication.clipboard().setText(_item_location(item) or item.label)
+
     def _start_apply(self, selected_ids: set[str]) -> None:
         self._set_apply_controls(True)
+        selected = [item for item in self._plan.items if item.id in selected_ids]
         worker = _CleanupApplyWorker(
             self._plan,
             selected_ids,
-            include_registry=self._include_registry.isChecked(),
-            include_process_close=self._include_process.isChecked(),
+            include_registry=any(item.layer == REGISTRY_LAYER for item in selected),
+            include_process_close=any(item.layer == PROCESS_LAYER for item in selected),
         )
         thread = QThread()
         worker.moveToThread(thread)
@@ -573,7 +519,7 @@ class SafeCleanupDialog(QDialog):
         self._summary.setText(f"分析中：{name} ({index} / {total})")
         self._scan_progress.setRange(0, total)
         self._scan_progress.setValue(max(0, min(index, total)))
-        self._scan_progress.setFormat(f"{name} ({index}/{total})")
+        self._scan_progress.setFormat(f"正在掃描：{name}")
 
     def _on_scan_finished(self, generation: int, plan: CleanupPlan) -> None:
         if generation != self._scan_generation:
@@ -622,6 +568,7 @@ class SafeCleanupDialog(QDialog):
         self._locate_button.setEnabled(not active and not self._apply_active and _can_locate_item(self._current_plan_item()))
         self._header.set_scanning(active)
         self._overview_tab.set_scanning(active)
+        self._suggestion_tab.set_scanning(active)
         if not active:
             self._update_one_click_state()
 
@@ -642,6 +589,7 @@ class SafeCleanupDialog(QDialog):
         self._locate_button.setEnabled(not active and _can_locate_item(self._current_plan_item()))
         self._uninstall_button.setEnabled(not active and not self._scan_active)
         self._header.set_applying(active)
+        self._suggestion_tab.set_applying(active)
         if not active:
             self._update_one_click_state()
 
@@ -651,8 +599,6 @@ class SafeCleanupDialog(QDialog):
         self._overview_tab.one_click_button.setEnabled(enabled)
 
     def _show_scan_placeholder(self) -> None:
-        self._tree.blockSignals(True)
-        self._tree.clear()
         self._item_by_id = {}
         self._target_path.setText(_target_path_text(self._plan.targets))
         self._header.set_plan(self._plan)
@@ -662,18 +608,13 @@ class SafeCleanupDialog(QDialog):
         self._summary.setText("分析中...")
         self._uninstall_panel.hide()
         self._overview_tab.set_scanning(True)
-        item = QTreeWidgetItem(["分析中", "請稍候", "無動作", "背景分析進行中，完成後會自動更新清除建議。", "", ""])
-        item.setFirstColumnSpanned(True)
-        self._tree.addTopLevelItem(item)
-        self._configure_suggestion_columns()
-        self._tree.blockSignals(False)
+        self._suggestion_tab.set_plan(self._plan)
+        self._suggestion_tab.set_scanning(True)
         self._populate_info_tree()
         self._detail.setPlainText("分析中；大型資料夾或登錄檔候選較多時，視窗仍可移動與關閉。")
         self._activity_tab.set_text("分析中；大型資料夾或登錄檔候選較多時，視窗仍可移動與關閉。")
 
     def _populate(self) -> None:
-        self._tree.blockSignals(True)
-        self._tree.clear()
         self._item_by_id = {item.id: item for item in self._plan.items}
         self._target_path.setText(_target_path_text(self._plan.targets))
         self._header.set_plan(self._plan)
@@ -683,44 +624,12 @@ class SafeCleanupDialog(QDialog):
         self._overview_tab.set_plan(self._plan)
         self._update_uninstaller_panel()
         self._populate_info_tree()
-        for layer in (SAFE_LAYER, PROCESS_LAYER, REVIEW_LAYER, REGISTRY_LAYER, BLOCKED_LAYER):
-            layer_items = [item for item in self._plan.items if item.layer == layer]
-            if not layer_items:
-                continue
-            group = QTreeWidgetItem([_layer_title(layer, len(layer_items)), "", "", "", "", ""])
-            group.setIcon(0, self._layer_icon(layer))
-            group.setFirstColumnSpanned(True)
-            self._tree.addTopLevelItem(group)
-            for item in layer_items:
-                child = QTreeWidgetItem(["", item.label, item.action, item.note, _item_location(item), _confidence_text(item)])
-                child.setData(0, Qt.ItemDataRole.UserRole, item.id)
-                child.setIcon(1, self._item_icon(item))
-                child.setCheckState(0, Qt.CheckState.Checked if item.checked_default and item.executable else Qt.CheckState.Unchecked)
-                _apply_row_style(child, item)
-                group.addChild(child)
-            group.setExpanded(layer != BLOCKED_LAYER)
-        self._configure_suggestion_columns()
-        self._tree.blockSignals(False)
-        self._refresh_item_flags()
+        self._suggestion_tab.set_plan(self._plan)
+        self._item_by_id = self._suggestion_tab.plan_items()
         self._update_one_click_state()
         self._activity_tab.set_text(
             f"分析完成：{datetime.fromtimestamp(self._plan.created_at).strftime('%Y-%m-%d %H:%M:%S')}\n{_summary_text(self._plan)}"
         )
-        if self._tree.topLevelItemCount() > 0 and self._tree.topLevelItem(0).childCount() > 0:
-            self._tree.setCurrentItem(self._tree.topLevelItem(0).child(0))
-
-    def _configure_suggestion_columns(self) -> None:
-        header = self._tree.header()
-        header.setStretchLastSection(False)
-        header.setMinimumSectionSize(54)
-        for column in range(self._tree.columnCount()):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
-        if self._suggestion_columns_initialized:
-            return
-        default_widths = (88, 360, 110, 680, 860, 90)
-        for column, width in enumerate(default_widths):
-            self._tree.setColumnWidth(column, width)
-        self._suggestion_columns_initialized = True
 
     def _populate_info_tree(self) -> None:
         self._info_tree.clear()
@@ -788,100 +697,11 @@ class SafeCleanupDialog(QDialog):
         self._info_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self._info_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
 
-    def _refresh_item_flags(self) -> None:
-        self._tree.blockSignals(True)
-        for index in range(self._tree.topLevelItemCount()):
-            group = self._tree.topLevelItem(index)
-            for child_index in range(group.childCount()):
-                child = group.child(child_index)
-                item = self._item_by_id.get(str(child.data(0, Qt.ItemDataRole.UserRole)))
-                if item is None:
-                    continue
-                enabled = item.executable
-                if item.layer == PROCESS_LAYER:
-                    enabled = enabled and self._include_process.isChecked()
-                if item.layer == REVIEW_LAYER:
-                    enabled = enabled and self._include_review.isChecked()
-                if item.layer == REGISTRY_LAYER:
-                    enabled = enabled and self._include_registry.isChecked()
-                flags = child.flags() | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-                if enabled:
-                    child.setText(0, "")
-                    child.setCheckState(0, Qt.CheckState.Checked if item.checked_default and item.executable else Qt.CheckState.Unchecked)
-                    flags |= Qt.ItemFlag.ItemIsUserCheckable
-                else:
-                    flags &= ~Qt.ItemFlag.ItemIsUserCheckable
-                    child.setData(0, Qt.ItemDataRole.CheckStateRole, None)
-                    child.setText(0, _non_apply_status(item))
-                child.setFlags(flags)
-        self._tree.blockSignals(False)
-
-    def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
-        if column != 0:
-            return
-        plan_item = self._item_by_id.get(str(item.data(0, Qt.ItemDataRole.UserRole)))
-        if plan_item is None or plan_item.executable:
-            return
-        self._tree.blockSignals(True)
-        item.setCheckState(0, Qt.CheckState.Unchecked)
-        self._tree.blockSignals(False)
-
     def _selected_item_ids(self) -> set[str]:
-        selected: set[str] = set()
-        for index in range(self._tree.topLevelItemCount()):
-            group = self._tree.topLevelItem(index)
-            for child_index in range(group.childCount()):
-                child = group.child(child_index)
-                if child.checkState(0) == Qt.CheckState.Checked:
-                    selected.add(str(child.data(0, Qt.ItemDataRole.UserRole)))
-        return selected
-
-    def _update_detail(self) -> None:
-        item = self._current_plan_item()
-        if item is None:
-            self._locate_button.setEnabled(False)
-            return
-        self._locate_button.setEnabled(not self._apply_active and _can_locate_item(item))
-        lines = [
-            f"項目：{item.label}",
-            f"層級：{_layer_label(item.layer)}",
-            f"類型：{item.kind}",
-            f"動作：{item.action}",
-            f"信心：{_confidence_text(item)}",
-            f"證據摘要：{evidence_summary(item)}",
-            f"註解：{item.note}",
-            f"可執行：{'是' if item.executable else '否'}",
-        ]
-        if item.evidence:
-            lines.append("")
-            lines.append("證據帳本：")
-            for evidence in item.evidence:
-                sign = "+" if evidence.weight > 0 else "-" if evidence.weight < 0 else " "
-                lines.append(f"{sign} {evidence.label}：{evidence.detail}")
-        if item.path:
-            lines.append(f"路徑：{item.path}")
-            lines.append(f"大小：{_format_size(item.size_bytes)}")
-        if item.process_id:
-            lines.append(f"PID：{item.process_id}")
-            lines.append(f"程序：{item.process_name}")
-            lines.append(f"程序路徑：{item.process_path or '未知'}")
-            lines.append(f"可嘗試關閉：{'是' if item.can_close else '否'}")
-        if item.registry_key:
-            lines.append(f"登錄檔：{item.root_name}\\{item.registry_key}")
-            lines.append(f"值：{item.registry_value_name or '(Default)'}")
-            lines.append(f"內容：{item.registry_value_data}")
-            if item.layer == BLOCKED_LAYER:
-                lines.append("")
-                lines.append("重裝影響：可能。HKLM / Windows Installer 殘留可能讓安裝程式誤判已安裝、修復/移除入口異常，或沿用舊路徑。")
-                lines.append("為什麼不能打勾：主清理按鈕只處理目前能完整備份與還原的項目；此項屬系統層，需管理員深度清理流程。")
-                lines.append("處理方式：先用來源檢視確認內容；深度清理需管理員權限，先匯出 .reg 備份，再刪除已確認屬於目標的值或 key。")
-        self._detail.setPlainText("\n".join(lines))
+        return self._suggestion_tab.selected_item_ids()
 
     def _current_plan_item(self) -> CleanupPlanItem | None:
-        current = self._tree.currentItem()
-        if current is None:
-            return None
-        return self._item_by_id.get(str(current.data(0, Qt.ItemDataRole.UserRole)))
+        return self._suggestion_tab.current_item()
 
     def _layer_icon(self, layer: str) -> QIcon:
         pixmap = {

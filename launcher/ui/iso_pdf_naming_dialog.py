@@ -208,12 +208,22 @@ class IsoPdfNamingDialog(QDialog):
         self._problem_only_check.toggled.connect(self._apply_table_filter)
         self._problem_summary_label = QLabel("問題列：0 / 0")
         self._problem_summary_label.setObjectName("TableSummary")
+        self._review_guidance_label = QLabel("選擇一列後會顯示目前要處理的更名狀態。")
+        self._review_guidance_label.setObjectName("ReviewGuidance")
+        self._review_guidance_label.setWordWrap(True)
         self._table_search = QLineEdit()
         self._table_search.setPlaceholderText("搜尋 old/new/流水號/圖號/狀態")
         self._table_search.setClearButtonEnabled(True)
         self._table_search.textChanged.connect(self._apply_table_filter)
         self._next_problem_button = QPushButton("下一個問題")
         self._next_problem_button.clicked.connect(self._select_next_problem_row)
+        self._adopt_detected_button = QPushButton("採用判讀值")
+        self._adopt_detected_button.clicked.connect(self._apply_detected_serial_to_row)
+        self._confirm_row_button = QPushButton("確認此列")
+        self._confirm_row_button.clicked.connect(self._confirm_current_review_issue)
+        self._apply_rename_button = QPushButton("套用更名")
+        self._apply_rename_button.setProperty("primary", True)
+        self._apply_rename_button.clicked.connect(self._execute)
 
         self._table = QTableWidget(0, 8)
         self._table.setHorizontalHeaderLabels(["套用", "old name", "page", "sort/流水號", "圖號/檔名", "new name", "狀態", "判讀信心"])
@@ -450,7 +460,14 @@ class IsoPdfNamingDialog(QDialog):
         toolbar.addStretch(1)
         toolbar.addWidget(self._table_search, 1)
         toolbar.addWidget(self._next_problem_button)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(8)
+        action_row.addWidget(self._review_guidance_label, 1)
+        action_row.addWidget(self._adopt_detected_button)
+        action_row.addWidget(self._confirm_row_button)
+        action_row.addWidget(self._apply_rename_button)
         layout.addLayout(toolbar)
+        layout.addLayout(action_row)
         layout.addWidget(self._table, 1)
         return group
 
@@ -994,8 +1011,10 @@ class IsoPdfNamingDialog(QDialog):
         row = self._table.currentRow()
         if row < 0 or row >= len(self._pdfs):
             self._clear_preview()
+            self._update_review_guidance()
             return
         self._show_pdf_preview(self._pdfs[row])
+        self._update_review_guidance()
 
     def _refresh_current_preview(self) -> None:
         row = self._table.currentRow()
@@ -1185,6 +1204,8 @@ class IsoPdfNamingDialog(QDialog):
             self._table.setItem(row, 7, item)
         item.setText(_vision_cell_text(result))
         item.setToolTip(result.message if result else "")
+        if row == self._table.currentRow():
+            self._update_review_guidance()
 
     def _clear_preview(self, message: str = "預覽：尚未選擇 PDF") -> None:
         self._preview_path = None
@@ -1278,28 +1299,45 @@ class IsoPdfNamingDialog(QDialog):
         if row < 0 or row >= len(self._pdfs):
             QMessageBox.information(self, "ISO PDF 命名工作台", "請先在更名表選擇一列。")
             return
-        if not self._detected_serial:
+        detected_serial, detected_confidence = self._detected_serial_for_row(row)
+        if not detected_serial:
             QMessageBox.information(self, "ISO PDF 命名工作台", "目前沒有可填入的影像判讀流水號。")
             return
-        if self._detected_serial_confidence < SERIAL_AUTO_FILL_CONFIDENCE:
-            QMessageBox.warning(
+        if detected_confidence < SERIAL_AUTO_FILL_CONFIDENCE:
+            response = QMessageBox.question(
                 self,
-                "ISO PDF 命名工作台",
-                f"目前判讀信心 {self._detected_serial_confidence:.2f} 低於 {SERIAL_AUTO_FILL_CONFIDENCE:.2f}，未自動填入。",
+                "採用低信心判讀值",
+                f"目前判讀值是 {detected_serial}，信心 {detected_confidence:.2f} 低於 {SERIAL_AUTO_FILL_CONFIDENCE:.2f}。\n"
+                "如果你已看過 PDF 預覽並確認無誤，可以手動採用這個值。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            return
-        if self._records and self._detected_serial not in build_record_lookup(self._records):
-            QMessageBox.warning(
+            if response != QMessageBox.StandardButton.Yes:
+                return
+        if self._records and detected_serial not in build_record_lookup(self._records):
+            response = QMessageBox.question(
                 self,
-                "ISO PDF 命名工作台",
-                f"ISO List 找不到流水號 {self._detected_serial}，未自動填入。這通常代表影像判讀抓錯位置，請手動確認。",
+                "ISO List 無此流水號",
+                f"ISO List 找不到流水號 {detected_serial}。\n"
+                "如果你已確認這張 PDF 確實要用這個流水號，可以先填入，之後按「確認此列」標記人工確認。",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
             )
-            self._log(f"[影像判讀] ISO List 找不到流水號，未填入：{self._detected_serial}")
-            return
-        self._table.item(row, 3).setText(self._detected_serial)
+            if response != QMessageBox.StandardButton.Yes:
+                self._log(f"[影像判讀] ISO List 找不到流水號，未填入：{detected_serial}")
+                return
+        self._table.item(row, 3).setText(detected_serial)
         self._clear_review_issue(row, "填入目前頁判讀流水號")
         self._regenerate_names()
-        self._log(f"[影像判讀] 第 {row + 1} 列填入流水號：{self._detected_serial}")
+        self._log(f"[影像判讀] 第 {row + 1} 列填入流水號：{detected_serial}")
+        self._update_review_guidance()
+
+    def _detected_serial_for_row(self, row: int) -> tuple[str, float]:
+        path = self._pdfs[row]
+        result = self._vision_results.get(path)
+        if result is not None and result.text:
+            return result.text, result.confidence
+        return self._detected_serial, self._detected_serial_confidence
 
     def _confirm_current_review_issue(self) -> None:
         row = self._table.currentRow()
@@ -1311,6 +1349,7 @@ class IsoPdfNamingDialog(QDialog):
             return
         self._clear_review_issue(row, "使用者確認")
         self._refresh_statuses()
+        self._update_review_guidance()
         self._log(f"[影像判讀] 第 {row + 1} 列已由使用者確認。")
 
     def _batch_detect_serials(self, _checked: bool = False, *, workflow: bool = False) -> None:
@@ -1534,6 +1573,7 @@ class IsoPdfNamingDialog(QDialog):
             self._problem_only_check.setChecked(True)
             if unresolved:
                 self._select_next_problem_row()
+                self._switch_to_advanced_workbench()
             detail_text = detail or "\n".join(f"第 {row + 1} 列 {path.name}: {reason}" for row, path, reason in unresolved[:8])
             action = self._show_autopilot_result(
                 IsoAutopilotResultSummary(
@@ -1541,7 +1581,7 @@ class IsoPdfNamingDialog(QDialog):
                     ready_count=self._rename_candidate_count(),
                     warning_count=max(len(unresolved), 1 if has_issues else 0),
                     blocked_count=0,
-                    message=f"{message}\n仍有需要人工確認的列。",
+                    message=f"{message}\n已切到問題列；修正或確認後，表格上方會開啟「套用更名」。",
                     detail=detail_text,
                     can_view_problems=bool(unresolved),
                 )
@@ -2012,7 +2052,8 @@ class IsoPdfNamingDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "尚有判讀問題未確認",
-                "更名表仍有高亮的判讀問題列。請手動修正流水號/圖號/檔名，或選取確認無誤後按「確認此列」。\n\n"
+                "更名表仍有高亮的判讀問題列。我已切到第一個問題列。\n"
+                "請在更名表修正「sort/流水號」、「圖號/檔名」或「new name」，也可以確認無誤後按表格上方的「確認此列」。\n\n"
                 f"{detail}",
             )
             self._log(f"[阻擋] 尚有 {len(unresolved)} 列判讀問題未確認，已停止更名。")
@@ -2136,7 +2177,7 @@ class IsoPdfNamingDialog(QDialog):
             seen.add(new_name)
             status_item = self._table.item(row, 6)
             status_item.setText(status)
-            status_item.setToolTip(review_issue)
+            status_item.setToolTip(_status_tooltip(status, review_issue))
             problem_kind = _status_issue_kind(status, review_issue)
             if problem_kind:
                 self._row_problem_kinds[source] = problem_kind
@@ -2145,6 +2186,7 @@ class IsoPdfNamingDialog(QDialog):
         self._table.blockSignals(False)
         self._problem_row_count = problem_count
         self._apply_table_filter()
+        self._update_review_guidance()
 
     def _apply_row_review_style(self, row: int, problem_kind: str) -> None:
         background_color, foreground_color = REVIEW_KIND_STYLES.get(problem_kind, (None, None))
@@ -2182,6 +2224,70 @@ class IsoPdfNamingDialog(QDialog):
         self._problem_summary_label.setText(f"問題列：{self._problem_row_count} / {len(self._pdfs)}｜顯示 {visible_count}")
         self._next_problem_button.setEnabled(visible_problem_count > 0)
         self._update_workflow_status()
+
+    def _update_review_guidance(self) -> None:
+        checked_count = self._checked_rename_count()
+        running = self._batch_thread is not None and self._batch_thread.isRunning()
+        self._apply_rename_button.setText(f"套用更名（{checked_count}）" if checked_count else "套用更名")
+        self._apply_rename_button.setEnabled(bool(checked_count) and self._problem_row_count == 0 and not running)
+
+        row = self._table.currentRow()
+        has_row = 0 <= row < len(self._pdfs)
+        detected_serial = ""
+        detected_confidence = 0.0
+        if has_row:
+            detected_serial, detected_confidence = self._detected_serial_for_row(row)
+        self._adopt_detected_button.setEnabled(bool(detected_serial) and not running)
+        self._adopt_detected_button.setToolTip(
+            f"目前列判讀候選：{detected_serial} / {detected_confidence:.2f}" if detected_serial else "目前列沒有判讀候選值"
+        )
+
+        current_issue = self._review_issues.get(self._pdfs[row], "") if has_row else ""
+        self._confirm_row_button.setEnabled(bool(current_issue) and not running)
+
+        if not self._pdfs:
+            self._set_review_guidance("尚未載入頁面 PDF。", "empty")
+            return
+        if not has_row:
+            self._set_review_guidance("請先在更名表選擇一列。", "empty")
+            return
+
+        source = self._pdfs[row]
+        status_item = self._table.item(row, 6)
+        status = status_item.text().strip() if status_item is not None else ""
+        candidate_text = ""
+        if detected_serial:
+            candidate_text = f" 判讀候選：{detected_serial}（{detected_confidence:.2f}）。"
+
+        if current_issue:
+            self._set_review_guidance(
+                f"第 {row + 1} 列需確認：{current_issue}。{candidate_text}"
+                "可改 sort/流水號、圖號/檔名或 new name；確認無誤後按「確認此列」。",
+                "warn",
+            )
+            return
+
+        if self._row_problem_kinds.get(source):
+            self._set_review_guidance(
+                f"第 {row + 1} 列：{status}。請修正 new name、取消套用，或處理目標檔案衝突。",
+                "blocked",
+            )
+            return
+
+        if checked_count and self._problem_row_count == 0:
+            self._set_review_guidance(
+                f"問題列已清空，可按「套用更名（{checked_count}）」進入更名前確認。",
+                "ready",
+            )
+            return
+
+        self._set_review_guidance("目前列 OK；勾選要更名的列後即可套用。", "ready")
+
+    def _set_review_guidance(self, text: str, state: str) -> None:
+        self._review_guidance_label.setText(text)
+        self._review_guidance_label.setProperty("state", state)
+        self._review_guidance_label.style().unpolish(self._review_guidance_label)
+        self._review_guidance_label.style().polish(self._review_guidance_label)
 
     def _row_matches_search(self, row: int, search_terms: list[str]) -> bool:
         if not search_terms:
@@ -2497,6 +2603,23 @@ def _status_issue_kind(status: str, review_issue: str) -> str:
     if "來源不存在" in status or "缺少命名" in status:
         return "missing"
     return ""
+
+
+def _status_tooltip(status: str, review_issue: str) -> str:
+    if review_issue:
+        return (
+            f"{review_issue}\n"
+            "可在更名表修改 sort/流水號、圖號/檔名或 new name；確認無誤後按「確認此列」。"
+        )
+    if "命名重複" in status or "目標已存在" in status:
+        return "請修改 new name，或取消其中一列的套用勾選。"
+    if "缺少命名" in status:
+        return "請補上 new name，或取消套用勾選。"
+    if "來源不存在" in status:
+        return "找不到原始 PDF，請重新讀取單頁 PDF 資料夾。"
+    if "可更名" in status:
+        return "此列可套用更名。"
+    return status
 
 
 def _review_issue_kind(reason: str) -> str:
