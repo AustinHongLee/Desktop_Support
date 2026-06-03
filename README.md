@@ -12,9 +12,9 @@ The launcher is intentionally small:
 
 ## Start
 
-一般使用者建議雙擊根目錄的 `START.cmd`。它會啟動工具列；如果啟動失敗，視窗會停住並顯示 `launcher_startup.log`。
+一般使用者建議雙擊根目錄的 `START.vbs`。它會直接啟動 Tauri 桌面版，不會掛著 cmd 視窗；工具列可從系統匣圖示叫回來。
 
-`START.vbs` 仍保留為靜默背景啟動入口，但不建議拿來除錯；它若失敗只會寫入 `%LOCALAPPDATA%\EngineeringLauncher\logs\launcher_startup.log`。
+`START.cmd` 只是一個薄啟動器：已建置 Tauri exe 時會轉交給 `START.vbs` 並立刻退出；找不到 exe 時才停下來提示 build 指令。
 
 啟動問題請雙擊 `START_DEBUG.cmd`，它會用前景模式啟動並保留錯誤輸出。
 
@@ -28,7 +28,7 @@ The launcher is intentionally small:
 - `scripts\launcher\run_launcher_debug.ps1 -Restart -Tail`：重啟並明確追蹤 ISO 工作台 log
 - `scripts\launcher\run_self_test.ps1`：無 UI 自測
 
-Tauri / React spike 目前是替代 UI 實驗，不會取代 PyQt launcher。它啟動時走桌面 dock 小尾巴，點開後才展開未來感 cockpit：
+Tauri / React 桌面版目前是主要桌面入口。它啟動時走桌面 dock 小尾巴，點開後才展開未來感 cockpit：
 
 ```powershell
 .\scripts\tauri\build_desktop_app.ps1 -Configuration Release
@@ -36,6 +36,8 @@ Tauri / React spike 目前是替代 UI 實驗，不會取代 PyQt launcher。它
 ```
 
 這個 build 會同時用 PyInstaller 打包 `desktop-support-backend.exe`，並放在 Tauri exe 同資料夾。Tauri 會優先呼叫 sidecar；開發環境找不到 sidecar 時才 fallback 到本機 Python。若要掃描既有專案 runtime，請保留專案資料夾，或用 `DESKTOP_SUPPORT_PROJECT_ROOT` 指向要檢查的 runtime root。
+
+Tauri 桌面版會常駐系統匣。關閉視窗會隱藏到系統匣，不會結束程式；左鍵點 tray 圖示可叫回 dock，右鍵選單可顯示 dock、開 Cockpit、隱藏或離開。
 
 ## Explorer Right-Click Context
 

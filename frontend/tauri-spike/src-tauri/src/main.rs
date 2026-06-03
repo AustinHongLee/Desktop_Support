@@ -1,11 +1,23 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::Manager;
+use tauri::image::Image;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WindowEvent};
+
+const MAIN_WINDOW_LABEL: &str = "main";
+const TRAY_SHOW_DOCK: &str = "show_dock";
+const TRAY_HIDE_DOCK: &str = "hide_dock";
+const TRAY_SHOW_COCKPIT: &str = "show_cockpit";
+const TRAY_QUIT: &str = "quit";
 
 const PROJECT_ROOT_ENV: &str = "DESKTOP_SUPPORT_PROJECT_ROOT";
 const BACKEND_ENV: &str = "DESKTOP_SUPPORT_BACKEND_EXE";
 const BACKEND_EXE: &str = "desktop-support-backend.exe";
 const BACKEND_SIDECAR_EXE: &str = "desktop-support-backend-x86_64-pc-windows-msvc.exe";
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/icon.ico");
 
 #[tauri::command]
 fn scan_shutdown_safety(app: tauri::AppHandle) -> Result<String, String> {
@@ -170,7 +182,79 @@ fn python_executable(project_root: &Path) -> PathBuf {
 
 fn main() {
     tauri::Builder::default()
+        .on_window_event(|window, event| {
+            if window.label() == MAIN_WINDOW_LABEL {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .setup(|app| {
+            setup_tray(app)?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![scan_shutdown_safety])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
+}
+
+fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let show_dock = MenuItem::with_id(app, TRAY_SHOW_DOCK, "顯示工具列", true, None::<&str>)?;
+    let show_cockpit = MenuItem::with_id(app, TRAY_SHOW_COCKPIT, "開啟 Cockpit", true, None::<&str>)?;
+    let hide_dock = MenuItem::with_id(app, TRAY_HIDE_DOCK, "隱藏到系統匣", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, TRAY_QUIT, "離開", true, None::<&str>)?;
+    let separator = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::new(app)?;
+    menu.append_items(&[&show_dock, &show_cockpit, &hide_dock, &separator, &quit])?;
+
+    let icon = Image::from_bytes(TRAY_ICON_BYTES)?;
+    TrayIconBuilder::with_id("desktop-support-tray")
+        .icon(icon)
+        .tooltip("Desktop Support")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_SHOW_DOCK => show_main_window(app, false),
+            TRAY_SHOW_COCKPIT => show_main_window(app, true),
+            TRAY_HIDE_DOCK => hide_main_window(app),
+            TRAY_QUIT => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_window(&tray.app_handle(), false);
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
+fn show_main_window(app: &tauri::AppHandle, cockpit: bool) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        if cockpit {
+            let _ = window.eval(
+                "window.dispatchEvent(new CustomEvent('desktop-support:set-surface', { detail: { surface: 'cockpit' } }));",
+            );
+        } else {
+            let _ = window.eval(
+                "window.dispatchEvent(new CustomEvent('desktop-support:set-surface', { detail: { surface: 'dock', collapsed: true } }));",
+            );
+        }
+    }
+}
+
+fn hide_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.hide();
+    }
 }

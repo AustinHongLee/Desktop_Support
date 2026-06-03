@@ -206,8 +206,10 @@ export default function App() {
 
     void getCurrentWindow().onCloseRequested((event) => {
       event.preventDefault();
-      setSurface("dock");
-      setDockCollapsed(true);
+      void getCurrentWindow().hide().catch(() => {
+        setSurface("dock");
+        setDockCollapsed(true);
+      });
     }).then((handler) => {
       unlisten = handler;
     });
@@ -215,6 +217,26 @@ export default function App() {
     return () => {
       window.clearTimeout(armFocusExpand);
       unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleSurfaceEvent(event: Event) {
+      const detail = (event as CustomEvent<{ surface?: SurfaceMode; collapsed?: boolean }>).detail;
+      if (detail?.surface === "cockpit") {
+        setSurface("cockpit");
+        setDockCollapsed(false);
+        return;
+      }
+      if (detail?.surface === "dock") {
+        setSurface("dock");
+        setDockCollapsed(detail.collapsed ?? true);
+      }
+    }
+
+    window.addEventListener("desktop-support:set-surface", handleSurfaceEvent);
+    return () => {
+      window.removeEventListener("desktop-support:set-surface", handleSurfaceEvent);
     };
   }, []);
 

@@ -3,23 +3,19 @@ setlocal
 
 cd /d "%~dp0"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\launcher\run_launcher.ps1" -Restart -ShowDock
-set "CODE=%ERRORLEVEL%"
+set "TAURI_EXE=%~dp0frontend\tauri-spike\src-tauri\target\release\desktop-support-tauri-spike.exe"
 
-if "%CODE%"=="0" exit /b 0
-
-echo.
-echo Engineering Launcher failed to start. Startup logs:
-echo %LOCALAPPDATA%\EngineeringLauncher\logs\launcher_startup.log
-echo %~dp0logs\launcher_startup.log
-echo.
-if exist "%LOCALAPPDATA%\EngineeringLauncher\logs\launcher_startup.log" (
-    type "%LOCALAPPDATA%\EngineeringLauncher\logs\launcher_startup.log"
-) else if exist "%~dp0logs\launcher_startup.log" (
-    type "%~dp0logs\launcher_startup.log"
-) else (
-    echo No startup log was found.
+if exist "%TAURI_EXE%" (
+    wscript.exe "%~dp0START.vbs"
+    exit /b 0
 )
+
+echo.
+echo Desktop Support Tauri exe was not found:
+echo %TAURI_EXE%
+echo.
+echo Build it first:
+echo powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\tauri\build_desktop_app.ps1" -Configuration Release
 echo.
 pause
-exit /b %CODE%
+exit /b 1
