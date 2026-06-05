@@ -61,6 +61,7 @@ import {
   type IsoPlanRow,
   type IsoProfilePayload,
   type IsoPreviewPayload,
+  type IsoRegion,
   type IsoWorkflowRequest,
   type IsoWorkflowPlan,
 } from "./isoWorkflow";
@@ -147,6 +148,9 @@ const ISO_ISSUES = [
   { code: "SAFE", title: "套用前先 dry-run", detail: "只會更名已勾選且通過檢查的 PDF", tone: "ready" },
   { code: "LEGACY", title: "舊工作台保留", detail: "工程師模式仍可叫出既有 PyQt workflow", tone: "ready" },
 ];
+
+const DEFAULT_SERIAL_REGION: IsoRegion = { left: 0.62, top: 0, width: 0.38, height: 0.24 };
+const DEFAULT_DRAWING_REGION: IsoRegion = { left: 0.5, top: 0.66, width: 0.5, height: 0.34 };
 
 export default function App() {
   const [surface, setSurface] = useState<SurfaceMode>(() => initialSurface());
@@ -1032,6 +1036,11 @@ function IsoPdfAutopilot() {
   const [previewError, setPreviewError] = useState("");
   const [profile, setProfile] = useState<IsoProfilePayload | null>(null);
   const [profileBusy, setProfileBusy] = useState(false);
+  const [serialRegion, setSerialRegion] = useState<IsoRegion>(DEFAULT_SERIAL_REGION);
+  const [drawingRegion, setDrawingRegion] = useState<IsoRegion>(DEFAULT_DRAWING_REGION);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.7);
+  const [activeRoi, setActiveRoi] = useState<"serial" | "drawing">("serial");
+  const [dryRunOpen, setDryRunOpen] = useState(false);
 
   function requestPayload(rows?: IsoPlanRow[]) {
     return {
@@ -1045,6 +1054,9 @@ function IsoPdfAutopilot() {
       serial_col: serialCol,
       line_col: lineCol,
       pattern,
+      serial_region: serialRegion,
+      drawing_region: drawingRegion,
+      confidence_threshold: confidenceThreshold,
       detect_serials: detectSerials,
       rows,
     };
@@ -1081,6 +1093,9 @@ function IsoPdfAutopilot() {
     setSheetName(result.sheet_name || "");
     setSerialCol(result.serial_col ?? "");
     setLineCol(result.line_col ?? "");
+    setSerialRegion(result.serial_region || DEFAULT_SERIAL_REGION);
+    setDrawingRegion(result.drawing_region || DEFAULT_DRAWING_REGION);
+    setConfidenceThreshold(result.confidence_threshold ?? 0.7);
   }
 
   async function restoreProfile(request: Partial<IsoWorkflowRequest>, options: { syncPageFolder?: boolean } = {}) {
@@ -1210,9 +1225,9 @@ function IsoPdfAutopilot() {
           serial_col: result.source.serial_col ?? serialCol,
           line_col: result.source.line_col ?? lineCol,
           pattern: result.source.pattern || pattern,
-          confidence_threshold: profile?.confidence_threshold,
-          serial_region: profile?.serial_region,
-          drawing_region: profile?.drawing_region,
+          confidence_threshold: confidenceThreshold,
+          serial_region: serialRegion,
+          drawing_region: drawingRegion,
         });
         setProfile(savedProfile);
         profileNote = " Profile 已保存。";
@@ -1227,7 +1242,7 @@ function IsoPdfAutopilot() {
     }
   }
 
-  async function applySelectedRows() {
+  function openDryRun() {
     if (!plan) {
       return;
     }
@@ -1236,14 +1251,20 @@ function IsoPdfAutopilot() {
       setError("沒有可套用的列；請先勾選 ready/warn 列或修正 blocked 列。");
       return;
     }
-    if (!window.confirm(`即將更名 ${selected.length} 個 PDF。確定套用？`)) {
+    setDryRunOpen(true);
+  }
+
+  async function applySelectedRows() {
+    if (!plan) {
       return;
     }
+    const selected = plan.rows.filter((row) => row.selected && row.status !== "blocked");
     setApplyBusy(true);
     setError("");
     setMessage("");
     try {
       const result = await applyIsoPlan(requestPayload(selected));
+      setDryRunOpen(false);
       setMessage(result.message);
       await generatePlan();
     } catch (caught) {
@@ -1251,6 +1272,19 @@ function IsoPdfAutopilot() {
     } finally {
       setApplyBusy(false);
     }
+  }
+
+  function resetRoi(region: "serial" | "drawing" = activeRoi) {
+    if (region === "serial") {
+      setSerialRegion(DEFAULT_SERIAL_REGION);
+      return;
+    }
+    setDrawingRegion(DEFAULT_DRAWING_REGION);
+  }
+
+  function updateActiveRoi(field: keyof IsoRegion, value: number) {
+    const setter = activeRoi === "serial" ? setSerialRegion : setDrawingRegion;
+    setter((current) => normalizeRegion({ ...current, [field]: value }));
   }
 
   async function exportRenameCsv() {
@@ -1349,7 +1383,12 @@ function IsoPdfAutopilot() {
     }
     setPreviewBusy(true);
     setPreviewError("");
-    loadIsoPreview({ source_path: selectedRow.source_path, detect_serial: detectSerials })
+    loadIsoPreview({
+      source_path: selectedRow.source_path,
+      detect_serial: detectSerials,
+      serial_region: serialRegion,
+      drawing_region: drawingRegion,
+    })
       .then((payload) => {
         if (!cancelled) {
           setPreview(payload);
@@ -1369,7 +1408,7 @@ function IsoPdfAutopilot() {
     return () => {
       cancelled = true;
     };
-  }, [selectedRow?.source_path, detectSerials]);
+  }, [selectedRow?.source_path, detectSerials, serialRegion, drawingRegion]);
 
   return (
     <section className="iso-board iso-workbench">
@@ -1387,7 +1426,7 @@ function IsoPdfAutopilot() {
             <WandSparkles size={18} />
             <span>{busy ? "產生中" : "產生命名草稿"}</span>
           </button>
-          <button className="launch-button" onClick={applySelectedRows} disabled={!selectedCount || busy || applyBusy}>
+          <button className="launch-button" onClick={openDryRun} disabled={!selectedCount || busy || applyBusy}>
             <ClipboardCheck size={18} />
             <span>{applyBusy ? "套用中" : `套用 ${selectedCount} 筆`}</span>
           </button>
@@ -1523,7 +1562,18 @@ function IsoPdfAutopilot() {
         </main>
 
         <aside className="iso-inspector">
-          <IsoVisualPanel preview={preview} busy={previewBusy} error={previewError} row={selectedRow} />
+          <IsoVisualPanel
+            activeRoi={activeRoi}
+            busy={previewBusy}
+            drawingRegion={drawingRegion}
+            error={previewError}
+            preview={preview}
+            resetRoi={resetRoi}
+            row={selectedRow}
+            serialRegion={serialRegion}
+            setActiveRoi={setActiveRoi}
+            updateActiveRoi={updateActiveRoi}
+          />
 
           <div className="iso-side-card selected-row-card">
             <h3>目前列</h3>
@@ -1561,7 +1611,7 @@ function IsoPdfAutopilot() {
               <RefreshCcw size={15} />
               <span>重新產生</span>
             </button>
-            <button className="action-button" onClick={applySelectedRows} disabled={!selectedCount || busy || applyBusy}>
+            <button className="action-button" onClick={openDryRun} disabled={!selectedCount || busy || applyBusy}>
               <ClipboardCheck size={15} />
               <span>套用更名</span>
             </button>
@@ -1576,6 +1626,17 @@ function IsoPdfAutopilot() {
           </div>
         </aside>
       </div>
+      {dryRunOpen && plan ? (
+        <IsoDryRunDialog
+          applyBusy={applyBusy}
+          exportBusy={exportBusy}
+          onApply={applySelectedRows}
+          onClose={() => setDryRunOpen(false)}
+          onExport={exportRenameCsv}
+          rows={plan.rows.filter((row) => row.selected && row.status !== "blocked")}
+          summary={plan.summary}
+        />
+      ) : null}
     </section>
   );
 }
@@ -1646,6 +1707,83 @@ function IsoPlanTable({
   );
 }
 
+function IsoDryRunDialog({
+  applyBusy,
+  exportBusy,
+  onApply,
+  onClose,
+  onExport,
+  rows,
+  summary,
+}: {
+  applyBusy: boolean;
+  exportBusy: boolean;
+  onApply: () => void;
+  onClose: () => void;
+  onExport: () => void;
+  rows: IsoPlanRow[];
+  summary: IsoWorkflowPlan["summary"];
+}) {
+  const blockedOrWarn = summary.blocked + summary.warn;
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="dry-run-dialog" role="dialog" aria-modal="true" aria-label="更名前 dry-run">
+        <div className="dry-run-head">
+          <div>
+            <div className="eyebrow">Dry-run rename plan</div>
+            <h2>更名前確認</h2>
+          </div>
+          <button className="dock-icon-button" onClick={onClose} title="關閉">
+            <Minimize2 size={15} />
+          </button>
+        </div>
+
+        <div className="dry-run-metrics">
+          <IsoMetric label="Will rename" value={rows.length} icon={<ClipboardCheck size={17} />} tone="ready" />
+          <IsoMetric label="Warn" value={summary.warn} icon={<CircleAlert size={17} />} tone="warn" />
+          <IsoMetric label="Blocked" value={summary.blocked} icon={<AlertTriangle size={17} />} tone="danger" />
+        </div>
+
+        <div className={`dry-run-warning ${blockedOrWarn ? "warn" : "ready"}`}>
+          {blockedOrWarn ? `${blockedOrWarn} 筆需要注意；blocked 不會套用。` : "所有勾選列皆可套用。"}
+        </div>
+
+        <div className="dry-run-table">
+          <div className="dry-run-table-head">
+            <span>Page</span>
+            <span>Old</span>
+            <span>New</span>
+            <span>Status</span>
+          </div>
+          {rows.slice(0, 80).map((row) => (
+            <div className={`dry-run-row ${row.status}`} key={row.id}>
+              <span>{row.page}</span>
+              <strong title={row.source_name}>{row.source_name}</strong>
+              <code title={row.new_name}>{row.new_name}</code>
+              <span>{row.status}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="dry-run-actions">
+          <button className="action-button" onClick={onExport} disabled={exportBusy}>
+            <FileJson size={15} />
+            <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
+          </button>
+          <button className="action-button" onClick={onClose} disabled={applyBusy}>
+            <Minimize2 size={15} />
+            <span>返回校對</span>
+          </button>
+          <button className="launch-button" onClick={onApply} disabled={!rows.length || applyBusy}>
+            <ClipboardCheck size={18} />
+            <span>{applyBusy ? "套用中" : `確認套用 ${rows.length} 筆`}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function IsoEmptyPlan({ busy, chooseWorkFolder, generatePlan }: { busy: boolean; chooseWorkFolder: () => void; generatePlan: () => void }) {
   return (
     <div className="iso-empty-plan">
@@ -1667,16 +1805,29 @@ function IsoEmptyPlan({ busy, chooseWorkFolder, generatePlan }: { busy: boolean;
 }
 
 function IsoVisualPanel({
+  activeRoi,
   busy,
+  drawingRegion,
   error,
   preview,
+  resetRoi,
   row,
+  serialRegion,
+  setActiveRoi,
+  updateActiveRoi,
 }: {
+  activeRoi: "serial" | "drawing";
   busy: boolean;
+  drawingRegion: IsoRegion;
   error: string;
   preview: IsoPreviewPayload | null;
+  resetRoi: (region?: "serial" | "drawing") => void;
   row?: IsoPlanRow;
+  serialRegion: IsoRegion;
+  setActiveRoi: (region: "serial" | "drawing") => void;
+  updateActiveRoi: (field: keyof IsoRegion, value: number) => void;
 }) {
+  const activeRegion = activeRoi === "serial" ? serialRegion : drawingRegion;
   return (
     <div className="iso-visual-panel">
       <div className="panel-heading compact">
@@ -1688,13 +1839,44 @@ function IsoVisualPanel({
 
       <div className={`pdf-page-frame ${preview ? "ready" : ""}`}>
         {preview ? (
-          <img src={preview.page.image} alt={`PDF preview ${preview.source_name}`} />
+          <div className="pdf-page-canvas">
+            <img src={preview.page.image} alt={`PDF preview ${preview.source_name}`} />
+            <RoiBox active={activeRoi === "serial"} region={serialRegion} tone="serial" />
+            <RoiBox active={activeRoi === "drawing"} region={drawingRegion} tone="drawing" />
+          </div>
         ) : (
           <div className="pdf-preview-empty">
             <FileSearch size={26} />
             <span>{busy ? "載入 PDF 預覽中" : error || "選擇命名列後顯示 PDF 預覽"}</span>
           </div>
         )}
+      </div>
+
+      <div className="roi-panel">
+        <div className="segmented mini">
+          <button className={activeRoi === "serial" ? "active" : ""} onClick={() => setActiveRoi("serial")}>流水號 ROI</button>
+          <button className={activeRoi === "drawing" ? "active" : ""} onClick={() => setActiveRoi("drawing")}>圖號 ROI</button>
+        </div>
+        <div className="roi-controls">
+          {(["left", "top", "width", "height"] as Array<keyof IsoRegion>).map((field) => (
+            <label className="roi-slider" key={field}>
+              <span>{field}</span>
+              <input
+                max={field === "left" || field === "top" ? 0.95 : 1}
+                min={field === "width" || field === "height" ? 0.05 : 0}
+                onChange={(event) => updateActiveRoi(field, Number(event.target.value))}
+                step="0.01"
+                type="range"
+                value={activeRegion[field]}
+              />
+              <strong>{activeRegion[field].toFixed(2)}</strong>
+            </label>
+          ))}
+        </div>
+        <button className="action-button" onClick={() => resetRoi()}>
+          <RefreshCcw size={14} />
+          <span>重設目前 ROI</span>
+        </button>
       </div>
 
       <div className="pdf-crop-grid">
@@ -1716,6 +1898,20 @@ function IsoVisualPanel({
         </div>
       </div>
     </div>
+  );
+}
+
+function RoiBox({ active, region, tone }: { active: boolean; region: IsoRegion; tone: "serial" | "drawing" }) {
+  return (
+    <div
+      className={`roi-box ${tone} ${active ? "active" : ""}`}
+      style={{
+        left: `${region.left * 100}%`,
+        top: `${region.top * 100}%`,
+        width: `${region.width * 100}%`,
+        height: `${region.height * 100}%`,
+      }}
+    />
   );
 }
 
@@ -1806,6 +2002,14 @@ function formatIsoFilename(pattern: string, serial: string, line: string): strin
   }
   const name = (pattern || "{serial}--{line}.pdf").split("{serial}").join(cleanSerial).split("{line}").join(cleanLine);
   return /\.[^\\/.\s]+$/.test(name) ? name : `${name}.pdf`;
+}
+
+function normalizeRegion(region: IsoRegion): IsoRegion {
+  const width = clamp(region.width, 0.05, 1);
+  const height = clamp(region.height, 0.05, 1);
+  const left = clamp(region.left, 0, 1 - width);
+  const top = clamp(region.top, 0, 1 - height);
+  return { left, top, width, height };
 }
 
 function basenameWithoutPdf(value: string): string {
@@ -2154,6 +2358,9 @@ function saveDockPlacement(edge: DockEdge, offset: number): void {
 }
 
 function clamp(value: number, min: number, max: number): number {
+  if (Number.isNaN(value)) {
+    return min;
+  }
   return Math.min(Math.max(value, min), max);
 }
 

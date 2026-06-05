@@ -2524,12 +2524,38 @@ h3 {
   overflow: hidden;
 }
 
+.pdf-page-canvas {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  max-height: 360px;
+}
+
+.pdf-page-canvas img,
 .pdf-page-frame img {
   width: 100%;
   height: 100%;
   max-height: 360px;
   object-fit: contain;
   background: #ffffff;
+}
+
+.roi-box {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid rgba(255, 209, 102, 0.92);
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.03), 0 0 18px rgba(255, 209, 102, 0.22);
+}
+
+.roi-box.drawing {
+  border-color: rgba(47, 245, 200, 0.9);
+  box-shadow: 0 0 18px rgba(47, 245, 200, 0.22);
+}
+
+.roi-box.active {
+  border-width: 3px;
 }
 
 .pdf-preview-empty {
@@ -2547,6 +2573,68 @@ h3 {
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
+}
+
+.roi-panel {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 9px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.segmented.mini {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.segmented.mini button {
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.segmented.mini button.active {
+  color: var(--text-strong);
+  background: rgba(47, 245, 200, 0.14);
+}
+
+.roi-controls {
+  display: grid;
+  gap: 6px;
+}
+
+.roi-slider {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 40px;
+  gap: 7px;
+  align-items: center;
+}
+
+.roi-slider span,
+.roi-slider strong {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.roi-slider input {
+  min-width: 0;
+  accent-color: var(--mint);
 }
 
 .preview-crop {
@@ -2597,6 +2685,126 @@ h3 {
   display: block;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.48);
+  backdrop-filter: blur(10px);
+}
+
+.dry-run-dialog {
+  width: min(980px, calc(100vw - 48px));
+  max-height: min(760px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 12px;
+  border: 1px solid rgba(47, 245, 200, 0.28);
+  border-radius: 12px;
+  padding: 16px;
+  background:
+    linear-gradient(135deg, rgba(47, 245, 200, 0.08), rgba(255, 209, 102, 0.04)),
+    #0a0f0d;
+  box-shadow: 0 26px 90px rgba(0, 0, 0, 0.44);
+}
+
+.dry-run-head,
+.dry-run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.dry-run-head h2 {
+  margin: 2px 0 0;
+  color: var(--text-strong);
+}
+
+.dry-run-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dry-run-warning {
+  border: 1px solid rgba(47, 245, 200, 0.24);
+  border-radius: 9px;
+  padding: 9px 10px;
+  color: var(--mint);
+  background: rgba(47, 245, 200, 0.06);
+  font-weight: 820;
+}
+
+.dry-run-warning.warn {
+  border-color: rgba(255, 209, 102, 0.26);
+  color: var(--amber);
+  background: rgba(255, 209, 102, 0.07);
+}
+
+.dry-run-table {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding-right: 4px;
+}
+
+.dry-run-table-head,
+.dry-run-row {
+  display: grid;
+  grid-template-columns: 52px minmax(150px, 1fr) minmax(210px, 1.25fr) 80px;
+  gap: 8px;
+  align-items: center;
+}
+
+.dry-run-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  min-height: 28px;
+  color: var(--muted);
+  background: #0a0f0d;
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.dry-run-row {
+  min-height: 42px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 9px;
+  padding: 7px 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.dry-run-row.warn {
+  border-color: rgba(255, 209, 102, 0.24);
+}
+
+.dry-run-row.blocked {
+  border-color: rgba(255, 79, 123, 0.26);
+}
+
+.dry-run-row strong,
+.dry-run-row code,
+.dry-run-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dry-run-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 .vision-readout strong {

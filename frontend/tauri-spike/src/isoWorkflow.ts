@@ -45,6 +45,8 @@ export interface IsoWorkflowRequest {
 export interface IsoPreviewRequest {
   source_path: string;
   detect_serial?: boolean;
+  serial_region?: IsoRegion;
+  drawing_region?: IsoRegion;
 }
 
 export interface IsoPreviewPayload {
