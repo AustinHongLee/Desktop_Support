@@ -84,7 +84,6 @@ const LEVEL_SCORE: Record<SafeToKill, number> = {
 type AppMode = "command" | "iso" | "shutdown" | "cleanup" | "locks";
 type SurfaceMode = "dock" | "cockpit";
 type DockEdge = "top" | "bottom" | "left" | "right";
-type IsoWorkbenchView = "workbench" | "autopilot" | "engineer";
 
 const DOCK_EDGE_STORAGE_KEY = "desktop-support.dock.edge";
 const DOCK_OFFSET_STORAGE_KEY = "desktop-support.dock.offset";
@@ -1019,7 +1018,7 @@ function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: 
 
 function IsoPdfAutopilot() {
   const legacy = useLegacyBridge("iso");
-  const [isoView, setIsoView] = useState<IsoWorkbenchView>("workbench");
+  const [isoView] = useState<"workbench" | "autopilot" | "engineer">("workbench");
   const [workFolder, setWorkFolder] = useState("");
   const [combinePdf, setCombinePdf] = useState("");
   const [pageFolder, setPageFolder] = useState("");
@@ -1536,23 +1535,11 @@ function IsoPdfAutopilot() {
         <div>
           <div className="eyebrow">Tauri ISO workbench</div>
           <h2>ISO PDF 拆頁命名工作臺</h2>
-          <div className="iso-view-switch" role="tablist" aria-label="ISO view">
-            {([
-              ["workbench", "工作臺", Workflow],
-              ["autopilot", "Autopilot", Bot],
-              ["engineer", "Engineer", Settings],
-            ] as const).map(([view, label, Icon]) => (
-              <button
-                aria-selected={isoView === view}
-                className={isoView === view ? "active" : ""}
-                key={view}
-                onClick={() => setIsoView(view)}
-                role="tab"
-              >
-                <Icon size={14} />
-                <span>{label}</span>
-              </button>
-            ))}
+          <div className="iso-source-strip">
+            <TopSourceButton icon={<FolderOpen size={15} />} label="工作資料夾" value={workFolder} onPick={chooseWorkFolder} />
+            <TopSourceButton icon={<FileText size={15} />} label="Combine PDF" value={combinePdf} onPick={chooseCombinePdf} />
+            <TopSourceButton icon={<Layers3 size={15} />} label="Page folder" value={pageFolder} onPick={choosePageFolder} />
+            <TopSourceButton icon={<Table2 size={15} />} label="ISO List" value={isoList} onPick={chooseIsoList} />
           </div>
         </div>
         <div className="iso-top-actions">
@@ -1580,9 +1567,9 @@ function IsoPdfAutopilot() {
             <FileJson size={15} />
             <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
           </button>
-          <button className="icon-button" onClick={() => setIsoView("engineer")}>
-            <Settings size={16} />
-            <span>Engineer</span>
+          <button className="icon-button" onClick={legacy.launch} disabled={legacy.busy}>
+            <PanelRightOpen size={16} />
+            <span>{legacy.busy ? "開啟中" : "舊版"}</span>
           </button>
         </div>
       </div>
@@ -1676,9 +1663,9 @@ function IsoPdfAutopilot() {
                 <FileJson size={15} />
                 <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
               </button>
-              <button className="action-button" onClick={() => setIsoView("engineer")}>
-                <Settings size={15} />
-                <span>Engineer</span>
+              <button className="action-button" onClick={legacy.launch} disabled={legacy.busy}>
+                <PanelRightOpen size={15} />
+                <span>{legacy.busy ? "開啟中" : "舊版"}</span>
               </button>
             </div>
           </aside>
@@ -1983,9 +1970,9 @@ function IsoPdfAutopilot() {
               <FileJson size={15} />
               <span>匯出 CSV</span>
             </button>
-            <button className="action-button" onClick={() => setIsoView("engineer")}>
-              <Settings size={15} />
-              <span>工程模式</span>
+            <button className="action-button" onClick={legacy.launch} disabled={legacy.busy}>
+              <PanelRightOpen size={15} />
+              <span>{legacy.busy ? "開啟中" : "舊版"}</span>
             </button>
           </div>
         </aside>
@@ -2027,6 +2014,16 @@ function PathPickerRow({ icon, label, onPick, value }: { icon: React.ReactNode; 
         <FolderOpen size={15} />
       </button>
     </div>
+  );
+}
+
+function TopSourceButton({ icon, label, onPick, value }: { icon: React.ReactNode; label: string; onPick: () => void; value: string }) {
+  return (
+    <button className={`top-source-button ${value ? "ready" : "idle"}`} onClick={onPick} title={value || label}>
+      {icon}
+      <span>{label}</span>
+      <strong>{value ? compactPath(value) : "not selected"}</strong>
+    </button>
   );
 }
 
