@@ -1018,7 +1018,7 @@ function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: 
 
 function IsoPdfAutopilot() {
   const legacy = useLegacyBridge("iso");
-  const [isoView] = useState<"workbench" | "autopilot" | "engineer">("workbench");
+  const [isoView, setIsoView] = useState<"workbench" | "autopilot" | "engineer">("autopilot");
   const [workFolder, setWorkFolder] = useState("");
   const [combinePdf, setCombinePdf] = useState("");
   const [pageFolder, setPageFolder] = useState("");
@@ -1270,14 +1270,20 @@ function IsoPdfAutopilot() {
       return;
     }
     const selected = plan.rows.filter((row) => row.selected && row.status !== "blocked");
+    if (!selected.length) {
+      setError("沒有勾選任何可更名的列。");
+      return;
+    }
     setApplyBusy(true);
     setError("");
     setMessage("");
     try {
       const result = await applyIsoPlan(requestPayload(selected));
+      const renamedIds = new Set(selected.map((row) => row.id));
+      updatePlanRows((rows) => rows.filter((row) => !renamedIds.has(row.id)));
       setDryRunOpen(false);
-      setMessage(result.message);
-      await generatePlan();
+      setResultOpen(false);
+      setMessage(`${result.message} 已從清單移除 ${selected.length} 列;要重新掃描可按「重新產生」。`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -1359,6 +1365,10 @@ function IsoPdfAutopilot() {
 
   function toggleRow(rowId: string) {
     updatePlanRows((rows) => rows.map((row) => row.id === rowId && row.status !== "blocked" ? { ...row, selected: !row.selected } : row));
+  }
+
+  function setAllRowsSelected(select: boolean) {
+    updatePlanRows((rows) => rows.map((row) => (row.status === "blocked" ? row : { ...row, selected: select })));
   }
 
   function updateRow(rowId: string, field: "serial" | "line_no" | "new_name", value: string) {
@@ -1543,31 +1553,21 @@ function IsoPdfAutopilot() {
           </div>
         </div>
         <div className="iso-top-actions">
-          <button className="action-button" onClick={chooseProblemRow} disabled={!issueRows.length}>
-            <CircleAlert size={15} />
-            <span>問題列 {issueRows.length}</span>
-          </button>
-          <button className="action-button" onClick={() => setResultOpen(true)} disabled={!plan}>
-            <Gauge size={15} />
-            <span>結果</span>
-          </button>
-          <button className="launch-button" onClick={generatePlan} disabled={busy || applyBusy}>
-            <WandSparkles size={18} />
-            <span>{busy ? "產生中" : "產生命名草稿"}</span>
-          </button>
-          <button className="action-button" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={busy || batchBusy || applyBusy}>
-            <ScanLine size={15} />
-            <span>{batchRunning ? `取消判讀 ${batchJob?.progress.percent ?? 0}%` : "批次判讀"}</span>
-          </button>
-          <button className="launch-button" onClick={openDryRun} disabled={!selectedCount || busy || applyBusy}>
-            <ClipboardCheck size={18} />
-            <span>{applyBusy ? "套用中" : `套用 ${selectedCount} 筆`}</span>
-          </button>
-          <button className="action-button" onClick={exportRenameCsv} disabled={!plan || busy || exportBusy}>
-            <FileJson size={15} />
-            <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
-          </button>
-          <button className="icon-button" onClick={legacy.launch} disabled={legacy.busy}>
+          <div className="mode-switch" role="tablist" aria-label="ISO 工作模式">
+            <button className={isoView === "autopilot" ? "active" : ""} onClick={() => setIsoView("autopilot")} title="一鍵導引:選來源 → 產生草稿 → 套用">
+              <WandSparkles size={15} />
+              <span>一鍵</span>
+            </button>
+            <button className={isoView === "workbench" ? "active" : ""} onClick={() => setIsoView("workbench")} title="工作台:逐列校對命名表與預覽">
+              <Table2 size={15} />
+              <span>工作台</span>
+            </button>
+            <button className={isoView === "engineer" ? "active" : ""} onClick={() => setIsoView("engineer")} title="調校:ROI、欄位對應、信心門檻、Profile">
+              <Settings size={15} />
+              <span>調校</span>
+            </button>
+          </div>
+          <button className="icon-button" onClick={legacy.launch} disabled={legacy.busy} title="暫時開啟舊版工作台(轉移完成後移除)">
             <PanelRightOpen size={16} />
             <span>{legacy.busy ? "開啟中" : "舊版"}</span>
           </button>
@@ -1913,6 +1913,7 @@ function IsoPdfAutopilot() {
               rows={visibleRows}
               selectedRowId={selectedRow?.id ?? ""}
               toggleRow={toggleRow}
+              toggleAll={setAllRowsSelected}
               updateRow={updateRow}
               selectRow={setSelectedRowId}
             />
@@ -2042,18 +2043,24 @@ function IsoPlanTable({
   selectedRowId,
   selectRow,
   toggleRow,
+  toggleAll,
   updateRow,
 }: {
   rows: IsoPlanRow[];
   selectedRowId: string;
   selectRow: (rowId: string) => void;
   toggleRow: (rowId: string) => void;
+  toggleAll: (select: boolean) => void;
   updateRow: (rowId: string, field: "serial" | "line_no" | "new_name", value: string) => void;
 }) {
+  const selectable = rows.filter((row) => row.status !== "blocked");
+  const allSelected = selectable.length > 0 && selectable.every((row) => row.selected);
   return (
     <div className="iso-table live">
       <div className="iso-table-head">
-        <span>Use</span>
+        <label className="row-check" title="全選 / 全不選(不含 blocked)" onClick={(event) => event.stopPropagation()}>
+          <input type="checkbox" checked={allSelected} onChange={(event) => toggleAll(event.target.checked)} />
+        </label>
         <span>Page</span>
         <span>Old file</span>
         <span>Serial</span>

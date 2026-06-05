@@ -2772,6 +2772,7 @@ h3 {
 
 .iso-table.live {
   min-height: 0;
+  max-height: 56vh;
   overflow: auto;
   padding-right: 4px;
   scrollbar-color: rgba(47, 245, 200, 0.48) rgba(255, 255, 255, 0.04);
