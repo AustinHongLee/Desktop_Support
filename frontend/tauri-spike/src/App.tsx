@@ -47,6 +47,24 @@ import {
 import { isTauri } from "@tauri-apps/api/core";
 import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  applyIsoPlan,
+  exportIsoPlanCsv,
+  loadIsoProfile,
+  loadIsoPreview,
+  pickIsoCombinePdf,
+  pickIsoListFile,
+  pickIsoPageFolder,
+  pickIsoWorkFolder,
+  runIsoPlan,
+  saveIsoProfile,
+  type IsoPlanRow,
+  type IsoProfilePayload,
+  type IsoPreviewPayload,
+  type IsoWorkflowRequest,
+  type IsoWorkflowPlan,
+} from "./isoWorkflow";
+import { openLegacyWorkbench, type LegacyWorkbench } from "./legacy";
 import { loadShutdownReport, type SafeToKill, type ShutdownBlocker, type ShutdownSafetyReport } from "./report";
 
 const LEVEL_ORDER: SafeToKill[] = ["Dangerous", "Unknown", "Caution", "Safe"];
@@ -80,9 +98,9 @@ const MODE_META: Record<AppMode, { eyebrow: string; title: string; line: string 
     line: "tools · runtime · jobs · safety cockpit",
   },
   iso: {
-    eyebrow: "Tauri ISO autopilot",
+    eyebrow: "Tauri ISO workbench",
     title: "ISO PDF 拆頁命名",
-    line: "source → split → detect → rename plan",
+    line: "split · plan · review · apply",
   },
   shutdown: {
     eyebrow: "Tauri shutdown cockpit",
@@ -102,40 +120,32 @@ const MODE_META: Record<AppMode, { eyebrow: string; title: string; line: string 
 };
 
 const COMMAND_TOOLS = [
-  { mode: "iso" as AppMode, title: "ISO PDF 拆頁命名", status: "Concept", detail: "Autopilot flow · rename plan · ROI review", tone: "warn" },
+  { mode: "iso" as AppMode, title: "ISO PDF 拆頁命名", status: "New", detail: "Tauri workbench · split · plan · apply", tone: "ready" },
   { mode: "shutdown" as AppMode, title: "Shutdown Safety Inspector", status: "Live", detail: "Process tree · lock files · safe-to-kill policy", tone: "ready" },
-  { mode: "cleanup" as AppMode, title: "安全清除工作台", status: "Prototype", detail: "Quarantine-first cleanup · restore trail", tone: "ready" },
-  { mode: "locks" as AppMode, title: "檔案關係排查", status: "Prototype", detail: "Dependency graph · lock holder · provenance", tone: "warn" },
+  { mode: "cleanup" as AppMode, title: "安全清除工作台", status: "Bridge", detail: "Opens the existing cleanup workbench", tone: "ready" },
+  { mode: "locks" as AppMode, title: "檔案關係排查", status: "Bridge", detail: "Opens the existing lock checker", tone: "ready" },
 ];
 
 const COMMAND_FEED = [
   { code: "SYS", title: "Tauri shell ready", detail: "React cockpit can host multiple workbenches", tone: "ready" },
-  { code: "ISO", title: "Autopilot concept online", detail: "拆頁、判讀、命名、review queue 已有視覺稿", tone: "warn" },
+  { code: "ISO", title: "New ISO workbench online", detail: "新版已可產生命名草稿並套用勾選更名", tone: "ready" },
   { code: "PWR", title: "Shutdown backend connected", detail: "Native shell calls Python scanner through Rust command", tone: "ready" },
-  { code: "NEXT", title: "Pipeline bridge pending", detail: "下一步把 ISO Python workflow 接到 Tauri command", tone: "idle" },
+  { code: "NEXT", title: "React data panel pending", detail: "下一步才是把 ISO rename plan 搬進新版資料表", tone: "idle" },
 ];
 
 const ISO_STEPS = [
-  { label: "來源", state: "ready", meta: "combine.pdf · 24 pages" },
-  { label: "拆頁", state: "ready", meta: "24 single-page PDFs" },
-  { label: "ISO", state: "ready", meta: "ISO List · 64 rows" },
-  { label: "判讀", state: "warn", meta: "3 rows need review" },
-  { label: "命名", state: "ready", meta: "21 ready · 3 held" },
-  { label: "更名", state: "idle", meta: "dry-run pending" },
-];
-
-const ISO_ROWS = [
-  { page: "P001", serial: "1037", confidence: "96", status: "Ready", oldName: "combine_p001.pdf", newName: "1037--2-S11-P-20911-003.pdf" },
-  { page: "P002", serial: "1038", confidence: "94", status: "Ready", oldName: "combine_p002.pdf", newName: "1038--2-S11-P-20911-004.pdf" },
-  { page: "P003", serial: "1040", confidence: "71", status: "Review", oldName: "combine_p003.pdf", newName: "1040--candidate-match.pdf" },
-  { page: "P004", serial: "1041", confidence: "88", status: "Ready", oldName: "combine_p004.pdf", newName: "1041--2-S11-P-20911-006.pdf" },
-  { page: "P005", serial: "?", confidence: "42", status: "Hold", oldName: "combine_p005.pdf", newName: "needs-manual-confirm.pdf" },
+  { label: "來源", state: "idle", meta: "select PDF" },
+  { label: "拆頁", state: "idle", meta: "waiting" },
+  { label: "ISO", state: "idle", meta: "select list" },
+  { label: "草稿", state: "idle", meta: "dry-run plan" },
+  { label: "確認", state: "idle", meta: "review rows" },
+  { label: "更名", state: "idle", meta: "manual apply" },
 ];
 
 const ISO_ISSUES = [
-  { code: "W002", title: "ISO List 無此流水號", detail: "P003 · 1040 有視覺結果但 list 無完全匹配", tone: "warn" },
-  { code: "W005", title: "OCR / CV 不一致", detail: "P005 · OCR=1037, CV=103", tone: "danger" },
-  { code: "I003", title: "自動找到 ISO List", detail: "同層資料夾命中 iso_list_2026.xlsx", tone: "ready" },
+  { code: "NEW", title: "新版 ISO 工作台待命", detail: "選擇 PDF 與 ISO List 後可產生命名草稿", tone: "ready" },
+  { code: "SAFE", title: "套用前先 dry-run", detail: "只會更名已勾選且通過檢查的 PDF", tone: "ready" },
+  { code: "LEGACY", title: "舊工作台保留", detail: "工程師模式仍可叫出既有 PyQt workflow", tone: "ready" },
 ];
 
 export default function App() {
@@ -406,8 +416,8 @@ export default function App() {
               <div className={`source-pill ${source}`}>{source === "tauri" ? "Live Python report" : "Browser sample"}</div>
             </>
           ) : (
-            <div className={`source-pill ${mode === "command" ? "tauri" : "sample"}`}>
-              {mode === "command" ? "Tauri shell" : "Concept preview"}
+            <div className={`source-pill ${mode === "command" || mode === "iso" ? "tauri" : "bridge"}`}>
+              {mode === "command" ? "Tauri shell" : mode === "iso" ? "New ISO workbench" : "Legacy bridge"}
             </div>
           )}
           <button className="icon-button" onClick={collapseToDock} title="Collapse to desktop dock">
@@ -419,27 +429,29 @@ export default function App() {
 
       {error ? <div className="error-line">{error}</div> : null}
 
-      {mode === "command" ? (
-        <CommandCenter setMode={setMode} report={report} source={source} />
-      ) : mode === "iso" ? (
-        <IsoPdfAutopilot />
-      ) : mode === "cleanup" ? (
-        <SafeCleanupCockpit />
-      ) : mode === "locks" ? (
-        <FileLockCockpit />
-      ) : (
-        <ShutdownCockpit
-          blockers={blockers}
-          levelFilter={levelFilter}
-          report={report}
-          riskScore={riskScore}
-          guardState={guardState}
-          selected={selected}
-          setLevelFilter={setLevelFilter}
-          setSelectedId={setSelectedId}
-          source={source}
-        />
-      )}
+      <div className="content-scroll">
+        {mode === "command" ? (
+          <CommandCenter setMode={setMode} report={report} source={source} />
+        ) : mode === "iso" ? (
+          <IsoPdfAutopilot />
+        ) : mode === "cleanup" ? (
+          <SafeCleanupCockpit />
+        ) : mode === "locks" ? (
+          <FileLockCockpit />
+        ) : (
+          <ShutdownCockpit
+            blockers={blockers}
+            levelFilter={levelFilter}
+            report={report}
+            riskScore={riskScore}
+            guardState={guardState}
+            selected={selected}
+            setLevelFilter={setLevelFilter}
+            setSelectedId={setSelectedId}
+            source={source}
+          />
+        )}
+      </div>
     </main>
   );
 }
@@ -767,6 +779,8 @@ function CommandMetric({ icon, label, value }: { icon: React.ReactNode; label: s
 }
 
 function SafeCleanupCockpit() {
+  const bridge = useLegacyBridge("cleanup");
+
   return (
     <section className="feature-board cleanup-board">
       <div className="feature-hero">
@@ -775,10 +789,13 @@ function SafeCleanupCockpit() {
           <h2>安全清除工作台</h2>
           <p>先評估風險，再移入隔離區；每個動作都保留 rollback 路徑與證據。</p>
         </div>
-        <button className="launch-button">
-          <Trash2 size={18} />
-          <span>開始掃描</span>
-        </button>
+        <div className="feature-hero-actions">
+          <button className="launch-button" onClick={bridge.launch} disabled={bridge.busy}>
+            <Trash2 size={18} />
+            <span>{bridge.busy ? "開啟中" : "開啟工作台"}</span>
+          </button>
+          <BridgeStatus error={bridge.error} message={bridge.message} />
+        </div>
       </div>
 
       <div className="feature-grid">
@@ -825,6 +842,8 @@ function CleanupLane({ count, detail, title, tone }: { count: string; detail: st
 }
 
 function FileLockCockpit() {
+  const bridge = useLegacyBridge("locks");
+
   return (
     <section className="feature-board lock-board">
       <div className="feature-hero">
@@ -833,10 +852,13 @@ function FileLockCockpit() {
           <h2>檔案關係與鎖定雷達</h2>
           <p>用 producer / reader / temp / output 關係看懂誰咬著檔案，誰會被連帶影響。</p>
         </div>
-        <button className="launch-button">
-          <FileSearch size={18} />
-          <span>掃描檔案關係</span>
-        </button>
+        <div className="feature-hero-actions">
+          <button className="launch-button" onClick={bridge.launch} disabled={bridge.busy}>
+            <FileSearch size={18} />
+            <span>{bridge.busy ? "開啟中" : "開啟檢查器"}</span>
+          </button>
+          <BridgeStatus error={bridge.error} message={bridge.message} />
+        </div>
       </div>
 
       <div className="lock-grid">
@@ -986,103 +1008,545 @@ function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: 
 }
 
 function IsoPdfAutopilot() {
+  const legacy = useLegacyBridge("iso");
+  const [workFolder, setWorkFolder] = useState("");
+  const [combinePdf, setCombinePdf] = useState("");
+  const [pageFolder, setPageFolder] = useState("");
+  const [isoList, setIsoList] = useState("");
+  const [sheetName, setSheetName] = useState("");
+  const [serialCol, setSerialCol] = useState<number | "">("");
+  const [lineCol, setLineCol] = useState<number | "">("");
+  const [pattern, setPattern] = useState("{serial}--{line}.pdf");
+  const [detectSerials, setDetectSerials] = useState(false);
+  const [plan, setPlan] = useState<IsoWorkflowPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [problemOnly, setProblemOnly] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [selectedRowId, setSelectedRowId] = useState("");
+  const [preview, setPreview] = useState<IsoPreviewPayload | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [profile, setProfile] = useState<IsoProfilePayload | null>(null);
+  const [profileBusy, setProfileBusy] = useState(false);
+
+  function requestPayload(rows?: IsoPlanRow[]) {
+    return {
+      action: rows ? "apply" as const : "plan" as const,
+      profile_folder: activeProfileFolder(),
+      work_folder: workFolder,
+      combine_pdf: combinePdf,
+      page_folder: pageFolder,
+      iso_list: isoList,
+      sheet_name: sheetName,
+      serial_col: serialCol,
+      line_col: lineCol,
+      pattern,
+      detect_serials: detectSerials,
+      rows,
+    };
+  }
+
+  function activeProfileFolder(overrides: Partial<IsoWorkflowRequest> = {}) {
+    return (
+      overrides.profile_folder ||
+      overrides.work_folder ||
+      workFolder ||
+      overrides.page_folder ||
+      pageFolder ||
+      parentPath(overrides.combine_pdf || combinePdf) ||
+      parentPath(overrides.iso_list || isoList)
+    );
+  }
+
+  function applyProfile(result: IsoProfilePayload, options: { syncPageFolder?: boolean } = {}) {
+    if (result.detected_combine_pdf) {
+      setCombinePdf(result.detected_combine_pdf);
+      setWorkFolder(parentPath(result.detected_combine_pdf));
+    }
+    if (options.syncPageFolder && result.detected_page_folder_exists && result.detected_page_folder) {
+      setPageFolder(result.detected_page_folder);
+    }
+    if (result.detected_iso_list) {
+      setIsoList(result.detected_iso_list);
+    }
+    if (!result.exists) {
+      return;
+    }
+    setPattern(result.pattern || "{serial}--{line}.pdf");
+    setIsoList(result.iso_list_path || result.detected_iso_list || "");
+    setSheetName(result.sheet_name || "");
+    setSerialCol(result.serial_col ?? "");
+    setLineCol(result.line_col ?? "");
+  }
+
+  async function restoreProfile(request: Partial<IsoWorkflowRequest>, options: { syncPageFolder?: boolean } = {}) {
+    if (!isTauri()) {
+      return null;
+    }
+    setProfileBusy(true);
+    try {
+      const result = await loadIsoProfile({ ...request, profile_folder: activeProfileFolder(request) });
+      setProfile(result);
+      applyProfile(result, options);
+      return result;
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      return null;
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  function sourceLoadMessage(result: IsoProfilePayload | null, fallback: string) {
+    if (!result) {
+      return fallback;
+    }
+    const parts: string[] = [];
+    if (result.detected_combine_pdf) {
+      parts.push(`PDF ${compactPath(result.detected_combine_pdf)}`);
+    }
+    if (result.detected_iso_list) {
+      parts.push(`ISO ${compactPath(result.detected_iso_list)}`);
+    }
+    if (result.exists) {
+      parts.push(`Profile ${compactPath(result.folder)}`);
+    }
+    return parts.length ? `已自動載入：${parts.join(" · ")}` : fallback;
+  }
+
+  async function chooseWorkFolder() {
+    try {
+      const path = await pickIsoWorkFolder();
+      if (path) {
+        setWorkFolder(path);
+        setCombinePdf("");
+        setPageFolder("");
+        setPlan(null);
+        const restored = await restoreProfile({ work_folder: path });
+        setMessage(sourceLoadMessage(restored, "已選工作資料夾，可直接產生命名草稿。"));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function chooseCombinePdf() {
+    try {
+      const path = await pickIsoCombinePdf();
+      if (path) {
+        setCombinePdf(path);
+        setPageFolder("");
+        const folder = parentPath(path);
+        setWorkFolder(folder);
+        setPlan(null);
+        const restored = await restoreProfile({ work_folder: folder, combine_pdf: path }, { syncPageFolder: true });
+        setMessage(sourceLoadMessage(restored, "已選 Combine PDF，可直接產生命名草稿。"));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function choosePageFolder() {
+    try {
+      const path = await pickIsoPageFolder();
+      if (path) {
+        setPageFolder(path);
+        setCombinePdf("");
+        setWorkFolder(path);
+        setPlan(null);
+        const restored = await restoreProfile({ work_folder: path, page_folder: path });
+        setMessage(sourceLoadMessage(restored, "已選 Page folder，可直接產生命名草稿。"));
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function chooseIsoList() {
+    try {
+      const path = await pickIsoListFile();
+      if (path) {
+        setIsoList(path);
+        setPlan(null);
+        setProfile((current) => current ? { ...current, iso_list_path: path } : current);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function generatePlan() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await runIsoPlan(requestPayload());
+      setPlan(result);
+      setIsoList(result.source.iso_list || isoList);
+      setPageFolder(result.source.page_folder || pageFolder);
+      setSheetName(result.source.sheet_name || sheetName);
+      setSerialCol(result.source.serial_col ?? "");
+      setLineCol(result.source.line_col ?? "");
+      setSelectedRowId(result.rows[0]?.id ?? "");
+      let profileNote = "";
+      try {
+        const savedProfile = await saveIsoProfile({
+          profile_folder:
+            result.source.profile?.folder ||
+            result.source.work_folder ||
+            result.source.page_folder ||
+            parentPath(result.source.combine_pdf) ||
+            activeProfileFolder(),
+          work_folder: result.source.work_folder || workFolder,
+          combine_pdf: result.source.combine_pdf || combinePdf,
+          page_folder: result.source.page_folder || pageFolder,
+          iso_list: result.source.iso_list || isoList,
+          sheet_name: result.source.sheet_name || sheetName,
+          serial_col: result.source.serial_col ?? serialCol,
+          line_col: result.source.line_col ?? lineCol,
+          pattern: result.source.pattern || pattern,
+          confidence_threshold: profile?.confidence_threshold,
+          serial_region: profile?.serial_region,
+          drawing_region: profile?.drawing_region,
+        });
+        setProfile(savedProfile);
+        profileNote = " Profile 已保存。";
+      } catch (caught) {
+        profileNote = ` Profile 保存失敗：${caught instanceof Error ? caught.message : String(caught)}`;
+      }
+      setMessage(`已產生命名草稿：${result.summary.selected} / ${result.summary.total} 可套用。${profileNote}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applySelectedRows() {
+    if (!plan) {
+      return;
+    }
+    const selected = plan.rows.filter((row) => row.selected && row.status !== "blocked");
+    if (!selected.length) {
+      setError("沒有可套用的列；請先勾選 ready/warn 列或修正 blocked 列。");
+      return;
+    }
+    if (!window.confirm(`即將更名 ${selected.length} 個 PDF。確定套用？`)) {
+      return;
+    }
+    setApplyBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await applyIsoPlan(requestPayload(selected));
+      setMessage(result.message);
+      await generatePlan();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setApplyBusy(false);
+    }
+  }
+
+  async function exportRenameCsv() {
+    if (!plan) {
+      setError("尚未產生命名草稿，無法匯出 CSV。");
+      return;
+    }
+    setExportBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await exportIsoPlanCsv({
+        ...requestPayload(plan.rows),
+        work_folder: plan.source.work_folder || workFolder,
+        combine_pdf: plan.source.combine_pdf || combinePdf,
+        page_folder: plan.source.page_folder || pageFolder,
+        iso_list: plan.source.iso_list || isoList,
+        sheet_name: plan.source.sheet_name || sheetName,
+        serial_col: plan.source.serial_col ?? serialCol,
+        line_col: plan.source.line_col ?? lineCol,
+        pattern: plan.source.pattern || pattern,
+      });
+      setMessage(result.message);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  function toggleRow(rowId: string) {
+    updatePlanRows((rows) => rows.map((row) => row.id === rowId && row.status !== "blocked" ? { ...row, selected: !row.selected } : row));
+  }
+
+  function updateRow(rowId: string, field: "serial" | "line_no" | "new_name", value: string) {
+    updatePlanRows((rows) => rows.map((row) => {
+      if (row.id !== rowId) {
+        return row;
+      }
+      const next = { ...row, [field]: value, note: "manual edit" };
+      if (field === "serial" || field === "line_no") {
+        next.new_name = formatIsoFilename(pattern, field === "serial" ? value : next.serial, field === "line_no" ? value : next.line_no);
+      }
+      next.target_path = targetPathFor(next.source_path, next.new_name);
+      next.selected = Boolean(next.new_name && next.new_name !== next.source_name);
+      return next;
+    }));
+  }
+
+  function updatePlanRows(mutator: (rows: IsoPlanRow[]) => IsoPlanRow[]) {
+    setPlan((current) => {
+      if (!current) {
+        return current;
+      }
+      const rows = normalizeIsoRows(mutator(current.rows));
+      return { ...current, rows, summary: summarizeIsoRows(rows) };
+    });
+  }
+
+  function chooseProblemRow() {
+    const first = plan?.rows.find((row) => row.status === "blocked" || row.status === "warn");
+    if (first) {
+      setSelectedRowId(first.id);
+      setProblemOnly(true);
+    }
+  }
+
+  const rows = plan?.rows ?? [];
+  const selectedCount = rows.filter((row) => row.selected && row.status !== "blocked").length;
+  const blockedCount = rows.filter((row) => row.status === "blocked").length;
+  const warnCount = rows.filter((row) => row.status === "warn").length;
+  const readyCount = rows.filter((row) => row.status === "ready").length;
+  const issueRows = rows.filter((row) => row.status === "blocked" || row.status === "warn");
+  const visibleRows = useMemo(() => filterIsoRows(rows, searchTerm, problemOnly), [rows, searchTerm, problemOnly]);
+  const selectedRow = rows.find((row) => row.id === selectedRowId) ?? rows[0];
+  const columnSummary = plan?.source.headers && plan.source.serial_col !== undefined && plan.source.line_col !== undefined
+    ? `${plan.source.headers[plan.source.serial_col] ?? `col ${plan.source.serial_col + 1}`} -> ${plan.source.headers[plan.source.line_col] ?? `col ${plan.source.line_col + 1}`}`
+    : "auto";
+  const headers = plan?.source.headers ?? [];
+  const sheetOptions = plan?.source.sheet_options ?? (sheetName ? [sheetName] : []);
+  const profileLabel = profileBusy ? "loading" : profile?.exists ? compactPath(profile.folder) : activeProfileFolder() ? "default profile" : "waiting";
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedRow?.source_path) {
+      setPreview(null);
+      setPreviewError("");
+      setPreviewBusy(false);
+      return;
+    }
+    if (!isTauri()) {
+      setPreview(null);
+      setPreviewError("桌面版會顯示 PDF 預覽與裁切圖。");
+      setPreviewBusy(false);
+      return;
+    }
+    setPreviewBusy(true);
+    setPreviewError("");
+    loadIsoPreview({ source_path: selectedRow.source_path, detect_serial: detectSerials })
+      .then((payload) => {
+        if (!cancelled) {
+          setPreview(payload);
+        }
+      })
+      .catch((caught) => {
+        if (!cancelled) {
+          setPreview(null);
+          setPreviewError(caught instanceof Error ? caught.message : String(caught));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setPreviewBusy(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedRow?.source_path, detectSerials]);
+
   return (
-    <section className="iso-board">
-      <div className="iso-hero">
-        <div className="iso-copy">
-          <div className="eyebrow">Autopilot sequence</div>
-          <h2>ISO PDF 拆頁命名</h2>
-          <p>24 頁待處理 · 21 筆可直接更名 · 3 筆需要人工確認</p>
+    <section className="iso-board iso-workbench">
+      <div className="iso-workbench-top">
+        <div>
+          <div className="eyebrow">Tauri ISO workbench</div>
+          <h2>ISO PDF 拆頁命名工作臺</h2>
         </div>
-        <div className="iso-command">
-          <button className="launch-button">
+        <div className="iso-top-actions">
+          <button className="action-button" onClick={chooseProblemRow} disabled={!issueRows.length}>
+            <CircleAlert size={15} />
+            <span>問題列 {issueRows.length}</span>
+          </button>
+          <button className="launch-button" onClick={generatePlan} disabled={busy || applyBusy}>
             <WandSparkles size={18} />
-            <span>開始一鍵命名</span>
+            <span>{busy ? "產生中" : "產生命名草稿"}</span>
           </button>
-          <button className="icon-button">
+          <button className="launch-button" onClick={applySelectedRows} disabled={!selectedCount || busy || applyBusy}>
+            <ClipboardCheck size={18} />
+            <span>{applyBusy ? "套用中" : `套用 ${selectedCount} 筆`}</span>
+          </button>
+          <button className="action-button" onClick={exportRenameCsv} disabled={!plan || busy || exportBusy}>
+            <FileJson size={15} />
+            <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
+          </button>
+          <button className="icon-button" onClick={legacy.launch} disabled={legacy.busy}>
             <PanelRightOpen size={16} />
-            <span>工程師模式</span>
+            <span>{legacy.busy ? "開啟中" : "舊版"}</span>
           </button>
         </div>
       </div>
 
-      <div className="iso-flow" aria-label="ISO workflow steps">
-        {ISO_STEPS.map((step, index) => (
-          <div className={`iso-step ${step.state}`} key={step.label}>
-            <div className="step-index">{String(index + 1).padStart(2, "0")}</div>
+      <BridgeStatus error={error || legacy.error} message={message || legacy.message} />
+
+      <div className="iso-workbench-grid">
+        <aside className="iso-left-panel">
+          <div className="panel-heading compact">
             <div>
-              <strong>{step.label}</strong>
-              <span>{step.meta}</span>
+              <span>來源</span>
+              <small>{workFolder ? "folder autopilot" : pageFolder ? "page folder" : combinePdf ? "combine PDF" : "waiting"}</small>
             </div>
-            {index < ISO_STEPS.length - 1 ? <ChevronRight size={16} /> : null}
           </div>
-        ))}
-      </div>
+          <PathPickerRow icon={<FolderOpen size={16} />} label="工作資料夾" value={workFolder} onPick={chooseWorkFolder} />
+          <PathPickerRow icon={<FileText size={16} />} label="Combine PDF" value={combinePdf} onPick={chooseCombinePdf} />
+          <PathPickerRow icon={<Layers3 size={16} />} label="Page folder" value={pageFolder} onPick={choosePageFolder} />
+          <PathPickerRow icon={<Table2 size={16} />} label="ISO List" value={isoList} onPick={chooseIsoList} />
+          <div className={`profile-chip ${profile?.exists ? "ready" : "idle"}`}>
+            <Settings size={14} />
+            <span>Profile</span>
+            <strong>{profileLabel}</strong>
+          </div>
 
-      <div className="iso-grid">
-        <aside className="iso-side">
-          <StatusTile icon={<FileText size={18} />} title="合併 PDF" value="PIPING_ISO_2026.pdf" tone="ready" />
-          <StatusTile icon={<Layers3 size={18} />} title="拆頁輸出" value=".runtime/temp/iso_pages" tone="ready" />
-          <StatusTile icon={<Table2 size={18} />} title="ISO List" value="iso_list_2026.xlsx · Sheet ISO" tone="ready" />
-          <StatusTile icon={<SearchCheck size={18} />} title="判讀 ROI" value="右下角圖框 · profile matched" tone="warn" />
+          <div className="iso-control-section">
+            <div className="panel-heading compact">
+              <div>
+                <span>ISO List</span>
+                <small>{plan?.source.record_count ? `${plan.source.record_count} rows` : "auto columns"}</small>
+              </div>
+            </div>
+          </div>
+          <label className="field-row stacked">
+            <span>Sheet</span>
+            {sheetOptions.length ? (
+              <select value={sheetName} onChange={(event) => { setSheetName(event.target.value); setSerialCol(""); setLineCol(""); }}>
+                {sheetOptions.map((sheet) => <option value={sheet} key={sheet}>{sheet}</option>)}
+              </select>
+            ) : (
+              <input value={sheetName} onChange={(event) => setSheetName(event.target.value)} placeholder="auto" />
+            )}
+          </label>
+          <label className="field-row stacked">
+            <span>流水號欄</span>
+            <select value={serialCol} onChange={(event) => setSerialCol(event.target.value === "" ? "" : Number(event.target.value))}>
+              <option value="">auto</option>
+              {headers.map((header, index) => <option value={index} key={`serial-${header}-${index}`}>{index + 1}. {header}</option>)}
+            </select>
+          </label>
+          <label className="field-row stacked">
+            <span>圖號/檔名欄</span>
+            <select value={lineCol} onChange={(event) => setLineCol(event.target.value === "" ? "" : Number(event.target.value))}>
+              <option value="">auto</option>
+              {headers.map((header, index) => <option value={index} key={`line-${header}-${index}`}>{index + 1}. {header}</option>)}
+            </select>
+          </label>
+          <label className="field-row stacked">
+            <span>Pattern</span>
+            <input value={pattern} onChange={(event) => setPattern(event.target.value)} />
+          </label>
+          <label className="toggle-row">
+            <input type="checkbox" checked={detectSerials} onChange={(event) => setDetectSerials(event.target.checked)} />
+            <span>影像判讀流水號</span>
+          </label>
 
-          <div className="iso-side-card">
-            <h3>Quality gates</h3>
-            <Gate label="PDF 可讀" state="ready" />
-            <Gate label="ISO 欄位已套用" state="ready" />
-            <Gate label="命名衝突檢查" state="warn" />
-            <Gate label="檔案鎖定檢查" state="idle" />
+          <div className="iso-side-card checklist">
+            <h3>Checklist</h3>
+            <Gate label="PDF 來源" state={plan?.summary.total ? "ready" : workFolder || combinePdf || pageFolder ? "idle" : "warn"} />
+            <Gate label="ISO List" state={plan?.source.record_count ? "ready" : isoList || workFolder ? "idle" : "warn"} />
+            <Gate label="欄位對應" state={plan?.source.serial_col !== undefined && plan.source.line_col !== undefined ? "ready" : "idle"} />
+            <Gate label="Profile" state={profile?.exists ? "ready" : activeProfileFolder() ? "idle" : "warn"} />
+            <Gate label="問題列" state={blockedCount ? "warn" : plan ? "ready" : "idle"} />
+            <Gate label="舊工作台備援" state="ready" />
           </div>
         </aside>
 
-        <section className="iso-main">
-          <div className="iso-main-header">
-            <div>
-              <div className="eyebrow">Rename plan</div>
-              <h2>命名草稿雷達</h2>
-            </div>
-            <div className="iso-score">
-              <span>Match</span>
-              <strong>87%</strong>
-            </div>
+        <main className="iso-table-panel">
+          <div className="iso-metric-strip">
+            <IsoMetric label="PDFs" value={rows.length} icon={<FileText size={17} />} />
+            <IsoMetric label="Ready" value={readyCount} icon={<CircleCheck size={17} />} tone="ready" />
+            <IsoMetric label="Warn" value={warnCount} icon={<CircleAlert size={17} />} tone="warn" />
+            <IsoMetric label="Blocked" value={blockedCount} icon={<AlertTriangle size={17} />} tone="danger" />
+            <IsoMetric label="Selected" value={selectedCount} icon={<ClipboardCheck size={17} />} tone="ready" />
           </div>
 
-          <div className="iso-table">
-            <div className="iso-table-head">
-              <span>Page</span>
-              <span>Serial</span>
-              <span>Confidence</span>
-              <span>Status</span>
-              <span>New filename</span>
-            </div>
-            {ISO_ROWS.map((row) => (
-              <div className={`iso-table-row ${row.status.toLowerCase()}`} key={row.page}>
-                <span>{row.page}</span>
-                <strong>{row.serial}</strong>
-                <span className="confidence-bar" style={{ "--confidence": `${row.confidence}%` } as React.CSSProperties}>
-                  {row.confidence}%
-                </span>
-                <span className={`plan-state ${row.status.toLowerCase()}`}>{row.status}</span>
-                <code>{row.newName}</code>
+          <div className="iso-flow compact" aria-label="ISO workflow steps">
+            {(plan?.steps ?? ISO_STEPS).map((step, index) => (
+              <div className={`iso-step ${step.state}`} key={`${step.label}-${index}`}>
+                <div className="step-index">{String(index + 1).padStart(2, "0")}</div>
+                <div>
+                  <strong>{step.label}</strong>
+                  <span>{step.meta}</span>
+                </div>
+                {index < (plan?.steps.length ?? ISO_STEPS.length) - 1 ? <ChevronRight size={16} /> : null}
               </div>
             ))}
           </div>
-        </section>
 
-        <aside className="iso-preview">
-          <div className="preview-sheet">
-            <div className="sheet-grid" />
-            <div className="sheet-titleblock">
-              <Crosshair size={34} />
-              <span>ROI</span>
+          <div className="iso-table-toolbar">
+            <div>
+              <div className="eyebrow">Rename plan</div>
+              <h2>命名草稿</h2>
             </div>
-            <div className="sheet-tag">P005</div>
+            <label className="table-search">
+              <FileSearch size={15} />
+              <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="搜尋 old/new/流水號/圖號/狀態" />
+            </label>
+            <label className="toggle-row table-toggle">
+              <input type="checkbox" checked={problemOnly} onChange={(event) => setProblemOnly(event.target.checked)} />
+              <span>只看問題列</span>
+            </label>
           </div>
 
+          {plan ? (
+            <IsoPlanTable
+              rows={visibleRows}
+              selectedRowId={selectedRow?.id ?? ""}
+              toggleRow={toggleRow}
+              updateRow={updateRow}
+              selectRow={setSelectedRowId}
+            />
+          ) : <IsoEmptyPlan generatePlan={generatePlan} chooseWorkFolder={chooseWorkFolder} busy={busy} />}
+        </main>
+
+        <aside className="iso-inspector">
+          <IsoVisualPanel preview={preview} busy={previewBusy} error={previewError} row={selectedRow} />
+
+          <div className="iso-side-card selected-row-card">
+            <h3>目前列</h3>
+            {selectedRow ? (
+              <>
+                <strong>{selectedRow.source_name}</strong>
+                <span>{selectedRow.new_name || "尚無命名"}</span>
+                <small>{selectedRow.note || selectedRow.vision_message || selectedRow.status}</small>
+              </>
+            ) : (
+              <span>尚未選擇列</span>
+            )}
+          </div>
+
+          <StatusTile icon={<FileText size={18} />} title="PDF source" value={compactPath(plan?.source.page_folder || pageFolder || combinePdf || workFolder || "waiting")} tone={plan?.summary.total ? "ready" : "warn"} />
+          <StatusTile icon={<Table2 size={18} />} title="ISO List" value={compactPath(plan?.source.iso_list || isoList || "waiting")} tone={plan?.source.record_count ? "ready" : "warn"} />
+          <StatusTile icon={<SearchCheck size={18} />} title="Sheet" value={plan?.source.sheet_name || sheetName || "auto"} tone="ready" />
+          <StatusTile icon={<Braces size={18} />} title="Columns" value={columnSummary} tone={plan?.source.record_count ? "ready" : "warn"} />
+
           <div className="issue-stack">
-            <h3>Review queue</h3>
-            {ISO_ISSUES.map((issue) => (
-              <div className={`issue-card ${issue.tone}`} key={issue.code}>
+            <h3>Issues</h3>
+            {(issueRows.length ? issueRows.map((row) => ({ code: row.status.toUpperCase(), tone: row.status, title: row.source_name, detail: row.note || row.new_name || row.source_path })) : plan?.issues.length ? plan.issues : ISO_ISSUES).map((issue, index) => (
+              <div className={`issue-card ${issue.tone}`} key={`${issue.code}-${index}`}>
                 {issue.tone === "ready" ? <CircleCheck size={16} /> : issue.tone === "warn" ? <CircleAlert size={16} /> : <AlertTriangle size={16} />}
                 <div>
                   <strong>{issue.code} · {issue.title}</strong>
@@ -1093,19 +1557,308 @@ function IsoPdfAutopilot() {
           </div>
 
           <div className="iso-actions">
-            <button className="action-button">
-              <ClipboardCheck size={15} />
-              <span>開啟更名確認</span>
+            <button className="action-button" onClick={generatePlan} disabled={busy || applyBusy}>
+              <RefreshCcw size={15} />
+              <span>重新產生</span>
             </button>
-            <button className="action-button">
-              <FolderOpen size={15} />
-              <span>開啟輸出資料夾</span>
+            <button className="action-button" onClick={applySelectedRows} disabled={!selectedCount || busy || applyBusy}>
+              <ClipboardCheck size={15} />
+              <span>套用更名</span>
+            </button>
+            <button className="action-button" onClick={exportRenameCsv} disabled={!plan || busy || exportBusy}>
+              <FileJson size={15} />
+              <span>匯出 CSV</span>
+            </button>
+            <button className="action-button" onClick={legacy.launch} disabled={legacy.busy}>
+              <PanelRightOpen size={15} />
+              <span>開啟舊工作台</span>
             </button>
           </div>
         </aside>
       </div>
     </section>
   );
+}
+
+function PathPickerRow({ icon, label, onPick, value }: { icon: React.ReactNode; label: string; onPick: () => void; value: string }) {
+  return (
+    <div className="path-picker-row">
+      <div className="path-picker-icon">{icon}</div>
+      <div>
+        <span>{label}</span>
+        <strong title={value}>{value ? compactPath(value) : "not selected"}</strong>
+      </div>
+      <button className="dock-icon-button" onClick={onPick} title={label}>
+        <FolderOpen size={15} />
+      </button>
+    </div>
+  );
+}
+
+function IsoMetric({ icon, label, value, tone = "neutral" }: { icon: React.ReactNode; label: string; value: number; tone?: string }) {
+  return (
+    <div className={`iso-metric ${tone}`}>
+      {icon}
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function IsoPlanTable({
+  rows,
+  selectedRowId,
+  selectRow,
+  toggleRow,
+  updateRow,
+}: {
+  rows: IsoPlanRow[];
+  selectedRowId: string;
+  selectRow: (rowId: string) => void;
+  toggleRow: (rowId: string) => void;
+  updateRow: (rowId: string, field: "serial" | "line_no" | "new_name", value: string) => void;
+}) {
+  return (
+    <div className="iso-table live">
+      <div className="iso-table-head">
+        <span>Use</span>
+        <span>Page</span>
+        <span>Old file</span>
+        <span>Serial</span>
+        <span>Line / drawing</span>
+        <span>Status</span>
+        <span>New filename</span>
+      </div>
+      {rows.map((row) => (
+        <div className={`iso-table-row ${row.status} ${selectedRowId === row.id ? "selected" : ""}`} key={row.id} onClick={() => selectRow(row.id)}>
+          <label className="row-check">
+            <input type="checkbox" checked={row.selected} disabled={row.status === "blocked"} onChange={() => toggleRow(row.id)} onClick={(event) => event.stopPropagation()} />
+          </label>
+          <span>{String(row.page).padStart(3, "0")}</span>
+          <strong title={row.source_path}>{row.source_name}</strong>
+          <input className="table-cell-input serial" value={row.serial} onChange={(event) => updateRow(row.id, "serial", event.target.value)} onClick={(event) => event.stopPropagation()} />
+          <input className="table-cell-input" value={row.line_no} onChange={(event) => updateRow(row.id, "line_no", event.target.value)} onClick={(event) => event.stopPropagation()} />
+          <span className={`plan-state ${row.status}`}>{row.status}</span>
+          <input className="table-cell-input mono" value={row.new_name} title={row.note || row.target_path} onChange={(event) => updateRow(row.id, "new_name", event.target.value)} onClick={(event) => event.stopPropagation()} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function IsoEmptyPlan({ busy, chooseWorkFolder, generatePlan }: { busy: boolean; chooseWorkFolder: () => void; generatePlan: () => void }) {
+  return (
+    <div className="iso-empty-plan">
+      <GitBranch size={30} />
+      <strong>等待命名草稿</strong>
+      <span>選工作資料夾可自動找 PDF 與 ISO List；也可手動指定來源。</span>
+      <div className="bridge-actions">
+        <button className="action-button" onClick={chooseWorkFolder} disabled={busy}>
+          <FolderOpen size={16} />
+          <span>選工作資料夾</span>
+        </button>
+        <button className="launch-button" onClick={generatePlan} disabled={busy}>
+          <WandSparkles size={18} />
+          <span>{busy ? "產生中" : "產生命名草稿"}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function IsoVisualPanel({
+  busy,
+  error,
+  preview,
+  row,
+}: {
+  busy: boolean;
+  error: string;
+  preview: IsoPreviewPayload | null;
+  row?: IsoPlanRow;
+}) {
+  return (
+    <div className="iso-visual-panel">
+      <div className="panel-heading compact">
+        <div>
+          <span>PDF visual check</span>
+          <small>{row?.source_name ?? "no page selected"}</small>
+        </div>
+      </div>
+
+      <div className={`pdf-page-frame ${preview ? "ready" : ""}`}>
+        {preview ? (
+          <img src={preview.page.image} alt={`PDF preview ${preview.source_name}`} />
+        ) : (
+          <div className="pdf-preview-empty">
+            <FileSearch size={26} />
+            <span>{busy ? "載入 PDF 預覽中" : error || "選擇命名列後顯示 PDF 預覽"}</span>
+          </div>
+        )}
+      </div>
+
+      <div className="pdf-crop-grid">
+        <PreviewCrop title="右上流水號" image={preview?.serial_crop.image} />
+        <PreviewCrop title="右下圖號" image={preview?.drawing_crop.image} />
+      </div>
+
+      <div className="vision-readout">
+        <SearchCheck size={15} />
+        <div>
+          <strong>{preview?.vision?.text ? `判讀：${preview.vision.text}` : "判讀：待確認"}</strong>
+          <span>
+            {preview?.vision
+              ? `confidence ${Math.round(preview.vision.confidence * 100)}% · ${preview.vision.message || "no message"}`
+              : busy
+                ? "rendering"
+                : error || "可用裁切圖人工確認流水號與圖號"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PreviewCrop({ image, title }: { image?: string; title: string }) {
+  return (
+    <div className="preview-crop">
+      <span>{title}</span>
+      {image ? <img src={image} alt={title} /> : <div />}
+    </div>
+  );
+}
+
+function filterIsoRows(rows: IsoPlanRow[], searchTerm: string, problemOnly: boolean): IsoPlanRow[] {
+  const terms = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+  return rows.filter((row) => {
+    if (problemOnly && row.status !== "blocked" && row.status !== "warn") {
+      return false;
+    }
+    if (!terms.length) {
+      return true;
+    }
+    const text = [
+      row.source_name,
+      row.serial,
+      row.line_no,
+      row.new_name,
+      row.status,
+      row.note,
+      row.vision_message,
+    ].join(" ").toLowerCase();
+    return terms.every((term) => text.includes(term));
+  });
+}
+
+function normalizeIsoRows(rows: IsoPlanRow[]): IsoPlanRow[] {
+  const nameCounts = new Map<string, number>();
+  for (const row of rows) {
+    const key = row.new_name.trim().toLowerCase();
+    if (key) {
+      nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
+    }
+  }
+  return rows.map((row) => {
+    const newName = row.new_name.trim();
+    let status: IsoPlanRow["status"] = "ready";
+    let note = row.note === "manual edit" ? "" : row.note;
+    if (!newName) {
+      status = "blocked";
+      note = "缺少命名";
+    } else if ((nameCounts.get(newName.toLowerCase()) ?? 0) > 1) {
+      status = "blocked";
+      note = `目標檔名重複：${newName}`;
+    } else if (newName === row.source_name) {
+      status = "idle";
+      note = "檔名已相同";
+    } else if (!row.line_no.trim()) {
+      status = "warn";
+      note = "缺少圖號/檔名，請人工確認";
+    } else if (row.note || row.vision_message) {
+      status = row.status === "blocked" ? "warn" : row.status;
+      note = row.note || row.vision_message;
+    }
+    return {
+      ...row,
+      note,
+      selected: status !== "blocked" && Boolean(newName && newName !== row.source_name && row.selected),
+      status,
+      target_path: targetPathFor(row.source_path, newName),
+    };
+  });
+}
+
+function summarizeIsoRows(rows: IsoPlanRow[]): IsoWorkflowPlan["summary"] {
+  return {
+    total: rows.length,
+    ready: rows.filter((row) => row.status === "ready").length,
+    warn: rows.filter((row) => row.status === "warn").length,
+    blocked: rows.filter((row) => row.status === "blocked").length,
+    selected: rows.filter((row) => row.selected && row.status !== "blocked").length,
+  };
+}
+
+function formatIsoFilename(pattern: string, serial: string, line: string): string {
+  const cleanSerial = serial.trim();
+  const cleanLine = basenameWithoutPdf(line);
+  if (!cleanSerial || !cleanLine) {
+    return "";
+  }
+  const name = (pattern || "{serial}--{line}.pdf").split("{serial}").join(cleanSerial).split("{line}").join(cleanLine);
+  return /\.[^\\/.\s]+$/.test(name) ? name : `${name}.pdf`;
+}
+
+function basenameWithoutPdf(value: string): string {
+  return value.trim().replace(/\.pdf$/i, "");
+}
+
+function targetPathFor(sourcePath: string, newName: string): string {
+  if (!newName) {
+    return sourcePath;
+  }
+  const normalized = sourcePath.replace(/\//g, "\\");
+  const index = normalized.lastIndexOf("\\");
+  return index >= 0 ? `${normalized.slice(0, index + 1)}${newName}` : newName;
+}
+
+function parentPath(path: string): string {
+  const normalized = path.replace(/\//g, "\\");
+  const index = normalized.lastIndexOf("\\");
+  return index >= 0 ? normalized.slice(0, index) : "";
+}
+
+function useLegacyBridge(workbench: LegacyWorkbench): {
+  busy: boolean;
+  error: string;
+  launch: () => Promise<void>;
+  message: string;
+} {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function launch() {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      await openLegacyWorkbench(workbench);
+      setMessage("已送出開啟請求");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return { busy, error, launch, message };
+}
+
+function BridgeStatus({ error, message }: { error: string; message: string }) {
+  if (!error && !message) {
+    return null;
+  }
+  return <div className={`bridge-status ${error ? "error" : "ready"}`}>{error || message}</div>;
 }
 
 function StatusTile({ icon, title, value, tone }: { icon: React.ReactNode; title: string; value: string; tone: string }) {

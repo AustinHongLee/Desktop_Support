@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::io::Write;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -18,6 +21,8 @@ const BACKEND_ENV: &str = "DESKTOP_SUPPORT_BACKEND_EXE";
 const BACKEND_EXE: &str = "desktop-support-backend.exe";
 const BACKEND_SIDECAR_EXE: &str = "desktop-support-backend-x86_64-pc-windows-msvc.exe";
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/icon.ico");
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[tauri::command]
 fn scan_shutdown_safety(app: tauri::AppHandle) -> Result<String, String> {
@@ -40,6 +45,92 @@ fn scan_shutdown_safety(app: tauri::AppHandle) -> Result<String, String> {
     }
 }
 
+#[tauri::command]
+fn open_legacy_workbench(workbench: String) -> Result<String, String> {
+    let project_root = runtime_root()?;
+    let args = legacy_workbench_args(&workbench, &project_root)?;
+    let mut failures = Vec::new();
+
+    for python in gui_python_candidates(&project_root) {
+        match spawn_legacy_launcher(&python, &project_root, &args) {
+            Ok(()) => return Ok(format!("opened {workbench} via {}", python.display())),
+            Err(error) => failures.push(error),
+        }
+    }
+
+    Err(failures.join("\n"))
+}
+
+#[tauri::command]
+fn pick_iso_combine_pdf() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("選擇 combine PDF")
+        .add_filter("PDF", &["pdf"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn pick_iso_work_folder() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("選擇 ISO PDF 工作資料夾")
+        .pick_folder()
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn pick_iso_list_file() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("選擇 ISO List")
+        .add_filter("ISO List", &["xlsx", "xlsm", "csv"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn pick_iso_page_folder() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("選擇頁面 PDF 資料夾")
+        .pick_folder()
+        .map(|path| path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn run_iso_workflow(request: String) -> Result<String, String> {
+    let project_root = runtime_root()?;
+    let python = python_executable(&project_root);
+    let mut command = Command::new(&python);
+    command
+        .args(["-m", "launcher.app.tauri_iso_workflow"])
+        .current_dir(&project_root)
+        .env(PROJECT_ROOT_ENV, &project_root)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
+    run_json_stdin_command(
+        &mut command,
+        &request,
+        &format!("ISO workflow backend {}", python.display()),
+    )
+}
+
+#[tauri::command]
+fn preview_iso_pdf_page(request: String) -> Result<String, String> {
+    let project_root = runtime_root()?;
+    let python = python_executable(&project_root);
+    let mut command = Command::new(&python);
+    command
+        .args(["-m", "launcher.app.tauri_iso_preview"])
+        .current_dir(&project_root)
+        .env(PROJECT_ROOT_ENV, &project_root)
+        .env("PYTHONUTF8", "1")
+        .env("PYTHONIOENCODING", "utf-8");
+    run_json_stdin_command(
+        &mut command,
+        &request,
+        &format!("ISO PDF preview backend {}", python.display()),
+    )
+}
+
 fn run_backend(backend: &Path, project_root: &Path) -> Result<String, String> {
     run_json_command(
         Command::new(backend)
@@ -56,7 +147,12 @@ fn run_python_backend(project_root: &Path) -> Result<String, String> {
     let python = python_executable(project_root);
     run_json_command(
         Command::new(&python)
-            .args(["-m", "launcher.app.shutdown_safety_inspector", "--print-json", "--project-root"])
+            .args([
+                "-m",
+                "launcher.app.shutdown_safety_inspector",
+                "--print-json",
+                "--project-root",
+            ])
             .arg(project_root)
             .current_dir(project_root)
             .env(PROJECT_ROOT_ENV, project_root),
@@ -64,10 +160,92 @@ fn run_python_backend(project_root: &Path) -> Result<String, String> {
     )
 }
 
+fn legacy_workbench_args(workbench: &str, project_root: &Path) -> Result<Vec<String>, String> {
+    let flag = match workbench {
+        "iso" => "--open-iso-workbench",
+        "cleanup" => "--open-safe-cleanup",
+        "locks" => "--open-file-lock-checker",
+        "shutdown" => "--open-shutdown-safety-inspector",
+        _ => return Err(format!("unknown legacy workbench: {workbench}")),
+    };
+
+    Ok(vec![
+        "-m".to_string(),
+        "launcher.app.main".to_string(),
+        "--start-hidden".to_string(),
+        "--show-existing".to_string(),
+        flag.to_string(),
+        "--context-source".to_string(),
+        "tauri.bridge".to_string(),
+        "--set-context".to_string(),
+        project_root.to_string_lossy().to_string(),
+    ])
+}
+
+fn spawn_legacy_launcher(
+    python: &Path,
+    project_root: &Path,
+    args: &[String],
+) -> Result<(), String> {
+    let mut command = Command::new(python);
+    command
+        .args(args)
+        .current_dir(project_root)
+        .env(PROJECT_ROOT_ENV, project_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("failed to launch {}: {error}", python.display()))
+}
+
 fn run_json_command(command: &mut Command, label: &str) -> Result<String, String> {
     let output = command
         .output()
         .map_err(|error| format!("failed to run {label}: {error}"))?;
+
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Err(format!(
+        "{label} failed with status {:?}\n{}\n{}",
+        output.status.code(),
+        stderr.trim(),
+        stdout.trim()
+    ))
+}
+
+fn run_json_stdin_command(
+    command: &mut Command,
+    input: &str,
+    label: &str,
+) -> Result<String, String> {
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to run {label}: {error}"))?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|error| format!("failed to write request to {label}: {error}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("failed to read {label}: {error}"))?;
 
     if output.status.success() {
         return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
@@ -169,15 +347,35 @@ fn sidecar_executable(app: &tauri::AppHandle) -> Option<PathBuf> {
 }
 
 fn is_project_root(path: &Path) -> bool {
-    path.join("launcher").join("app").join("main.py").exists() && path.join("pyproject.toml").exists()
+    path.join("launcher").join("app").join("main.py").exists()
+        && path.join("pyproject.toml").exists()
 }
 
 fn python_executable(project_root: &Path) -> PathBuf {
-    let venv_python = project_root.join(".venv").join("Scripts").join("python.exe");
+    let venv_python = project_root
+        .join(".venv")
+        .join("Scripts")
+        .join("python.exe");
     if venv_python.exists() {
         return venv_python;
     }
     PathBuf::from("python")
+}
+
+fn gui_python_candidates(project_root: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let venv_scripts = project_root.join(".venv").join("Scripts");
+    for candidate in [
+        venv_scripts.join("pythonw.exe"),
+        venv_scripts.join("python.exe"),
+        PathBuf::from("pythonw"),
+        PathBuf::from("python"),
+    ] {
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    candidates
 }
 
 fn main() {
@@ -194,14 +392,24 @@ fn main() {
             setup_tray(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![scan_shutdown_safety])
+        .invoke_handler(tauri::generate_handler![
+            scan_shutdown_safety,
+            open_legacy_workbench,
+            pick_iso_combine_pdf,
+            pick_iso_work_folder,
+            pick_iso_list_file,
+            pick_iso_page_folder,
+            preview_iso_pdf_page,
+            run_iso_workflow
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
 }
 
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let show_dock = MenuItem::with_id(app, TRAY_SHOW_DOCK, "顯示工具列", true, None::<&str>)?;
-    let show_cockpit = MenuItem::with_id(app, TRAY_SHOW_COCKPIT, "開啟 Cockpit", true, None::<&str>)?;
+    let show_cockpit =
+        MenuItem::with_id(app, TRAY_SHOW_COCKPIT, "開啟 Cockpit", true, None::<&str>)?;
     let hide_dock = MenuItem::with_id(app, TRAY_HIDE_DOCK, "隱藏到系統匣", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, TRAY_QUIT, "離開", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
