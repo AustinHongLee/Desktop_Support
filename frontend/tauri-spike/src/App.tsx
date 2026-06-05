@@ -66,6 +66,7 @@ import {
   type IsoProfilePayload,
   type IsoPreviewPayload,
   type IsoRegion,
+  type IsoWorkflowIssue,
   type IsoWorkflowRequest,
   type IsoWorkflowPlan,
 } from "./isoWorkflow";
@@ -1047,6 +1048,8 @@ function IsoPdfAutopilot() {
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.7);
   const [activeRoi, setActiveRoi] = useState<"serial" | "drawing">("serial");
   const [dryRunOpen, setDryRunOpen] = useState(false);
+  const [resultOpen, setResultOpen] = useState(false);
+  const previewCacheRef = useRef(new Map<string, IsoPreviewPayload>());
 
   function requestPayload(rows?: IsoPlanRow[]) {
     return {
@@ -1214,6 +1217,7 @@ function IsoPdfAutopilot() {
       setSerialCol(result.source.serial_col ?? "");
       setLineCol(result.source.line_col ?? "");
       setSelectedRowId(result.rows[0]?.id ?? "");
+      setResultOpen(true);
       let profileNote = "";
       try {
         const savedProfile = await saveIsoProfile({
@@ -1433,6 +1437,14 @@ function IsoPdfAutopilot() {
       setPreviewBusy(false);
       return;
     }
+    const cacheKey = `${selectedRow.source_path}|${detectSerials}|${JSON.stringify(serialRegion)}|${JSON.stringify(drawingRegion)}`;
+    const cached = previewCacheRef.current.get(cacheKey);
+    if (cached) {
+      setPreview(cached);
+      setPreviewError("");
+      setPreviewBusy(false);
+      return;
+    }
     setPreviewBusy(true);
     setPreviewError("");
     loadIsoPreview({
@@ -1444,6 +1456,7 @@ function IsoPdfAutopilot() {
       .then((payload) => {
         if (!cancelled) {
           setPreview(payload);
+          previewCacheRef.current.set(cacheKey, payload);
         }
       })
       .catch((caught) => {
@@ -1477,6 +1490,7 @@ function IsoPdfAutopilot() {
           if (job.result && (job.state === "completed" || job.state === "cancelled")) {
             setPlan(job.result);
             setSelectedRowId(job.result.rows[0]?.id ?? "");
+            setResultOpen(true);
             setMessage(job.state === "completed" ? "批次判讀完成，命名草稿已更新。" : "批次判讀已取消，保留已完成列。");
           }
           if (job.error) {
@@ -1506,6 +1520,10 @@ function IsoPdfAutopilot() {
           <button className="action-button" onClick={chooseProblemRow} disabled={!issueRows.length}>
             <CircleAlert size={15} />
             <span>問題列 {issueRows.length}</span>
+          </button>
+          <button className="action-button" onClick={() => setResultOpen(true)} disabled={!plan}>
+            <Gauge size={15} />
+            <span>結果</span>
           </button>
           <button className="launch-button" onClick={generatePlan} disabled={busy || applyBusy}>
             <WandSparkles size={18} />
@@ -1744,6 +1762,15 @@ function IsoPdfAutopilot() {
           summary={plan.summary}
         />
       ) : null}
+      <IsoEventLog issues={[...(batchJob?.events ?? []), ...(plan?.issues ?? [])]} />
+      {resultOpen && plan ? (
+        <IsoResultDialog
+          onClose={() => setResultOpen(false)}
+          onDryRun={openDryRun}
+          onExport={exportRenameCsv}
+          plan={plan}
+        />
+      ) : null}
     </section>
   );
 }
@@ -1794,6 +1821,7 @@ function IsoPlanTable({
         <span>Old file</span>
         <span>Serial</span>
         <span>Line / drawing</span>
+        <span>Conf</span>
         <span>Status</span>
         <span>New filename</span>
       </div>
@@ -1806,6 +1834,7 @@ function IsoPlanTable({
           <strong title={row.source_path}>{row.source_name}</strong>
           <input className="table-cell-input serial" value={row.serial} onChange={(event) => updateRow(row.id, "serial", event.target.value)} onClick={(event) => event.stopPropagation()} />
           <input className="table-cell-input" value={row.line_no} onChange={(event) => updateRow(row.id, "line_no", event.target.value)} onClick={(event) => event.stopPropagation()} />
+          <span className={`confidence-chip ${row.confidence >= 0.8 ? "ready" : row.confidence > 0 ? "warn" : "idle"}`}>{row.confidence ? `${Math.round(row.confidence * 100)}%` : "-"}</span>
           <span className={`plan-state ${row.status}`}>{row.status}</span>
           <input className="table-cell-input mono" value={row.new_name} title={row.note || row.target_path} onChange={(event) => updateRow(row.id, "new_name", event.target.value)} onClick={(event) => event.stopPropagation()} />
         </div>
@@ -1887,6 +1916,77 @@ function IsoDryRunDialog({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function IsoResultDialog({
+  onClose,
+  onDryRun,
+  onExport,
+  plan,
+}: {
+  onClose: () => void;
+  onDryRun: () => void;
+  onExport: () => void;
+  plan: IsoWorkflowPlan;
+}) {
+  const issueRows = plan.rows.filter((row) => row.status === "warn" || row.status === "blocked");
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <div className="result-dialog" role="dialog" aria-modal="true" aria-label="ISO 結果">
+        <div className="dry-run-head">
+          <div>
+            <div className="eyebrow">ISO result</div>
+            <h2>命名草稿結果</h2>
+          </div>
+          <button className="dock-icon-button" onClick={onClose} title="關閉">
+            <Minimize2 size={15} />
+          </button>
+        </div>
+        <div className="dry-run-metrics">
+          <IsoMetric label="Total" value={plan.summary.total} icon={<FileText size={17} />} />
+          <IsoMetric label="Ready" value={plan.summary.ready} icon={<CircleCheck size={17} />} tone="ready" />
+          <IsoMetric label="Issues" value={issueRows.length} icon={<CircleAlert size={17} />} tone={issueRows.length ? "warn" : "ready"} />
+        </div>
+        <div className="result-issue-list">
+          {(issueRows.length ? issueRows : plan.rows.slice(0, 5)).map((row) => (
+            <div className={`issue-card ${row.status}`} key={row.id}>
+              {row.status === "ready" ? <CircleCheck size={16} /> : row.status === "warn" ? <CircleAlert size={16} /> : <AlertTriangle size={16} />}
+              <div>
+                <strong>{row.source_name}</strong>
+                <span>{row.note || row.new_name || row.status}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="dry-run-actions">
+          <button className="action-button" onClick={onExport}>
+            <FileJson size={15} />
+            <span>匯出 CSV</span>
+          </button>
+          <button className="launch-button" onClick={onDryRun} disabled={!plan.summary.selected}>
+            <ClipboardCheck size={18} />
+            <span>開啟 dry-run</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IsoEventLog({ issues }: { issues: IsoWorkflowIssue[] }) {
+  const items = issues.slice(-8).reverse();
+  return (
+    <div className="iso-event-log">
+      <div className="eyebrow">Event log</div>
+      {items.length ? items.map((issue, index) => (
+        <div className={`event-log-item ${issue.tone}`} key={`${issue.code}-${index}`}>
+          <strong>{issue.code}</strong>
+          <span>{issue.title}</span>
+          <small>{issue.detail}</small>
+        </div>
+      )) : <span className="muted">等待 workflow 事件</span>}
     </div>
   );
 }
