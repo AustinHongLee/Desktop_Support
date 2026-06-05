@@ -84,6 +84,7 @@ const LEVEL_SCORE: Record<SafeToKill, number> = {
 type AppMode = "command" | "iso" | "shutdown" | "cleanup" | "locks";
 type SurfaceMode = "dock" | "cockpit";
 type DockEdge = "top" | "bottom" | "left" | "right";
+type IsoWorkbenchView = "workbench" | "autopilot" | "engineer";
 
 const DOCK_EDGE_STORAGE_KEY = "desktop-support.dock.edge";
 const DOCK_OFFSET_STORAGE_KEY = "desktop-support.dock.offset";
@@ -1018,6 +1019,7 @@ function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: 
 
 function IsoPdfAutopilot() {
   const legacy = useLegacyBridge("iso");
+  const [isoView, setIsoView] = useState<IsoWorkbenchView>("workbench");
   const [workFolder, setWorkFolder] = useState("");
   const [combinePdf, setCombinePdf] = useState("");
   const [pageFolder, setPageFolder] = useState("");
@@ -1422,6 +1424,7 @@ function IsoPdfAutopilot() {
   const sheetOptions = plan?.source.sheet_options ?? (sheetName ? [sheetName] : []);
   const profileLabel = profileBusy ? "loading" : profile?.exists ? compactPath(profile.folder) : activeProfileFolder() ? "default profile" : "waiting";
   const batchRunning = batchJob?.state === "queued" || batchJob?.state === "running" || batchJob?.state === "cancel_requested";
+  const workflowEvents = [...(batchJob?.events ?? []), ...(plan?.issues ?? [])];
 
   useEffect(() => {
     let cancelled = false;
@@ -1509,12 +1512,48 @@ function IsoPdfAutopilot() {
     };
   }, [batchJob?.job_id, batchRunning]);
 
+  const visualPanel = (
+    <IsoVisualPanel
+      activeRoi={activeRoi}
+      busy={previewBusy}
+      drawingRegion={drawingRegion}
+      error={previewError}
+      preview={preview}
+      resetRoi={resetRoi}
+      row={selectedRow}
+      serialRegion={serialRegion}
+      setActiveRoi={setActiveRoi}
+      adoptPreviewVision={adoptPreviewVision}
+      confirmSelectedRow={confirmSelectedRow}
+      nextProblem={chooseProblemRow}
+      updateActiveRoi={updateActiveRoi}
+    />
+  );
+
   return (
     <section className="iso-board iso-workbench">
       <div className="iso-workbench-top">
         <div>
           <div className="eyebrow">Tauri ISO workbench</div>
           <h2>ISO PDF 拆頁命名工作臺</h2>
+          <div className="iso-view-switch" role="tablist" aria-label="ISO view">
+            {([
+              ["workbench", "工作臺", Workflow],
+              ["autopilot", "Autopilot", Bot],
+              ["engineer", "Engineer", Settings],
+            ] as const).map(([view, label, Icon]) => (
+              <button
+                aria-selected={isoView === view}
+                className={isoView === view ? "active" : ""}
+                key={view}
+                onClick={() => setIsoView(view)}
+                role="tab"
+              >
+                <Icon size={14} />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="iso-top-actions">
           <button className="action-button" onClick={chooseProblemRow} disabled={!issueRows.length}>
@@ -1541,9 +1580,9 @@ function IsoPdfAutopilot() {
             <FileJson size={15} />
             <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
           </button>
-          <button className="icon-button" onClick={legacy.launch} disabled={legacy.busy}>
-            <PanelRightOpen size={16} />
-            <span>{legacy.busy ? "開啟中" : "舊版"}</span>
+          <button className="icon-button" onClick={() => setIsoView("engineer")}>
+            <Settings size={16} />
+            <span>Engineer</span>
           </button>
         </div>
       </div>
@@ -1561,6 +1600,220 @@ function IsoPdfAutopilot() {
         </div>
       ) : null}
 
+      {isoView === "autopilot" ? (
+        <div className="iso-autopilot-grid">
+          <main className="iso-autopilot-main">
+            <div className="iso-metric-strip">
+              <IsoMetric label="PDFs" value={rows.length} icon={<FileText size={17} />} />
+              <IsoMetric label="Ready" value={readyCount} icon={<CircleCheck size={17} />} tone="ready" />
+              <IsoMetric label="Warn" value={warnCount} icon={<CircleAlert size={17} />} tone="warn" />
+              <IsoMetric label="Blocked" value={blockedCount} icon={<AlertTriangle size={17} />} tone="danger" />
+              <IsoMetric label="Selected" value={selectedCount} icon={<ClipboardCheck size={17} />} tone="ready" />
+            </div>
+
+            <div className="iso-flow compact" aria-label="ISO workflow steps">
+              {(plan?.steps ?? ISO_STEPS).map((step, index) => (
+                <div className={`iso-step ${step.state}`} key={`${step.label}-${index}`}>
+                  <div className="step-index">{String(index + 1).padStart(2, "0")}</div>
+                  <div>
+                    <strong>{step.label}</strong>
+                    <span>{step.meta}</span>
+                  </div>
+                  {index < (plan?.steps.length ?? ISO_STEPS.length) - 1 ? <ChevronRight size={16} /> : null}
+                </div>
+              ))}
+            </div>
+
+            <div className="autopilot-command-grid">
+              <button className="autopilot-run-card primary" onClick={generatePlan} disabled={busy || applyBusy}>
+                <WandSparkles size={24} />
+                <span>{busy ? "產生中" : "產生命名草稿"}</span>
+                <strong>{plan ? `${plan.summary.ready} ready` : "plan"}</strong>
+              </button>
+              <button className="autopilot-run-card" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={busy || batchBusy || applyBusy}>
+                <ScanLine size={24} />
+                <span>{batchRunning ? "取消判讀" : "批次判讀"}</span>
+                <strong>{batchJob ? `${batchJob.progress.percent}%` : "vision"}</strong>
+              </button>
+              <button className="autopilot-run-card" onClick={() => setResultOpen(true)} disabled={!plan}>
+                <Gauge size={24} />
+                <span>結果</span>
+                <strong>{issueRows.length ? `${issueRows.length} issues` : plan ? "ready" : "waiting"}</strong>
+              </button>
+              <button className="autopilot-run-card" onClick={openDryRun} disabled={!selectedCount || busy || applyBusy}>
+                <ClipboardCheck size={24} />
+                <span>{applyBusy ? "套用中" : "dry-run"}</span>
+                <strong>{selectedCount} rows</strong>
+              </button>
+            </div>
+
+            <div className="autopilot-status-grid">
+              <StatusTile icon={<FolderOpen size={18} />} title="Work folder" value={compactPath(workFolder || parentPath(combinePdf) || pageFolder || "waiting")} tone={workFolder || combinePdf || pageFolder ? "ready" : "warn"} />
+              <StatusTile icon={<FileText size={18} />} title="Combine PDF" value={compactPath(combinePdf || plan?.source.combine_pdf || "waiting")} tone={combinePdf || plan?.source.combine_pdf ? "ready" : "warn"} />
+              <StatusTile icon={<Layers3 size={18} />} title="Pages" value={compactPath(pageFolder || plan?.source.page_folder || "waiting")} tone={pageFolder || plan?.source.page_folder ? "ready" : "warn"} />
+              <StatusTile icon={<Table2 size={18} />} title="ISO List" value={compactPath(isoList || plan?.source.iso_list || "waiting")} tone={isoList || plan?.source.iso_list ? "ready" : "warn"} />
+            </div>
+
+            {plan ? (
+              <div className="autopilot-result-strip">
+                {(issueRows.length ? issueRows.slice(0, 5) : plan.rows.slice(0, 5)).map((row) => (
+                  <button className={`autopilot-row-card ${row.status} ${selectedRow?.id === row.id ? "selected" : ""}`} key={row.id} onClick={() => setSelectedRowId(row.id)}>
+                    <span>{String(row.page).padStart(3, "0")}</span>
+                    <strong>{row.source_name}</strong>
+                    <small>{row.note || row.new_name || row.status}</small>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <IsoEmptyPlan generatePlan={generatePlan} chooseWorkFolder={chooseWorkFolder} busy={busy} />
+            )}
+          </main>
+
+          <aside className="iso-autopilot-side">
+            {visualPanel}
+            <div className="iso-actions">
+              <button className="action-button" onClick={exportRenameCsv} disabled={!plan || busy || exportBusy}>
+                <FileJson size={15} />
+                <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
+              </button>
+              <button className="action-button" onClick={() => setIsoView("engineer")}>
+                <Settings size={15} />
+                <span>Engineer</span>
+              </button>
+            </div>
+          </aside>
+        </div>
+      ) : isoView === "engineer" ? (
+        <div className="iso-engineer-grid">
+          <aside className="iso-engineer-panel">
+            <div className="panel-heading compact">
+              <div>
+                <span>Sources</span>
+                <small>{profileLabel}</small>
+              </div>
+            </div>
+            <PathPickerRow icon={<FolderOpen size={16} />} label="工作資料夾" value={workFolder} onPick={chooseWorkFolder} />
+            <PathPickerRow icon={<FileText size={16} />} label="Combine PDF" value={combinePdf} onPick={chooseCombinePdf} />
+            <PathPickerRow icon={<Layers3 size={16} />} label="Page folder" value={pageFolder} onPick={choosePageFolder} />
+            <PathPickerRow icon={<Table2 size={16} />} label="ISO List" value={isoList} onPick={chooseIsoList} />
+            <div className={`profile-chip ${profile?.exists ? "ready" : "idle"}`}>
+              <Settings size={14} />
+              <span>Profile</span>
+              <strong>{profileLabel}</strong>
+            </div>
+            <div className="engineer-section">
+              <div className="eyebrow">Quality gates</div>
+              <Gate label="PDF 來源" state={plan?.summary.total ? "ready" : workFolder || combinePdf || pageFolder ? "idle" : "warn"} />
+              <Gate label="ISO List" state={plan?.source.record_count ? "ready" : isoList || workFolder ? "idle" : "warn"} />
+              <Gate label="欄位對應" state={plan?.source.serial_col !== undefined && plan.source.line_col !== undefined ? "ready" : "idle"} />
+              <Gate label="Profile" state={profile?.exists ? "ready" : activeProfileFolder() ? "idle" : "warn"} />
+            </div>
+          </aside>
+
+          <main className="iso-engineer-panel wide">
+            <div className="engineer-section">
+              <div className="panel-heading compact">
+                <div>
+                  <span>ISO List mapping</span>
+                  <small>{plan?.source.record_count ? `${plan.source.record_count} rows` : "auto columns"}</small>
+                </div>
+              </div>
+              <div className="engineer-form-grid">
+                <label className="field-row stacked">
+                  <span>Sheet</span>
+                  {sheetOptions.length ? (
+                    <select value={sheetName} onChange={(event) => { setSheetName(event.target.value); setSerialCol(""); setLineCol(""); }}>
+                      {sheetOptions.map((sheet) => <option value={sheet} key={sheet}>{sheet}</option>)}
+                    </select>
+                  ) : (
+                    <input value={sheetName} onChange={(event) => setSheetName(event.target.value)} placeholder="auto" />
+                  )}
+                </label>
+                <label className="field-row stacked">
+                  <span>流水號欄</span>
+                  <select value={serialCol} onChange={(event) => setSerialCol(event.target.value === "" ? "" : Number(event.target.value))}>
+                    <option value="">auto</option>
+                    {headers.map((header, index) => <option value={index} key={`engineer-serial-${header}-${index}`}>{index + 1}. {header}</option>)}
+                  </select>
+                </label>
+                <label className="field-row stacked">
+                  <span>圖號/檔名欄</span>
+                  <select value={lineCol} onChange={(event) => setLineCol(event.target.value === "" ? "" : Number(event.target.value))}>
+                    <option value="">auto</option>
+                    {headers.map((header, index) => <option value={index} key={`engineer-line-${header}-${index}`}>{index + 1}. {header}</option>)}
+                  </select>
+                </label>
+                <label className="field-row stacked span-2">
+                  <span>Pattern</span>
+                  <input value={pattern} onChange={(event) => setPattern(event.target.value)} />
+                </label>
+                <label className="field-row stacked">
+                  <span>Confidence</span>
+                  <input
+                    max="0.99"
+                    min="0.1"
+                    onChange={(event) => setConfidenceThreshold(Number(event.target.value))}
+                    step="0.01"
+                    type="range"
+                    value={confidenceThreshold}
+                  />
+                </label>
+              </div>
+              <div className="engineer-inline-controls">
+                <label className="toggle-row">
+                  <input type="checkbox" checked={detectSerials} onChange={(event) => setDetectSerials(event.target.checked)} />
+                  <span>影像判讀流水號</span>
+                </label>
+                <StatusTile icon={<Braces size={18} />} title="Columns" value={columnSummary} tone={plan?.source.record_count ? "ready" : "warn"} />
+                <StatusTile icon={<SearchCheck size={18} />} title="Threshold" value={`${Math.round(confidenceThreshold * 100)}%`} tone="ready" />
+              </div>
+            </div>
+
+            <div className="engineer-section">
+              <div className="panel-heading compact">
+                <div>
+                  <span>Job protocol</span>
+                  <small>{batchJob?.job_id || "idle"}</small>
+                </div>
+              </div>
+              <div className="engineer-job-grid">
+                <StatusTile icon={<ScanLine size={18} />} title="Batch" value={batchJob ? `${batchJob.state} · ${batchJob.progress.percent}%` : "idle"} tone={batchRunning ? "ready" : batchJob?.state === "failed" ? "danger" : "warn"} />
+                <StatusTile icon={<ClipboardCheck size={18} />} title="Selected" value={`${selectedCount} / ${rows.length}`} tone={selectedCount ? "ready" : "warn"} />
+                <StatusTile icon={<CircleAlert size={18} />} title="Issues" value={String(issueRows.length)} tone={issueRows.length ? "warn" : "ready"} />
+              </div>
+              <div className="engineer-actions">
+                <button className="action-button" onClick={generatePlan} disabled={busy || applyBusy}>
+                  <RefreshCcw size={15} />
+                  <span>{busy ? "產生中" : "重新產生"}</span>
+                </button>
+                <button className="action-button" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={busy || batchBusy || applyBusy}>
+                  <ScanLine size={15} />
+                  <span>{batchRunning ? "取消判讀" : "批次判讀"}</span>
+                </button>
+                <button className="action-button" onClick={exportRenameCsv} disabled={!plan || busy || exportBusy}>
+                  <FileJson size={15} />
+                  <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
+                </button>
+              </div>
+            </div>
+          </main>
+
+          <aside className="iso-engineer-panel">
+            {visualPanel}
+            <div className="legacy-fallback-card">
+              <div>
+                <div className="eyebrow">Legacy fallback</div>
+                <h3>舊 ISO 工作台</h3>
+              </div>
+              <StatusTile icon={<PanelRightOpen size={18} />} title="Bridge" value={legacy.busy ? "opening" : "available"} tone="ready" />
+              <button className="launch-button" onClick={legacy.launch} disabled={legacy.busy}>
+                <PanelRightOpen size={18} />
+                <span>{legacy.busy ? "開啟中" : "開啟舊工作台"}</span>
+              </button>
+            </div>
+          </aside>
+        </div>
+      ) : (
       <div className="iso-workbench-grid">
         <aside className="iso-left-panel">
           <div className="panel-heading compact">
@@ -1680,21 +1933,7 @@ function IsoPdfAutopilot() {
         </main>
 
         <aside className="iso-inspector">
-          <IsoVisualPanel
-            activeRoi={activeRoi}
-            busy={previewBusy}
-            drawingRegion={drawingRegion}
-            error={previewError}
-            preview={preview}
-            resetRoi={resetRoi}
-            row={selectedRow}
-            serialRegion={serialRegion}
-            setActiveRoi={setActiveRoi}
-            adoptPreviewVision={adoptPreviewVision}
-            confirmSelectedRow={confirmSelectedRow}
-            nextProblem={chooseProblemRow}
-            updateActiveRoi={updateActiveRoi}
-          />
+          {visualPanel}
 
           <div className="iso-side-card selected-row-card">
             <h3>目前列</h3>
@@ -1744,13 +1983,14 @@ function IsoPdfAutopilot() {
               <FileJson size={15} />
               <span>匯出 CSV</span>
             </button>
-            <button className="action-button" onClick={legacy.launch} disabled={legacy.busy}>
-              <PanelRightOpen size={15} />
-              <span>開啟舊工作台</span>
+            <button className="action-button" onClick={() => setIsoView("engineer")}>
+              <Settings size={15} />
+              <span>工程模式</span>
             </button>
           </div>
         </aside>
       </div>
+      )}
       {dryRunOpen && plan ? (
         <IsoDryRunDialog
           applyBusy={applyBusy}
@@ -1762,7 +2002,7 @@ function IsoPdfAutopilot() {
           summary={plan.summary}
         />
       ) : null}
-      <IsoEventLog issues={[...(batchJob?.events ?? []), ...(plan?.issues ?? [])]} />
+      <IsoEventLog issues={workflowEvents} />
       {resultOpen && plan ? (
         <IsoResultDialog
           onClose={() => setResultOpen(false)}
