@@ -27,6 +27,7 @@ from launcher.app.tauri_iso_workflow import (
 from launcher.app.tauri_iso_worker import run_job
 from launcher.core.state_store import AppStateStore
 from launcher.plugins.iso_tools.profile import IsoNamingProfile, save_iso_naming_profile
+from launcher.plugins.iso_tools.serial_vision import SerialVisionResult
 
 
 class TauriIsoWorkflowTests(unittest.TestCase):
@@ -126,6 +127,7 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(export["export_path"], str(export_path))
         self.assertEqual(export["row_count"], 2)
         self.assertEqual(exported_rows[0]["new_name"], "1--PIPE-A.pdf")
+        self.assertTrue(exported_rows[0]["created_at"])
 
     def test_phase_0c_worker_writes_progress_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -312,6 +314,85 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(plan["source"]["iso_list"], str(iso_list))
         self.assertEqual(plan["rows"][0]["new_name"], "1_PIPE-A.pdf")
 
+    def test_load_profile_discovers_nearby_iso_when_saved_path_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state.json"
+            folder = root / "job"
+            folder.mkdir()
+            pdf = folder / "combine.pdf"
+            iso_list = folder / "HP6-ISO圖號清單.xlsx"
+            _write_pdf(pdf, pages=1)
+            _write_iso_list(iso_list)
+            save_iso_naming_profile(
+                AppStateStore(state_path),
+                folder,
+                IsoNamingProfile(iso_list_path=folder / "missing-old-list.xlsx"),
+            )
+
+            with patch.dict(os.environ, {"DESKTOP_SUPPORT_STATE_PATH": str(state_path)}):
+                payload = load_iso_profile(IsoWorkflowRequest(action="load_profile", work_folder=folder))
+
+        self.assertTrue(payload["exists"])
+        self.assertEqual(payload["iso_list_path"], str(folder / "missing-old-list.xlsx"))
+        self.assertEqual(payload["detected_iso_list"], str(iso_list))
+
+    def test_detected_serial_success_is_ready_selected_without_warning_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            pdf = folder / "combine.pdf"
+            iso_list = folder / "iso_list.xlsx"
+            _write_pdf(pdf, pages=1)
+            _write_iso_list(iso_list)
+
+            with patch("launcher.app.tauri_iso_workflow._SerialDetector", lambda: _FakeDetector([SerialVisionResult("2", 0.93, "OK")])):
+                plan = build_iso_plan(IsoWorkflowRequest(action="plan", combine_pdf=pdf, iso_list=iso_list, detect_serials=True))
+
+        row = plan["rows"][0]
+        self.assertEqual(row["serial"], "2")
+        self.assertEqual(row["status"], "ready")
+        self.assertTrue(row["selected"])
+        self.assertEqual(row["note"], "")
+        self.assertEqual(row["vision_message"], "OK")
+        self.assertEqual(plan["summary"]["warn"], 0)
+
+    def test_low_confidence_detected_serial_falls_back_to_page_order_warn_selected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            pdf = folder / "combine.pdf"
+            iso_list = folder / "iso_list.xlsx"
+            _write_pdf(pdf, pages=1)
+            _write_iso_list(iso_list)
+
+            with patch("launcher.app.tauri_iso_workflow._SerialDetector", lambda: _FakeDetector([SerialVisionResult("2", 0.51, "weak")])):
+                plan = build_iso_plan(IsoWorkflowRequest(action="plan", combine_pdf=pdf, iso_list=iso_list, detect_serials=True))
+
+        row = plan["rows"][0]
+        self.assertEqual(row["serial"], "1")
+        self.assertEqual(row["status"], "warn")
+        self.assertTrue(row["selected"])
+        self.assertIn("判讀信心太低", row["note"])
+        self.assertEqual(row["vision_message"], "weak")
+
+    def test_existing_iso_filename_skips_vision_detector(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            page_folder = folder / "combine_pages"
+            page_folder.mkdir()
+            page_pdf = page_folder / "1--PIPE-A.pdf"
+            iso_list = folder / "iso_list.xlsx"
+            _write_pdf(page_pdf, pages=1)
+            _write_iso_list(iso_list)
+
+            with patch("launcher.app.tauri_iso_workflow._SerialDetector", lambda: _ExplodingDetector()):
+                plan = build_iso_plan(IsoWorkflowRequest(action="plan", page_folder=page_folder, iso_list=iso_list, detect_serials=True))
+
+        row = plan["rows"][0]
+        self.assertEqual(row["serial"], "1")
+        self.assertEqual(row["status"], "idle")
+        self.assertFalse(row["selected"])
+        self.assertEqual(row["vision_message"], "檔名已符合 ISO List")
+
 
 def _write_pdf(path: Path, *, pages: int) -> None:
     writer = PdfWriter()
@@ -329,6 +410,22 @@ def _write_iso_list(path: Path) -> None:
     sheet.append(["1", "PIPE-A"])
     sheet.append(["2", "PIPE-B"])
     workbook.save(path)
+
+
+class _FakeDetector:
+    def __init__(self, results: list[SerialVisionResult]) -> None:
+        self._results = results
+        self._index = 0
+
+    def detect(self, _source: Path, _lookup: object) -> SerialVisionResult:
+        result = self._results[min(self._index, len(self._results) - 1)]
+        self._index += 1
+        return result
+
+
+class _ExplodingDetector:
+    def detect(self, _source: Path, _lookup: object) -> SerialVisionResult:
+        raise AssertionError("detector should not run for existing ISO filenames")
 
 
 def _job_payload(job_id: str) -> dict[str, object]:

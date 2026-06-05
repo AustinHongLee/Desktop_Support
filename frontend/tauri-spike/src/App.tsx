@@ -46,7 +46,7 @@ import {
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
 import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from "@tauri-apps/api/window";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyIsoPlan,
   cancelIsoJob,
@@ -221,7 +221,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     const armFocusExpand = window.setTimeout(() => {
       focusExpandArmedRef.current = true;
-    }, 900);
+    }, 350);
 
     void getCurrentWindow().onCloseRequested((event) => {
       event.preventDefault();
@@ -1050,6 +1050,12 @@ function IsoPdfAutopilot() {
   const [activeRoi, setActiveRoi] = useState<"serial" | "drawing">("serial");
   const [dryRunOpen, setDryRunOpen] = useState(false);
   const [resultOpen, setResultOpen] = useState(false);
+  const [oneClickStage, setOneClickStage] = useState<"idle" | "running" | "applying" | "review" | "done">("idle");
+  const [recordPath, setRecordPath] = useState("");
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  const oneClickActiveRef = useRef(false);
+  const terminalRef = useRef<HTMLDivElement | null>(null);
   const previewCacheRef = useRef(new Map<string, IsoPreviewPayload>());
 
   function requestPayload(rows?: IsoPlanRow[]) {
@@ -1151,7 +1157,7 @@ function IsoPdfAutopilot() {
         setCombinePdf("");
         setPageFolder("");
         setPlan(null);
-        const restored = await restoreProfile({ work_folder: path });
+        const restored = await restoreProfile({ work_folder: path }, { syncPageFolder: true });
         setMessage(sourceLoadMessage(restored, "已選工作資料夾，可直接產生命名草稿。"));
       }
     } catch (caught) {
@@ -1278,14 +1284,132 @@ function IsoPdfAutopilot() {
     setError("");
     setMessage("");
     try {
+      let recPath = "";
+      let recordWarning = "";
+      try {
+        const rec = await exportIsoPlanCsv({
+          ...requestPayload(plan.rows),
+          work_folder: plan.source.work_folder || workFolder,
+          combine_pdf: plan.source.combine_pdf || combinePdf,
+          page_folder: plan.source.page_folder || pageFolder,
+          iso_list: plan.source.iso_list || isoList,
+          sheet_name: plan.source.sheet_name || sheetName,
+          serial_col: plan.source.serial_col ?? serialCol,
+          line_col: plan.source.line_col ?? lineCol,
+          pattern: plan.source.pattern || pattern,
+        });
+        recPath = rec.export_path;
+        setRecordPath(recPath);
+      } catch (recordError) {
+        recordWarning = `更名記錄寫入失敗:${recordError instanceof Error ? recordError.message : String(recordError)} `;
+      }
       const result = await applyIsoPlan(requestPayload(selected));
       const renamedIds = new Set(selected.map((row) => row.id));
       updatePlanRows((rows) => rows.filter((row) => !renamedIds.has(row.id)));
+      setSelectedRowId(plan.rows.find((row) => !renamedIds.has(row.id))?.id ?? "");
       setDryRunOpen(false);
       setResultOpen(false);
-      setMessage(`${result.message} 已從清單移除 ${selected.length} 列;要重新掃描可按「重新產生」。`);
+      setMessage(`${recordWarning}${result.message}${recPath ? ` 記錄已存:${recPath}` : ""} 已從清單移除 ${selected.length} 列;要重新掃描可按「重新產生」。`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setApplyBusy(false);
+    }
+  }
+
+  async function runOneClick() {
+    setError("");
+    if (oneClickStage === "done") {
+      setPlan(null);
+      setOneClickStage("idle");
+      setRecordPath("");
+      setMessage("");
+      return;
+    }
+    if (oneClickStage === "running" && batchRunning && batchJob) {
+      await cancelBatchDetect();
+      setMessage("正在取消一鍵命名…");
+      return;
+    }
+    if (!workFolder && !combinePdf && !pageFolder) {
+      await chooseWorkFolder();
+      return;
+    }
+    if (oneClickStage === "review" && plan) {
+      const blockedRows = plan.rows.filter((row) => row.status === "blocked");
+      const canApplyRows = plan.rows.filter((row) => row.selected && row.status !== "blocked");
+      if (!canApplyRows.length && blockedRows.length) {
+        setSelectedRowId(blockedRows[0]?.id ?? "");
+        setProblemOnly(true);
+        setIsoView("workbench");
+        setMessage(`還有 ${blockedRows.length} 個 blocked 列,先在工作台修正後再更名。`);
+        return;
+      }
+      await autoApplyWithRecord(plan);
+      return;
+    }
+    setOneClickStage("running");
+    setMessage("");
+    setRecordPath("");
+    setPlan(null);
+    setRunStartedAt(Date.now());
+    oneClickActiveRef.current = true;
+    try {
+      const job = await startIsoBatchDetect({ ...requestPayload(), detect_serials: true });
+      setBatchJob(job);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setOneClickStage("idle");
+      oneClickActiveRef.current = false;
+    }
+  }
+
+  async function autoApplyWithRecord(currentPlan: IsoWorkflowPlan) {
+    const applyRows = currentPlan.rows.filter((row) => row.selected && row.status !== "blocked");
+    if (!applyRows.length) {
+      const blockedRows = currentPlan.rows.filter((row) => row.status === "blocked");
+      if (blockedRows.length) {
+        setSelectedRowId(blockedRows[0]?.id ?? "");
+        setOneClickStage("review");
+        setMessage(`還有 ${blockedRows.length} 個 blocked 列,先修正後才能完成一鍵更名。`);
+        return;
+      }
+      setOneClickStage("done");
+      setMessage("沒有需要更名的檔案。");
+      return;
+    }
+    setApplyBusy(true);
+    setOneClickStage("applying");
+    setError("");
+    let recPath = "";
+    let recordWarning = "";
+    try {
+      try {
+        const rec = await exportIsoPlanCsv({
+          ...requestPayload(currentPlan.rows),
+          work_folder: currentPlan.source.work_folder || workFolder,
+          combine_pdf: currentPlan.source.combine_pdf || combinePdf,
+          page_folder: currentPlan.source.page_folder || pageFolder,
+          iso_list: currentPlan.source.iso_list || isoList,
+          sheet_name: currentPlan.source.sheet_name || sheetName,
+          serial_col: currentPlan.source.serial_col ?? serialCol,
+          line_col: currentPlan.source.line_col ?? lineCol,
+          pattern: currentPlan.source.pattern || pattern,
+        });
+        recPath = rec.export_path;
+        setRecordPath(recPath);
+      } catch (recErr) {
+        recordWarning = `更名記錄寫入失敗:${recErr instanceof Error ? recErr.message : String(recErr)} `;
+      }
+      const result = await applyIsoPlan(requestPayload(applyRows));
+      const renamedIds = new Set(applyRows.map((row) => row.id));
+      updatePlanRows((rows) => rows.filter((row) => !renamedIds.has(row.id)));
+      setSelectedRowId(currentPlan.rows.find((row) => !renamedIds.has(row.id))?.id ?? "");
+      setOneClickStage("done");
+      setMessage(`${recordWarning}${result.message}${recPath ? ` 記錄已存:${recPath}` : ""}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setOneClickStage("review");
     } finally {
       setApplyBusy(false);
     }
@@ -1434,6 +1558,31 @@ function IsoPdfAutopilot() {
   const profileLabel = profileBusy ? "loading" : profile?.exists ? compactPath(profile.folder) : activeProfileFolder() ? "default profile" : "waiting";
   const batchRunning = batchJob?.state === "queued" || batchJob?.state === "running" || batchJob?.state === "cancel_requested";
   const workflowEvents = [...(batchJob?.events ?? []), ...(plan?.issues ?? [])];
+  const hasOneClickSource = Boolean(workFolder || combinePdf || pageFolder);
+  const elapsedSec = runStartedAt ? Math.max(0, Math.round((nowTs - runStartedAt) / 1000)) : 0;
+  const oneClickRunning = oneClickStage === "running";
+  const oneClickApplying = oneClickStage === "applying";
+  const detectDone = batchJob?.progress?.done ?? (plan ? plan.summary.total : 0);
+  const detectTotal = batchJob?.progress?.total ?? plan?.summary.total ?? 0;
+  const oneClickBusy = busy || batchBusy || applyBusy;
+  const oneClickButton = (() => {
+    if (oneClickRunning) return { icon: <ScanLine size={20} />, label: `取消判讀 ${detectDone}/${detectTotal || "?"} · ${elapsedSec}s`, hint: "正在讀取 worker 真實事件;按一下可取消" };
+    if (applyBusy) return { icon: <ClipboardCheck size={20} />, label: "更名中…", hint: "正在寫入更名記錄" };
+    if (oneClickStage === "done") return { icon: <RefreshCcw size={20} />, label: "完成 · 再處理一批", hint: recordPath ? `記錄:${compactPath(recordPath)}` : "按一下清空,重新開始" };
+    if (!hasOneClickSource) return { icon: <FolderOpen size={20} />, label: "選擇工作資料夾", hint: "選好後再按一次開始一鍵命名" };
+    if (oneClickStage === "review" && !selectedCount && blockedCount) return { icon: <AlertTriangle size={20} />, label: `前往工作台修正 ${blockedCount} 筆`, hint: "blocked 列不會自動更名,先修正檔名或 ISO 對應" };
+    if (oneClickStage === "review") return { icon: <ClipboardCheck size={20} />, label: `我已確認,更名 ${selectedCount} 筆`, hint: warnCount ? `${warnCount} 個待確認:點清單列,在右側採用或改值` : "全部已確認,可更名" };
+    return { icon: <WandSparkles size={20} />, label: "開始一鍵命名", hint: "全綠會直接更名到底,不再跳確認" };
+  })();
+  const pipelineStages: Array<{ key: string; label: string; icon: React.ReactNode; state: string; detail: string; seconds: number | null }> = [
+    { key: "source", label: "來源", icon: <FolderOpen size={18} />, state: hasOneClickSource ? "done" : "idle", detail: hasOneClickSource ? compactPath(workFolder || combinePdf || pageFolder) : "選資料夾", seconds: null },
+    { key: "split", label: "拆頁", icon: <Layers3 size={18} />, state: detectTotal ? "done" : oneClickRunning ? "run" : "idle", detail: detectTotal ? `${detectTotal} 頁` : "等待", seconds: null },
+    { key: "detect", label: "判讀流水號", icon: <ScanLine size={18} />, state: oneClickRunning ? "run" : plan ? "done" : "idle", detail: oneClickRunning ? `${detectDone}/${detectTotal}` : plan ? `${readyCount} 已讀` : "等待", seconds: oneClickRunning ? elapsedSec : null },
+    { key: "match", label: "對 ISO", icon: <Table2 size={18} />, state: plan?.source.record_count ? "done" : "idle", detail: plan?.source.record_count ? `${plan.source.record_count} 列` : "等待", seconds: null },
+    { key: "name", label: "命名", icon: <WandSparkles size={18} />, state: plan ? (blockedCount ? "warn" : "done") : "idle", detail: plan ? `${plan.summary.total} 檔` : "等待", seconds: null },
+    { key: "apply", label: "更名", icon: <ClipboardCheck size={18} />, state: oneClickStage === "done" ? "done" : oneClickApplying ? "run" : "idle", detail: oneClickStage === "done" ? "完成" : oneClickApplying ? "寫入中" : "等待", seconds: oneClickApplying ? elapsedSec : null },
+  ];
+  const echoLines = ([...(batchJob?.events ?? []), ...(plan?.issues ?? [])] as unknown as Array<{ code?: string; tone?: string; title?: string; detail?: string }>).slice(-80);
 
   useEffect(() => {
     let cancelled = false;
@@ -1501,12 +1650,33 @@ function IsoPdfAutopilot() {
           setBatchJob(job);
           if (job.result && (job.state === "completed" || job.state === "cancelled")) {
             setPlan(job.result);
-            setSelectedRowId(job.result.rows[0]?.id ?? "");
-            setResultOpen(true);
-            setMessage(job.state === "completed" ? "批次判讀完成，命名草稿已更新。" : "批次判讀已取消，保留已完成列。");
+            if (oneClickActiveRef.current) {
+              oneClickActiveRef.current = false;
+              if (job.state === "cancelled") {
+                setOneClickStage("idle");
+                setMessage("已取消一鍵命名,保留已完成列。");
+              } else {
+                const problems = job.result.rows.filter((row) => row.status === "warn" || row.status === "blocked");
+                setSelectedRowId(problems[0]?.id ?? job.result.rows[0]?.id ?? "");
+                if (problems.length) {
+                  setOneClickStage("review");
+                  setMessage(`有 ${problems.length} 個待確認值,處理後按一次即可更名。`);
+                } else {
+                  void autoApplyWithRecord(job.result);
+                }
+              }
+            } else {
+              setSelectedRowId(job.result.rows[0]?.id ?? "");
+              setResultOpen(true);
+              setMessage(job.state === "completed" ? "批次判讀完成，命名草稿已更新。" : "批次判讀已取消，保留已完成列。");
+            }
           }
           if (job.error) {
             setError(job.error);
+            if (oneClickActiveRef.current) {
+              oneClickActiveRef.current = false;
+              setOneClickStage("idle");
+            }
           }
         })
         .catch((caught) => {
@@ -1514,12 +1684,26 @@ function IsoPdfAutopilot() {
             setError(caught instanceof Error ? caught.message : String(caught));
           }
         });
-    }, 900);
+    }, 350);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
   }, [batchJob?.job_id, batchRunning]);
+
+  useEffect(() => {
+    if (oneClickStage !== "running" && oneClickStage !== "applying") {
+      return;
+    }
+    const id = window.setInterval(() => setNowTs(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [oneClickStage]);
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [batchJob?.events?.length, oneClickStage]);
 
   const visualPanel = (
     <IsoVisualPanel
@@ -1545,12 +1729,14 @@ function IsoPdfAutopilot() {
         <div>
           <div className="eyebrow">Tauri ISO workbench</div>
           <h2>ISO PDF 拆頁命名工作臺</h2>
-          <div className="iso-source-strip">
-            <TopSourceButton icon={<FolderOpen size={15} />} label="工作資料夾" value={workFolder} onPick={chooseWorkFolder} />
-            <TopSourceButton icon={<FileText size={15} />} label="Combine PDF" value={combinePdf} onPick={chooseCombinePdf} />
-            <TopSourceButton icon={<Layers3 size={15} />} label="Page folder" value={pageFolder} onPick={choosePageFolder} />
-            <TopSourceButton icon={<Table2 size={15} />} label="ISO List" value={isoList} onPick={chooseIsoList} />
-          </div>
+          {isoView !== "autopilot" ? (
+            <div className="iso-source-strip">
+              <TopSourceButton icon={<FolderOpen size={15} />} label="工作資料夾" value={workFolder} onPick={chooseWorkFolder} />
+              <TopSourceButton icon={<FileText size={15} />} label="Combine PDF" value={combinePdf} onPick={chooseCombinePdf} />
+              <TopSourceButton icon={<Layers3 size={15} />} label="Page folder" value={pageFolder} onPick={choosePageFolder} />
+              <TopSourceButton icon={<Table2 size={15} />} label="ISO List" value={isoList} onPick={chooseIsoList} />
+            </div>
+          ) : null}
         </div>
         <div className="iso-top-actions">
           <div className="mode-switch" role="tablist" aria-label="ISO 工作模式">
@@ -1567,15 +1753,17 @@ function IsoPdfAutopilot() {
               <span>調校</span>
             </button>
           </div>
-          <button className="icon-button" onClick={legacy.launch} disabled={legacy.busy} title="暫時開啟舊版工作台(轉移完成後移除)">
-            <PanelRightOpen size={16} />
-            <span>{legacy.busy ? "開啟中" : "舊版"}</span>
-          </button>
+          {isoView !== "autopilot" ? (
+            <button className="icon-button" onClick={legacy.launch} disabled={legacy.busy} title="暫時開啟舊版工作台(轉移完成後移除)">
+              <PanelRightOpen size={16} />
+              <span>{legacy.busy ? "開啟中" : "舊版"}</span>
+            </button>
+          ) : null}
         </div>
       </div>
 
       <BridgeStatus error={error || legacy.error} message={message || legacy.message} />
-      {batchJob ? (
+      {batchJob && isoView !== "autopilot" ? (
         <div className={`batch-progress ${batchJob.state}`}>
           <div>
             <strong>{batchJob.state}</strong>
@@ -1588,87 +1776,72 @@ function IsoPdfAutopilot() {
       ) : null}
 
       {isoView === "autopilot" ? (
-        <div className="iso-autopilot-grid">
+        <div className="iso-autopilot-grid one-click-grid">
           <main className="iso-autopilot-main">
-            <div className="iso-metric-strip">
-              <IsoMetric label="PDFs" value={rows.length} icon={<FileText size={17} />} />
-              <IsoMetric label="Ready" value={readyCount} icon={<CircleCheck size={17} />} tone="ready" />
-              <IsoMetric label="Warn" value={warnCount} icon={<CircleAlert size={17} />} tone="warn" />
-              <IsoMetric label="Blocked" value={blockedCount} icon={<AlertTriangle size={17} />} tone="danger" />
-              <IsoMetric label="Selected" value={selectedCount} icon={<ClipboardCheck size={17} />} tone="ready" />
+            <div className="one-click-head">
+              <div className="eyebrow">一鍵命名</div>
+              <h2>選資料夾,其餘交給它</h2>
+              <p>自動拆頁、判讀流水號、對 ISO List、命名、更名。全綠就一路到底;只有出現低自信值才會停下來請你確認。</p>
             </div>
 
-            <div className="iso-flow compact" aria-label="ISO workflow steps">
-              {(plan?.steps ?? ISO_STEPS).map((step, index) => (
-                <div className={`iso-step ${step.state}`} key={`${step.label}-${index}`}>
-                  <div className="step-index">{String(index + 1).padStart(2, "0")}</div>
-                  <div>
-                    <strong>{step.label}</strong>
-                    <span>{step.meta}</span>
+            <div className="pipeline">
+              {pipelineStages.map((stage, index) => (
+                <Fragment key={stage.key}>
+                  <div className={`pipeline-card ${stage.state}`}>
+                    <div className="pipeline-card-top">
+                      {stage.icon}
+                      {stage.seconds != null ? <em>{stage.seconds}s</em> : stage.state === "done" ? <CircleCheck size={14} /> : null}
+                    </div>
+                    <strong>{stage.label}</strong>
+                    <span>{stage.detail}</span>
                   </div>
-                  {index < (plan?.steps.length ?? ISO_STEPS.length) - 1 ? <ChevronRight size={16} /> : null}
-                </div>
+                  {index < pipelineStages.length - 1 ? <ChevronRight className="pipeline-arrow" size={18} /> : null}
+                </Fragment>
               ))}
             </div>
 
-            <div className="autopilot-command-grid">
-              <button className="autopilot-run-card primary" onClick={generatePlan} disabled={busy || applyBusy}>
-                <WandSparkles size={24} />
-                <span>{busy ? "產生中" : "產生命名草稿"}</span>
-                <strong>{plan ? `${plan.summary.ready} ready` : "plan"}</strong>
-              </button>
-              <button className="autopilot-run-card" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={busy || batchBusy || applyBusy}>
-                <ScanLine size={24} />
-                <span>{batchRunning ? "取消判讀" : "批次判讀"}</span>
-                <strong>{batchJob ? `${batchJob.progress.percent}%` : "vision"}</strong>
-              </button>
-              <button className="autopilot-run-card" onClick={() => setResultOpen(true)} disabled={!plan}>
-                <Gauge size={24} />
-                <span>結果</span>
-                <strong>{issueRows.length ? `${issueRows.length} issues` : plan ? "ready" : "waiting"}</strong>
-              </button>
-              <button className="autopilot-run-card" onClick={openDryRun} disabled={!selectedCount || busy || applyBusy}>
-                <ClipboardCheck size={24} />
-                <span>{applyBusy ? "套用中" : "dry-run"}</span>
-                <strong>{selectedCount} rows</strong>
-              </button>
-            </div>
-
-            <div className="autopilot-status-grid">
-              <StatusTile icon={<FolderOpen size={18} />} title="Work folder" value={compactPath(workFolder || parentPath(combinePdf) || pageFolder || "waiting")} tone={workFolder || combinePdf || pageFolder ? "ready" : "warn"} />
-              <StatusTile icon={<FileText size={18} />} title="Combine PDF" value={compactPath(combinePdf || plan?.source.combine_pdf || "waiting")} tone={combinePdf || plan?.source.combine_pdf ? "ready" : "warn"} />
-              <StatusTile icon={<Layers3 size={18} />} title="Pages" value={compactPath(pageFolder || plan?.source.page_folder || "waiting")} tone={pageFolder || plan?.source.page_folder ? "ready" : "warn"} />
-              <StatusTile icon={<Table2 size={18} />} title="ISO List" value={compactPath(isoList || plan?.source.iso_list || "waiting")} tone={isoList || plan?.source.iso_list ? "ready" : "warn"} />
-            </div>
-
-            {plan ? (
-              <div className="autopilot-result-strip">
-                {(issueRows.length ? issueRows.slice(0, 5) : plan.rows.slice(0, 5)).map((row) => (
-                  <button className={`autopilot-row-card ${row.status} ${selectedRow?.id === row.id ? "selected" : ""}`} key={row.id} onClick={() => setSelectedRowId(row.id)}>
-                    <span>{String(row.page).padStart(3, "0")}</span>
-                    <strong>{row.source_name}</strong>
-                    <small>{row.note || row.new_name || row.status}</small>
-                  </button>
-                ))}
+            {oneClickStage === "review" ? (
+              <div className="one-click-checklist">
+                <ChecklistGate label="流水號判讀" detail={warnCount ? `${readyCount} 已確認 · ${warnCount} 待確認` : `${readyCount} 已確認`} state={warnCount ? "warn" : "ready"}>
+                  {warnCount ? (
+                    <div className="checklist-problem-rows">
+                      {issueRows.filter((row) => row.status === "warn").map((row) => (
+                        <button className={`checklist-problem-row ${selectedRow?.id === row.id ? "selected" : ""}`} key={row.id} onClick={() => { setSelectedRowId(row.id); setIsoView("workbench"); }}>
+                          <span className="mono">{String(row.page).padStart(3, "0")}</span>
+                          <span className="checklist-problem-detail">{row.note || row.vision_message || "需確認"}</span>
+                          <ChevronRight size={14} />
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </ChecklistGate>
+                {blockedCount ? <ChecklistGate label="命名衝突" detail={`${blockedCount} 個無法更名,請到工作台處理`} state="danger" /> : null}
               </div>
-            ) : (
-              <IsoEmptyPlan generatePlan={generatePlan} chooseWorkFolder={chooseWorkFolder} busy={busy} />
-            )}
-          </main>
+            ) : null}
 
-          <aside className="iso-autopilot-side">
-            {visualPanel}
-            <div className="iso-actions">
-              <button className="action-button" onClick={exportRenameCsv} disabled={!plan || busy || exportBusy}>
-                <FileJson size={15} />
-                <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
-              </button>
-              <button className="action-button" onClick={legacy.launch} disabled={legacy.busy}>
-                <PanelRightOpen size={15} />
-                <span>{legacy.busy ? "開啟中" : "舊版"}</span>
-              </button>
+            <button className="one-click-button" onClick={runOneClick} disabled={oneClickBusy}>
+              {oneClickButton.icon}
+              <span>{oneClickButton.label}</span>
+            </button>
+            <div className="one-click-hint">{oneClickButton.hint}</div>
+
+            <div className="one-click-terminal">
+              <div className="terminal-head">
+                <TerminalSquare size={14} />
+                <span>event log</span>
+                <em>{oneClickRunning || oneClickApplying ? `${elapsedSec}s` : oneClickStage === "done" ? "done" : "idle"}</em>
+              </div>
+              <div className="terminal-body" ref={terminalRef}>
+                {echoLines.length ? echoLines.map((line, index) => (
+                  <div className={`terminal-line ${line.tone || ""}`} key={`${line.code}-${index}`}>
+                    <span className="terminal-code">{line.code || "LOG"}</span>
+                    <span>{line.title}{line.detail ? ` · ${line.detail}` : ""}</span>
+                  </div>
+                )) : <div className="terminal-line idle"><span className="terminal-code">SYS</span><span>等待一鍵命名啟動…</span></div>}
+                {oneClickRunning || oneClickApplying ? <div className="terminal-cursor">_</div> : null}
+              </div>
             </div>
-          </aside>
+          </main>
         </div>
       ) : isoView === "engineer" ? (
         <div className="iso-engineer-grid">
@@ -2087,6 +2260,19 @@ function IsoPlanTable({
   );
 }
 
+function ChecklistGate({ label, detail, state, children }: { label: string; detail: string; state: string; children?: React.ReactNode }) {
+  return (
+    <div className={`checklist-gate ${state}`}>
+      <div className="checklist-gate-head">
+        {state === "ready" ? <CircleCheck size={18} /> : state === "warn" ? <CircleAlert size={18} /> : state === "danger" ? <AlertTriangle size={18} /> : <ScanLine size={18} />}
+        <span className="checklist-gate-label">{label}</span>
+        <span className="checklist-gate-detail">{detail}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function IsoDryRunDialog({
   applyBusy,
   exportBusy,
@@ -2427,11 +2613,15 @@ function normalizeIsoRows(rows: IsoPlanRow[]): IsoPlanRow[] {
   }
   return rows.map((row) => {
     const newName = row.new_name.trim();
+    const nameProblem = filenameProblem(newName);
     let status: IsoPlanRow["status"] = "ready";
     let note = row.note === "manual edit" ? "" : row.note;
     if (!newName) {
       status = "blocked";
       note = "缺少命名";
+    } else if (nameProblem) {
+      status = "blocked";
+      note = nameProblem;
     } else if ((nameCounts.get(newName.toLowerCase()) ?? 0) > 1) {
       status = "blocked";
       note = `目標檔名重複：${newName}`;
@@ -2439,11 +2629,11 @@ function normalizeIsoRows(rows: IsoPlanRow[]): IsoPlanRow[] {
       status = "idle";
       note = "檔名已相同";
     } else if (!row.line_no.trim()) {
-      status = "warn";
-      note = "缺少圖號/檔名，請人工確認";
-    } else if (row.note || row.vision_message) {
+      status = "blocked";
+      note = "缺少圖號/檔名";
+    } else if (row.note) {
       status = row.status === "blocked" ? "warn" : row.status;
-      note = row.note || row.vision_message;
+      note = row.note;
     }
     return {
       ...row,
@@ -2453,6 +2643,24 @@ function normalizeIsoRows(rows: IsoPlanRow[]): IsoPlanRow[] {
       target_path: targetPathFor(row.source_path, newName),
     };
   });
+}
+
+function filenameProblem(name: string): string {
+  const base = name.trim();
+  if (!base) {
+    return "缺少命名";
+  }
+  if (/[<>:"/\\|?*\x00-\x1F]/.test(base)) {
+    return "檔名含有 Windows 不允許字元";
+  }
+  if (/[ .]$/.test(base)) {
+    return "檔名結尾不可是空白或句點";
+  }
+  const stem = base.replace(/\.[^.]*$/, "").toUpperCase();
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem)) {
+    return "檔名是 Windows 保留名稱";
+  }
+  return "";
 }
 
 function summarizeIsoRows(rows: IsoPlanRow[]): IsoWorkflowPlan["summary"] {

@@ -21,6 +21,7 @@ from launcher.plugins.iso_tools.iso_naming import (
     guess_iso_columns,
     list_iso_sheets,
     natural_pdf_key,
+    parse_iso_filename,
     read_iso_table,
     records_from_table,
     split_pdf_to_pages,
@@ -104,6 +105,7 @@ def build_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
         lookup,
         pattern=pattern,
         detect_serials=request.detect_serials,
+        confidence_threshold=request.confidence_threshold if request.confidence_threshold is not None else SERIAL_AUTO_FILL_CONFIDENCE,
     )
     issues = [*pdf_events, *iso_meta["issues"], *row_events]
     summary = _summary(rows)
@@ -287,6 +289,7 @@ def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:
     if not rows:
         raise ValueError("沒有可匯出的命名草稿。")
 
+    created_at = _now()
     export_path = request.export_path or _default_export_path(request, rows)
     export_path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
@@ -302,18 +305,21 @@ def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:
         "vision_message",
         "source_path",
         "target_path",
+        "created_at",
     ]
     with export_path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         for row in rows:
-            writer.writerow({column: row.get(column, "") for column in columns})
+            exported_row = {column: row.get(column, "") for column in columns}
+            exported_row["created_at"] = created_at
+            writer.writerow(exported_row)
 
     selected_count = sum(1 for row in rows if row.get("selected"))
     return {
         "schema_version": 1,
         "action": "export_plan_csv",
-        "created_at": _now(),
+        "created_at": created_at,
         "export_path": str(export_path),
         "row_count": len(rows),
         "selected_count": selected_count,
@@ -429,17 +435,26 @@ def _build_plan_rows(
     *,
     pattern: str,
     detect_serials: bool,
+    confidence_threshold: float = SERIAL_AUTO_FILL_CONFIDENCE,
+    detector: Any | None = None,
     start_index: int = 1,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     rows: list[dict[str, Any]] = []
     events: list[dict[str, str]] = []
-    detector = _SerialDetector() if detect_serials else None
+    serial_detector = detector if detect_serials else None
+    if detect_serials and serial_detector is None:
+        serial_detector = _SerialDetector()
     seen_targets: set[Path] = set()
 
     for index, source in enumerate(pdfs, start=start_index):
         default_serial = str(index)
-        vision = detector.detect(source, lookup) if detector is not None else SerialVisionResult("", 0.0, "")
-        serial, note = _serial_for_row(default_serial, vision, lookup)
+        filename_vision = _vision_from_existing_iso_filename(source, lookup)
+        vision = filename_vision or (
+            serial_detector.detect(source, lookup)
+            if serial_detector is not None
+            else SerialVisionResult("", 0.0, "")
+        )
+        serial, note = _serial_for_row(default_serial, vision, lookup, confidence_threshold)
         record = lookup.get(serial)
         line_no = record.line_no if record else ""
         new_name = format_iso_name(pattern, serial=serial, line=line_no)
@@ -447,7 +462,7 @@ def _build_plan_rows(
         status, status_note = _row_status(source, target, new_name, line_no, note, seen_targets)
         if new_name:
             seen_targets.add(target)
-        selected = status == "ready" and new_name != source.name
+        selected = status in ("ready", "warn") and bool(new_name) and new_name != source.name
         row_note = status_note or note
         if row_note:
             events.append({"code": "ROW", "tone": status, "title": source.name, "detail": row_note})
@@ -471,15 +486,28 @@ def _build_plan_rows(
     return rows, events
 
 
-def _serial_for_row(default_serial: str, vision: SerialVisionResult, lookup: dict[str, IsoRecord]) -> tuple[str, str]:
+def _vision_from_existing_iso_filename(source: Path, lookup: dict[str, IsoRecord]) -> SerialVisionResult | None:
+    parsed = parse_iso_filename(source.name)
+    if parsed is None:
+        return None
+    record = lookup.get(parsed.serial)
+    if record is None:
+        return None
+    expected_name = format_iso_name(DEFAULT_PATTERN, serial=record.serial, line=record.line_no)
+    if source.name.casefold() != expected_name.casefold():
+        return None
+    return SerialVisionResult(record.serial, 1.0, "檔名已符合 ISO List")
+
+
+def _serial_for_row(default_serial: str, vision: SerialVisionResult, lookup: dict[str, IsoRecord], confidence_threshold: float) -> tuple[str, str]:
     if not vision.text:
         return default_serial, vision.message
     result = correct_result_with_iso_lookup(vision, lookup)
-    if result.confidence < SERIAL_AUTO_FILL_CONFIDENCE:
+    if result.confidence < confidence_threshold:
         return default_serial, f"判讀信心太低 {result.confidence:.2f}，暫用頁序 {default_serial}"
     if result.text not in lookup:
         return default_serial, f"ISO List 無此流水號 {result.text}，暫用頁序 {default_serial}"
-    return result.text, result.message
+    return result.text, ""
 
 
 def _row_status(source: Path, target: Path, new_name: str, line_no: str, note: str, seen_targets: set[Path]) -> tuple[str, str]:
@@ -921,7 +949,11 @@ def _profile_response(
 def _source_discovery(*, folder: Path | None, profile: IsoNamingProfile) -> dict[str, Any]:
     combine_pdf = _discover_combine_pdf(folder)
     page_folder = _discover_page_folder(folder, combine_pdf)
-    iso_list = profile.iso_list_path if profile.iso_list_path is not None else _discover_iso_list(folder, combine_pdf, page_folder)
+    iso_list = (
+        profile.iso_list_path
+        if profile.iso_list_path is not None and profile.iso_list_path.exists()
+        else _discover_iso_list(folder, combine_pdf, page_folder)
+    )
     return {
         "detected_combine_pdf": str(combine_pdf) if combine_pdf else None,
         "detected_page_folder": str(page_folder) if page_folder else None,

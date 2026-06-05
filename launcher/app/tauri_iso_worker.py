@@ -7,6 +7,8 @@ from typing import Any
 
 from launcher.app.tauri_iso_workflow import (
     IsoWorkflowRequest,
+    SERIAL_AUTO_FILL_CONFIDENCE,
+    _SerialDetector,
     _build_plan_rows,
     _now,
     _normalize_request,
@@ -53,6 +55,7 @@ def run_job(job_dir: Path) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     events: list[dict[str, str]] = [*pdf_events, *iso_meta["issues"]]
     total = len(pdfs)
+    detector = _SerialDetector() if request.detect_serials else None
 
     for index, pdf in enumerate(pdfs, start=1):
         if (job_dir / "cancel.json").exists():
@@ -62,6 +65,8 @@ def run_job(job_dir: Path) -> dict[str, Any]:
             lookup,
             pattern=request.pattern or "{serial}--{line}.pdf",
             detect_serials=request.detect_serials,
+            confidence_threshold=request.confidence_threshold if request.confidence_threshold is not None else SERIAL_AUTO_FILL_CONFIDENCE,
+            detector=detector,
             start_index=index,
         )
         row_payload = row[0]
