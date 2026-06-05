@@ -24,6 +24,7 @@ from launcher.app.tauri_iso_workflow import (
     save_iso_profile,
     split_iso_pdf,
 )
+from launcher.app.tauri_iso_worker import run_job
 from launcher.core.state_store import AppStateStore
 from launcher.plugins.iso_tools.profile import IsoNamingProfile, save_iso_naming_profile
 
@@ -125,6 +126,46 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(export["export_path"], str(export_path))
         self.assertEqual(export["row_count"], 2)
         self.assertEqual(exported_rows[0]["new_name"], "1--PIPE-A.pdf")
+
+    def test_phase_0c_worker_writes_progress_and_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            pdf = folder / "combine.pdf"
+            iso_list = folder / "iso_list.xlsx"
+            job_dir = folder / "jobs" / "job-1"
+            job_dir.mkdir(parents=True)
+            _write_pdf(pdf, pages=2)
+            _write_iso_list(iso_list)
+            _write_json(job_dir / "request.json", {"action": "start_batch_detect", "combine_pdf": str(pdf), "iso_list": str(iso_list)})
+            _write_json(job_dir / "job.json", _job_payload("job-1"))
+
+            job = run_job(job_dir)
+
+        self.assertEqual(job["state"], "completed")
+        self.assertEqual(job["progress"]["total"], 2)
+        self.assertEqual(job["progress"]["done"], 2)
+        self.assertEqual(job["rows"][0]["new_name"], "1--PIPE-A.pdf")
+        self.assertEqual(job["rows"][1]["new_name"], "2--PIPE-B.pdf")
+        self.assertEqual(job["result"]["summary"]["ready"], 2)
+
+    def test_phase_0c_worker_honors_cancel_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            pdf = folder / "combine.pdf"
+            iso_list = folder / "iso_list.xlsx"
+            job_dir = folder / "jobs" / "job-2"
+            job_dir.mkdir(parents=True)
+            _write_pdf(pdf, pages=2)
+            _write_iso_list(iso_list)
+            _write_json(job_dir / "request.json", {"action": "start_batch_detect", "combine_pdf": str(pdf), "iso_list": str(iso_list)})
+            _write_json(job_dir / "job.json", _job_payload("job-2"))
+            _write_json(job_dir / "cancel.json", {"cancelled_at": "test"})
+
+            job = run_job(job_dir)
+
+        self.assertEqual(job["state"], "cancelled")
+        self.assertEqual(job["progress"]["done"], 0)
+        self.assertEqual(job["rows"], [])
 
     def test_load_profile_action_restores_folder_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -288,6 +329,27 @@ def _write_iso_list(path: Path) -> None:
     sheet.append(["1", "PIPE-A"])
     sheet.append(["2", "PIPE-B"])
     workbook.save(path)
+
+
+def _job_payload(job_id: str) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "action": "batch_detect_job",
+        "job_id": job_id,
+        "state": "queued",
+        "created_at": "test",
+        "updated_at": "test",
+        "progress": {"total": 0, "done": 0, "percent": 0},
+        "rows": [],
+        "issues": [],
+        "events": [],
+        "result": None,
+        "error": "",
+    }
+
+
+def _write_json(path: Path, payload: dict[str, object]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -4,8 +4,10 @@ import csv
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
+import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -50,6 +52,7 @@ class IsoWorkflowRequest:
     confidence_threshold: float | None = None
     detect_serials: bool = False
     export_path: Path | None = None
+    job_id: str | None = None
     rows: tuple[dict[str, Any], ...] = ()
 
 
@@ -69,6 +72,12 @@ def main() -> int:
             payload = build_rename_plan(request)
         elif request.action == "export_plan_csv":
             payload = export_plan_csv(request)
+        elif request.action == "start_batch_detect":
+            payload = start_batch_detect(request)
+        elif request.action == "job_status":
+            payload = iso_job_status(request)
+        elif request.action == "cancel_job":
+            payload = cancel_iso_job(request)
         elif request.action == "apply":
             payload = apply_iso_plan(request)
         elif request.action == "load_profile":
@@ -312,6 +321,33 @@ def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:
     }
 
 
+def start_batch_detect(request: IsoWorkflowRequest) -> dict[str, Any]:
+    job_id = request.job_id or uuid.uuid4().hex
+    job_dir = _job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job = _initial_job_payload(job_id, "queued")
+    _write_json(job_dir / "job.json", job)
+    _write_json(job_dir / "request.json", _request_payload(request))
+    _spawn_iso_worker(job_dir)
+    return _read_json(job_dir / "job.json")
+
+
+def iso_job_status(request: IsoWorkflowRequest) -> dict[str, Any]:
+    job_dir = _job_dir_required(request)
+    return _read_json(job_dir / "job.json")
+
+
+def cancel_iso_job(request: IsoWorkflowRequest) -> dict[str, Any]:
+    job_dir = _job_dir_required(request)
+    _write_json(job_dir / "cancel.json", {"cancelled_at": _now()})
+    job = _read_json(job_dir / "job.json")
+    if job.get("state") in {"queued", "running"}:
+        job["state"] = "cancel_requested"
+        job["updated_at"] = _now()
+        _write_json(job_dir / "job.json", job)
+    return job
+
+
 def _resolve_pdfs(request: IsoWorkflowRequest) -> tuple[list[Path], str, Path | None, list[dict[str, str]]]:
     events: list[dict[str, str]] = []
     if request.page_folder is not None:
@@ -393,13 +429,14 @@ def _build_plan_rows(
     *,
     pattern: str,
     detect_serials: bool,
+    start_index: int = 1,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     rows: list[dict[str, Any]] = []
     events: list[dict[str, str]] = []
     detector = _SerialDetector() if detect_serials else None
     seen_targets: set[Path] = set()
 
-    for index, source in enumerate(pdfs, start=1):
+    for index, source in enumerate(pdfs, start=start_index):
         default_serial = str(index)
         vision = detector.detect(source, lookup) if detector is not None else SerialVisionResult("", 0.0, "")
         serial, note = _serial_for_row(default_serial, vision, lookup)
@@ -604,6 +641,7 @@ def _normalize_request(payload: dict[str, Any]) -> dict[str, Any]:
         "confidence_threshold": _float_or_none(payload.get("confidence_threshold")),
         "detect_serials": bool(payload.get("detect_serials")),
         "export_path": _path_or_none(payload.get("export_path")),
+        "job_id": str(payload.get("job_id") or "").strip() or None,
         "rows": tuple(payload.get("rows") or ()),
     }
 
@@ -632,6 +670,93 @@ def _dict_or_none(value: Any) -> dict[str, Any] | None:
 def _state_store() -> AppStateStore:
     override = os.environ.get(STATE_PATH_ENV)
     return AppStateStore(Path(override)) if override else AppStateStore()
+
+
+def _job_root() -> Path:
+    root = os.environ.get("DESKTOP_SUPPORT_JOB_ROOT")
+    if root:
+        return Path(root)
+    project_root = os.environ.get("DESKTOP_SUPPORT_PROJECT_ROOT")
+    if project_root:
+        return Path(project_root) / ".runtime" / "jobs" / "iso"
+    return Path.cwd() / ".runtime" / "jobs" / "iso"
+
+
+def _job_dir(job_id: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "", job_id)
+    if not safe_id:
+        raise ValueError("job_id 不合法。")
+    return _job_root() / safe_id
+
+
+def _job_dir_required(request: IsoWorkflowRequest) -> Path:
+    if not request.job_id:
+        raise ValueError("缺少 job_id。")
+    job_dir = _job_dir(request.job_id)
+    if not (job_dir / "job.json").exists():
+        raise FileNotFoundError(f"找不到 ISO job：{request.job_id}")
+    return job_dir
+
+
+def _initial_job_payload(job_id: str, state: str) -> dict[str, Any]:
+    now = _now()
+    return {
+        "schema_version": 1,
+        "action": "batch_detect_job",
+        "job_id": job_id,
+        "state": state,
+        "created_at": now,
+        "updated_at": now,
+        "progress": {"total": 0, "done": 0, "percent": 0},
+        "rows": [],
+        "issues": [],
+        "events": [],
+        "result": None,
+        "error": "",
+    }
+
+
+def _request_payload(request: IsoWorkflowRequest) -> dict[str, Any]:
+    return {
+        "action": request.action,
+        "profile_folder": str(request.profile_folder or ""),
+        "work_folder": str(request.work_folder or ""),
+        "combine_pdf": str(request.combine_pdf or ""),
+        "page_folder": str(request.page_folder or ""),
+        "iso_list": str(request.iso_list or ""),
+        "sheet_name": request.sheet_name or "",
+        "serial_col": request.serial_col,
+        "line_col": request.line_col,
+        "pattern": request.pattern or "",
+        "serial_region": request.serial_region,
+        "drawing_region": request.drawing_region,
+        "confidence_threshold": request.confidence_threshold,
+        "detect_serials": request.detect_serials,
+    }
+
+
+def _spawn_iso_worker(job_dir: Path) -> None:
+    command = [sys.executable, "-m", "launcher.app.tauri_iso_worker", str(job_dir)]
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.Popen(
+        command,
+        cwd=Path.cwd(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creation_flags,
+    )
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f"{path.name}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(temporary, path)
 
 
 def _with_profile_defaults(

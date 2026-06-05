@@ -8,6 +8,9 @@ export type IsoWorkflowAction =
   | "plan"
   | "build_rename_plan"
   | "export_plan_csv"
+  | "start_batch_detect"
+  | "job_status"
+  | "cancel_job"
   | "apply"
   | "load_profile"
   | "save_profile";
@@ -35,6 +38,7 @@ export interface IsoWorkflowRequest {
   confidence_threshold?: number;
   detect_serials?: boolean;
   export_path?: string;
+  job_id?: string;
   rows?: IsoPlanRow[];
 }
 
@@ -205,6 +209,25 @@ export interface IsoExportResult {
   message: string;
 }
 
+export interface IsoJobPayload {
+  schema_version: number;
+  action: "batch_detect_job";
+  job_id: string;
+  state: "queued" | "running" | "cancel_requested" | "cancelled" | "completed" | "failed";
+  created_at: string;
+  updated_at: string;
+  progress: {
+    total: number;
+    done: number;
+    percent: number;
+  };
+  rows: IsoPlanRow[];
+  issues: IsoWorkflowIssue[];
+  events: IsoWorkflowIssue[];
+  result: IsoWorkflowPlan | null;
+  error: string;
+}
+
 export interface IsoApplyResult {
   schema_version: number;
   action: "apply";
@@ -261,6 +284,18 @@ export async function loadIsoTable(request: Partial<IsoWorkflowRequest>): Promis
 
 export async function exportIsoPlanCsv(request: Partial<IsoWorkflowRequest>): Promise<IsoExportResult> {
   return invokeJson<IsoExportResult>("run_iso_workflow", { ...request, action: "export_plan_csv" });
+}
+
+export async function startIsoBatchDetect(request: Partial<IsoWorkflowRequest>): Promise<IsoJobPayload> {
+  return invokeJson<IsoJobPayload>("run_iso_workflow", { ...request, action: "start_batch_detect" });
+}
+
+export async function loadIsoJobStatus(jobId: string): Promise<IsoJobPayload> {
+  return invokeJson<IsoJobPayload>("run_iso_workflow", { action: "job_status", job_id: jobId });
+}
+
+export async function cancelIsoJob(jobId: string): Promise<IsoJobPayload> {
+  return invokeJson<IsoJobPayload>("run_iso_workflow", { action: "cancel_job", job_id: jobId });
 }
 
 export async function loadIsoProfile(request: Partial<IsoWorkflowRequest>): Promise<IsoProfilePayload> {
