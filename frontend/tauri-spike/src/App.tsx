@@ -49,7 +49,9 @@ import { currentMonitor, getCurrentWindow, LogicalSize, PhysicalPosition } from 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   applyIsoPlan,
+  cancelIsoJob,
   exportIsoPlanCsv,
+  loadIsoJobStatus,
   loadIsoProfile,
   loadIsoPreview,
   pickIsoCombinePdf,
@@ -58,6 +60,8 @@ import {
   pickIsoWorkFolder,
   runIsoPlan,
   saveIsoProfile,
+  startIsoBatchDetect,
+  type IsoJobPayload,
   type IsoPlanRow,
   type IsoProfilePayload,
   type IsoPreviewPayload,
@@ -1026,6 +1030,8 @@ function IsoPdfAutopilot() {
   const [busy, setBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  const [batchJob, setBatchJob] = useState<IsoJobPayload | null>(null);
+  const [batchBusy, setBatchBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [problemOnly, setProblemOnly] = useState(false);
@@ -1315,6 +1321,37 @@ function IsoPdfAutopilot() {
     }
   }
 
+  async function startBatchDetect() {
+    setBatchBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const job = await startIsoBatchDetect({ ...requestPayload(), detect_serials: true });
+      setBatchJob(job);
+      setMessage(`批次判讀已啟動：${job.job_id}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  async function cancelBatchDetect() {
+    if (!batchJob) {
+      return;
+    }
+    setBatchBusy(true);
+    try {
+      const job = await cancelIsoJob(batchJob.job_id);
+      setBatchJob(job);
+      setMessage("已送出取消批次判讀。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
   function toggleRow(rowId: string) {
     updatePlanRows((rows) => rows.map((row) => row.id === rowId && row.status !== "blocked" ? { ...row, selected: !row.selected } : row));
   }
@@ -1352,6 +1389,20 @@ function IsoPdfAutopilot() {
     }
   }
 
+  function adoptPreviewVision() {
+    if (!selectedRow || !preview?.vision?.text) {
+      return;
+    }
+    updateRow(selectedRow.id, "serial", preview.vision.text);
+  }
+
+  function confirmSelectedRow() {
+    if (!selectedRow) {
+      return;
+    }
+    updatePlanRows((rows) => rows.map((row) => row.id === selectedRow.id ? { ...row, status: "ready", note: "", vision_message: "", selected: row.new_name !== row.source_name } : row));
+  }
+
   const rows = plan?.rows ?? [];
   const selectedCount = rows.filter((row) => row.selected && row.status !== "blocked").length;
   const blockedCount = rows.filter((row) => row.status === "blocked").length;
@@ -1366,6 +1417,7 @@ function IsoPdfAutopilot() {
   const headers = plan?.source.headers ?? [];
   const sheetOptions = plan?.source.sheet_options ?? (sheetName ? [sheetName] : []);
   const profileLabel = profileBusy ? "loading" : profile?.exists ? compactPath(profile.folder) : activeProfileFolder() ? "default profile" : "waiting";
+  const batchRunning = batchJob?.state === "queued" || batchJob?.state === "running" || batchJob?.state === "cancel_requested";
 
   useEffect(() => {
     let cancelled = false;
@@ -1410,6 +1462,39 @@ function IsoPdfAutopilot() {
     };
   }, [selectedRow?.source_path, detectSerials, serialRegion, drawingRegion]);
 
+  useEffect(() => {
+    if (!batchJob || !batchRunning) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void loadIsoJobStatus(batchJob.job_id)
+        .then((job) => {
+          if (cancelled) {
+            return;
+          }
+          setBatchJob(job);
+          if (job.result && (job.state === "completed" || job.state === "cancelled")) {
+            setPlan(job.result);
+            setSelectedRowId(job.result.rows[0]?.id ?? "");
+            setMessage(job.state === "completed" ? "批次判讀完成，命名草稿已更新。" : "批次判讀已取消，保留已完成列。");
+          }
+          if (job.error) {
+            setError(job.error);
+          }
+        })
+        .catch((caught) => {
+          if (!cancelled) {
+            setError(caught instanceof Error ? caught.message : String(caught));
+          }
+        });
+    }, 900);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [batchJob?.job_id, batchRunning]);
+
   return (
     <section className="iso-board iso-workbench">
       <div className="iso-workbench-top">
@@ -1425,6 +1510,10 @@ function IsoPdfAutopilot() {
           <button className="launch-button" onClick={generatePlan} disabled={busy || applyBusy}>
             <WandSparkles size={18} />
             <span>{busy ? "產生中" : "產生命名草稿"}</span>
+          </button>
+          <button className="action-button" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={busy || batchBusy || applyBusy}>
+            <ScanLine size={15} />
+            <span>{batchRunning ? `取消判讀 ${batchJob?.progress.percent ?? 0}%` : "批次判讀"}</span>
           </button>
           <button className="launch-button" onClick={openDryRun} disabled={!selectedCount || busy || applyBusy}>
             <ClipboardCheck size={18} />
@@ -1442,6 +1531,17 @@ function IsoPdfAutopilot() {
       </div>
 
       <BridgeStatus error={error || legacy.error} message={message || legacy.message} />
+      {batchJob ? (
+        <div className={`batch-progress ${batchJob.state}`}>
+          <div>
+            <strong>{batchJob.state}</strong>
+            <span>{batchJob.progress.done} / {batchJob.progress.total} pages</span>
+          </div>
+          <div className="batch-progress-bar">
+            <span style={{ width: `${batchJob.progress.percent}%` }} />
+          </div>
+        </div>
+      ) : null}
 
       <div className="iso-workbench-grid">
         <aside className="iso-left-panel">
@@ -1572,6 +1672,9 @@ function IsoPdfAutopilot() {
             row={selectedRow}
             serialRegion={serialRegion}
             setActiveRoi={setActiveRoi}
+            adoptPreviewVision={adoptPreviewVision}
+            confirmSelectedRow={confirmSelectedRow}
+            nextProblem={chooseProblemRow}
             updateActiveRoi={updateActiveRoi}
           />
 
@@ -1610,6 +1713,10 @@ function IsoPdfAutopilot() {
             <button className="action-button" onClick={generatePlan} disabled={busy || applyBusy}>
               <RefreshCcw size={15} />
               <span>重新產生</span>
+            </button>
+            <button className="action-button" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={busy || batchBusy || applyBusy}>
+              <ScanLine size={15} />
+              <span>{batchRunning ? "取消判讀" : "批次判讀"}</span>
             </button>
             <button className="action-button" onClick={openDryRun} disabled={!selectedCount || busy || applyBusy}>
               <ClipboardCheck size={15} />
@@ -1806,9 +1913,12 @@ function IsoEmptyPlan({ busy, chooseWorkFolder, generatePlan }: { busy: boolean;
 
 function IsoVisualPanel({
   activeRoi,
+  adoptPreviewVision,
   busy,
+  confirmSelectedRow,
   drawingRegion,
   error,
+  nextProblem,
   preview,
   resetRoi,
   row,
@@ -1817,9 +1927,12 @@ function IsoVisualPanel({
   updateActiveRoi,
 }: {
   activeRoi: "serial" | "drawing";
+  adoptPreviewVision: () => void;
   busy: boolean;
+  confirmSelectedRow: () => void;
   drawingRegion: IsoRegion;
   error: string;
+  nextProblem: () => void;
   preview: IsoPreviewPayload | null;
   resetRoi: (region?: "serial" | "drawing") => void;
   row?: IsoPlanRow;
@@ -1896,6 +2009,20 @@ function IsoVisualPanel({
                 : error || "可用裁切圖人工確認流水號與圖號"}
           </span>
         </div>
+      </div>
+      <div className="row-review-actions">
+        <button className="action-button" onClick={adoptPreviewVision} disabled={!preview?.vision?.text}>
+          <SearchCheck size={14} />
+          <span>採用判讀值</span>
+        </button>
+        <button className="action-button" onClick={confirmSelectedRow} disabled={!row}>
+          <CircleCheck size={14} />
+          <span>確認此列</span>
+        </button>
+        <button className="action-button" onClick={nextProblem}>
+          <CircleAlert size={14} />
+          <span>下一問題</span>
+        </button>
       </div>
     </div>
   );

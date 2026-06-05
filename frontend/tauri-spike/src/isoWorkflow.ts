@@ -104,7 +104,7 @@ export interface IsoWorkflowStep {
 
 export interface IsoWorkflowPlan {
   schema_version: number;
-  action: "plan" | "build_rename_plan";
+  action: "plan" | "build_rename_plan" | "batch_detect_result";
   created_at: string;
   source: {
     kind: string;

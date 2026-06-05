@@ -2291,6 +2291,65 @@ h3 {
   max-width: none;
 }
 
+.batch-progress {
+  display: grid;
+  grid-template-columns: minmax(180px, auto) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  border: 1px solid rgba(47, 245, 200, 0.22);
+  border-radius: 9px;
+  padding: 8px 10px;
+  color: var(--mint);
+  background: rgba(47, 245, 200, 0.06);
+}
+
+.batch-progress.cancel_requested,
+.batch-progress.cancelled {
+  border-color: rgba(255, 209, 102, 0.28);
+  color: var(--amber);
+  background: rgba(255, 209, 102, 0.06);
+}
+
+.batch-progress.failed {
+  border-color: rgba(255, 79, 123, 0.32);
+  color: var(--danger);
+  background: rgba(255, 79, 123, 0.07);
+}
+
+.batch-progress > div:first-child {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.batch-progress strong,
+.batch-progress span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-progress strong {
+  color: var(--text-strong);
+  text-transform: uppercase;
+}
+
+.batch-progress-bar {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.batch-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--mint), var(--amber));
+}
+
 .iso-workbench-grid {
   min-height: 680px;
   display: grid;
@@ -2685,6 +2744,23 @@ h3 {
   display: block;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.row-review-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.row-review-actions .action-button {
+  min-width: 0;
+  justify-content: center;
+}
+
+.row-review-actions .action-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modal-backdrop {
