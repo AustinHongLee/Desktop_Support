@@ -9,6 +9,7 @@ export type IsoWorkflowAction =
   | "build_rename_plan"
   | "export_plan_csv"
   | "export_debug_bundle"
+  | "pilot_report"
   | "start_batch_detect"
   | "job_status"
   | "cancel_job"
@@ -109,6 +110,29 @@ export interface IsoWorkflowIssue {
   detail: string;
 }
 
+export interface IsoPilotItem {
+  id: string;
+  stage: string;
+  status: "pending" | "running" | "ready" | "warn" | "blocked" | "skipped";
+  user_text: string;
+  engineer_detail: string;
+  metrics: Record<string, unknown>;
+  auto_fix: string;
+  manual_hint: string;
+  blocks_apply: boolean;
+  issue_codes: string[];
+}
+
+export interface IsoPilotReport {
+  schema_version: number;
+  action: "pilot_report";
+  created_at: string;
+  summary: Record<IsoPilotItem["status"], number>;
+  items: IsoPilotItem[];
+  source?: IsoWorkflowPlan["source"];
+  rows?: IsoPlanRow[];
+}
+
 export interface IsoWorkflowStep {
   label: string;
   state: string;
@@ -147,6 +171,8 @@ export interface IsoWorkflowPlan {
   steps: IsoWorkflowStep[];
   rows: IsoPlanRow[];
   issues: IsoWorkflowIssue[];
+  pilot_results?: IsoPilotItem[];
+  pilot_summary?: Record<IsoPilotItem["status"], number>;
   run_log?: IsoRunLogRef;
 }
 
@@ -321,6 +347,10 @@ export async function exportIsoPlanCsv(request: Partial<IsoWorkflowRequest>): Pr
 
 export async function exportIsoDebugBundle(request: Pick<IsoWorkflowRequest, "run_id" | "export_path">): Promise<IsoDebugBundleResult> {
   return invokeJson<IsoDebugBundleResult>("run_iso_workflow", { ...request, action: "export_debug_bundle" });
+}
+
+export async function loadIsoPilotReport(request: Partial<IsoWorkflowRequest>): Promise<IsoPilotReport> {
+  return invokeJson<IsoPilotReport>("run_iso_workflow", { ...request, action: "pilot_report" });
 }
 
 export async function startIsoBatchDetect(request: Partial<IsoWorkflowRequest>): Promise<IsoJobPayload> {

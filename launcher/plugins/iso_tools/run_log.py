@@ -114,6 +114,7 @@ def finish_iso_run_success(context: IsoRunLogContext, payload: dict[str, Any], *
             "stages": _merge_stage(run.get("stages"), _stage_payload(context.action, "completed")),
             "summary": _summary_from_payload(result_payload),
             "rows": _rows_from_payload(result_payload),
+            "pilot_results": _pilot_from_payload(result_payload),
             "failure": None,
             "result": result_payload,
         }
@@ -136,6 +137,7 @@ def finish_iso_run_cancelled(context: IsoRunLogContext, payload: dict[str, Any])
             "stages": _merge_stage(run.get("stages"), _stage_payload(context.action, "cancelled")),
             "summary": _summary_from_payload(result_payload),
             "rows": _rows_from_payload(result_payload),
+            "pilot_results": _pilot_from_payload(result_payload),
             "result": result_payload,
         }
     )
@@ -315,6 +317,16 @@ def _rows_from_payload(payload: dict[str, Any]) -> list[Any]:
     result = payload.get("result")
     if isinstance(result, dict) and isinstance(result.get("rows"), list):
         return result["rows"]
+    return []
+
+
+def _pilot_from_payload(payload: dict[str, Any]) -> list[Any]:
+    pilot = payload.get("pilot_results")
+    if isinstance(pilot, list):
+        return pilot
+    result = payload.get("result")
+    if isinstance(result, dict) and isinstance(result.get("pilot_results"), list):
+        return result["pilot_results"]
     return []
 
 

@@ -38,6 +38,7 @@ from launcher.plugins.iso_tools.profile import (
     save_iso_naming_profile,
     save_iso_naming_profile_draft,
 )
+from launcher.plugins.iso_tools.pilot import build_pilot_report
 from launcher.plugins.iso_tools.run_log import (
     ensure_iso_run,
     finish_iso_run_failure,
@@ -119,6 +120,8 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return export_plan_csv(request)
     if request.action == "export_debug_bundle":
         return export_debug_bundle(request)
+    if request.action == "pilot_report":
+        return pilot_report(request)
     if request.action == "start_batch_detect":
         return start_batch_detect(request)
     if request.action == "job_status":
@@ -155,7 +158,7 @@ def build_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
     )
     issues = [*pdf_events, *iso_meta["issues"], *row_events]
     summary = _summary(rows)
-    return {
+    payload = {
         "schema_version": 1,
         "action": "plan",
         "created_at": _now(),
@@ -182,6 +185,7 @@ def build_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
         "rows": rows,
         "issues": issues,
     }
+    return _with_pilot_results(payload, request)
 
 
 def discover_sources(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -252,6 +256,35 @@ def build_rename_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
     payload = build_iso_plan(request)
     payload["action"] = "build_rename_plan"
     return payload
+
+
+def pilot_report(request: IsoWorkflowRequest) -> dict[str, Any]:
+    if request.rows:
+        payload = {
+            "schema_version": 1,
+            "action": "pilot_report_source",
+            "created_at": _now(),
+            "source": {
+                "work_folder": str(request.work_folder or ""),
+                "combine_pdf": str(request.combine_pdf or ""),
+                "page_folder": str(request.page_folder or ""),
+                "iso_list": str(request.iso_list or ""),
+                "sheet_name": request.sheet_name or "",
+                "serial_col": request.serial_col,
+                "line_col": request.line_col,
+                "pattern": _plan_pattern(request),
+                "detect_serials": request.detect_serials,
+                "pdf_count": len(request.rows),
+                "record_count": 0,
+            },
+            "summary": _summary(list(request.rows)),
+            "rows": list(request.rows),
+            "issues": [],
+        }
+        return build_pilot_report(request=_request_payload(request), plan=payload)
+    plan = build_iso_plan(request)
+    report = build_pilot_report(request=_request_payload(request), plan=plan)
+    return {**report, "source": plan.get("source", {}), "rows": plan.get("rows", [])}
 
 
 def load_iso_profile(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -1092,6 +1125,15 @@ def _request_has_profile_values(request: IsoWorkflowRequest) -> bool:
             request.line_col,
         )
     )
+
+
+def _with_pilot_results(payload: dict[str, Any], request: IsoWorkflowRequest) -> dict[str, Any]:
+    report = build_pilot_report(request=_request_payload(request), plan=payload)
+    return {
+        **payload,
+        "pilot_results": report["items"],
+        "pilot_summary": report["summary"],
+    }
 
 
 def _source_discovery(*, folder: Path | None, profile: IsoNamingProfile) -> dict[str, Any]:

@@ -22,6 +22,7 @@ from launcher.app.tauri_iso_workflow import (
     _write_json,
 )
 from launcher.plugins.iso_tools.iso_naming import build_record_lookup
+from launcher.plugins.iso_tools.pilot import build_pilot_report
 from launcher.plugins.iso_tools.run_log import (
     IsoRunLogContext,
     append_iso_run_event,
@@ -187,7 +188,7 @@ def _result_payload(
     request: IsoWorkflowRequest,
 ) -> dict[str, Any]:
     summary = _summary(rows)
-    return {
+    payload = {
         "schema_version": 1,
         "action": "batch_detect_result",
         "created_at": _now(),
@@ -213,6 +214,10 @@ def _result_payload(
         "rows": rows,
         "issues": events,
     }
+    report = build_pilot_report(request=_request_payload(request), plan=payload)
+    payload["pilot_results"] = report["items"]
+    payload["pilot_summary"] = report["summary"]
+    return payload
 
 
 if __name__ == "__main__":
