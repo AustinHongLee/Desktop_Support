@@ -8,12 +8,16 @@ export type IsoWorkflowAction =
   | "plan"
   | "build_rename_plan"
   | "export_plan_csv"
+  | "export_debug_bundle"
   | "start_batch_detect"
   | "job_status"
   | "cancel_job"
   | "apply"
   | "load_profile"
-  | "save_profile";
+  | "save_profile"
+  | "save_draft_profile"
+  | "publish_profile"
+  | "revert_profile";
 
 export interface IsoRegion {
   left: number;
@@ -39,7 +43,16 @@ export interface IsoWorkflowRequest {
   detect_serials?: boolean;
   export_path?: string;
   job_id?: string;
+  run_id?: string;
   rows?: IsoPlanRow[];
+}
+
+export interface IsoRunLogRef {
+  schema_version: number;
+  run_id: string;
+  run_dir: string;
+  run_json: string;
+  events_jsonl: string;
 }
 
 export interface IsoPreviewRequest {
@@ -134,13 +147,18 @@ export interface IsoWorkflowPlan {
   steps: IsoWorkflowStep[];
   rows: IsoPlanRow[];
   issues: IsoWorkflowIssue[];
+  run_log?: IsoRunLogRef;
 }
 
 export interface IsoProfilePayload {
   schema_version: number;
-  action: "discover_sources" | "load_profile" | "save_profile";
+  action: "discover_sources" | "load_profile" | "save_profile" | "save_draft_profile" | "publish_profile" | "revert_profile";
   created_at: string;
   exists: boolean;
+  profile_scope?: "published" | "draft";
+  published_exists?: boolean;
+  draft_exists?: boolean;
+  history_count?: number;
   folder: string;
   folder_exists?: boolean;
   candidate_folders?: string[];
@@ -211,6 +229,16 @@ export interface IsoExportResult {
   message: string;
 }
 
+export interface IsoDebugBundleResult {
+  schema_version: number;
+  action: "export_debug_bundle";
+  created_at: string;
+  run_id: string;
+  export_path: string;
+  included_files: string[];
+  message: string;
+}
+
 export interface IsoJobPayload {
   schema_version: number;
   action: "batch_detect_job";
@@ -228,6 +256,8 @@ export interface IsoJobPayload {
   events: IsoWorkflowIssue[];
   result: IsoWorkflowPlan | null;
   error: string;
+  run_id?: string;
+  run_log?: IsoRunLogRef;
 }
 
 export interface IsoApplyResult {
@@ -242,6 +272,7 @@ export interface IsoApplyResult {
     source_name: string;
     target_name: string;
   }>;
+  run_log?: IsoRunLogRef;
 }
 
 export async function pickIsoCombinePdf(): Promise<string> {
@@ -288,6 +319,10 @@ export async function exportIsoPlanCsv(request: Partial<IsoWorkflowRequest>): Pr
   return invokeJson<IsoExportResult>("run_iso_workflow", { ...request, action: "export_plan_csv" });
 }
 
+export async function exportIsoDebugBundle(request: Pick<IsoWorkflowRequest, "run_id" | "export_path">): Promise<IsoDebugBundleResult> {
+  return invokeJson<IsoDebugBundleResult>("run_iso_workflow", { ...request, action: "export_debug_bundle" });
+}
+
 export async function startIsoBatchDetect(request: Partial<IsoWorkflowRequest>): Promise<IsoJobPayload> {
   return invokeJson<IsoJobPayload>("run_iso_workflow", { ...request, action: "start_batch_detect" });
 }
@@ -306,6 +341,18 @@ export async function loadIsoProfile(request: Partial<IsoWorkflowRequest>): Prom
 
 export async function saveIsoProfile(request: Partial<IsoWorkflowRequest>): Promise<IsoProfilePayload> {
   return invokeJson<IsoProfilePayload>("run_iso_workflow", { ...request, action: "save_profile" });
+}
+
+export async function saveIsoDraftProfile(request: Partial<IsoWorkflowRequest>): Promise<IsoProfilePayload> {
+  return invokeJson<IsoProfilePayload>("run_iso_workflow", { ...request, action: "save_draft_profile" });
+}
+
+export async function publishIsoProfile(request: Partial<IsoWorkflowRequest>): Promise<IsoProfilePayload> {
+  return invokeJson<IsoProfilePayload>("run_iso_workflow", { ...request, action: "publish_profile" });
+}
+
+export async function revertIsoProfile(request: Partial<IsoWorkflowRequest>): Promise<IsoProfilePayload> {
+  return invokeJson<IsoProfilePayload>("run_iso_workflow", { ...request, action: "revert_profile" });
 }
 
 export async function loadIsoPreview(request: IsoPreviewRequest): Promise<IsoPreviewPayload> {

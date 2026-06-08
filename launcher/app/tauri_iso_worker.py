@@ -12,6 +12,7 @@ from launcher.app.tauri_iso_workflow import (
     _build_plan_rows,
     _now,
     _normalize_request,
+    _request_payload,
     _read_json,
     _resolve_iso_records,
     _resolve_pdfs,
@@ -21,6 +22,15 @@ from launcher.app.tauri_iso_workflow import (
     _write_json,
 )
 from launcher.plugins.iso_tools.iso_naming import build_record_lookup
+from launcher.plugins.iso_tools.run_log import (
+    IsoRunLogContext,
+    append_iso_run_event,
+    ensure_iso_run,
+    finish_iso_run_cancelled,
+    finish_iso_run_failure,
+    finish_iso_run_success,
+    public_run_ref,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,9 +53,11 @@ def main(argv: list[str] | None = None) -> int:
 def run_job(job_dir: Path) -> dict[str, Any]:
     request_payload = _read_json(job_dir / "request.json")
     request = IsoWorkflowRequest(**_normalize_request(request_payload))
+    run_context = ensure_iso_run(_request_payload(request), action="start_batch_detect", run_id=request.run_id)
     job = _read_json(job_dir / "job.json")
-    job.update({"state": "running", "updated_at": _now()})
+    job.update({"state": "running", "updated_at": _now(), "run_id": run_context.run_id, "run_log": public_run_ref(run_context)})
     _write_json(job_dir / "job.json", job)
+    append_iso_run_event(run_context, {"code": "JOB_RUNNING", "tone": "ready", "title": "批次判讀開始", "detail": str(job_dir)})
 
     pdfs, source_kind, page_folder, pdf_events = _resolve_pdfs(request)
     request, loaded_profile = _with_profile_defaults(request, resolved_page_folder=page_folder)
@@ -59,7 +71,7 @@ def run_job(job_dir: Path) -> dict[str, Any]:
 
     for index, pdf in enumerate(pdfs, start=1):
         if (job_dir / "cancel.json").exists():
-            return _cancel_job(job_dir, job, rows, events, total)
+            return _cancel_job(job_dir, job, rows, events, total, run_context)
         row, row_events = _build_plan_rows(
             [pdf],
             lookup,
@@ -74,7 +86,7 @@ def run_job(job_dir: Path) -> dict[str, Any]:
         row_payload["page"] = index
         rows.append(row_payload)
         events.extend(row_events)
-        _write_progress(job_dir, job, rows, events, total, source_kind, page_folder, iso_meta, loaded_profile, request)
+        _write_progress(job_dir, job, rows, events, total, source_kind, page_folder, iso_meta, loaded_profile, request, run_context)
 
     result = _result_payload(rows, events, source_kind, page_folder, iso_meta, loaded_profile, request)
     job.update(
@@ -89,6 +101,7 @@ def run_job(job_dir: Path) -> dict[str, Any]:
         }
     )
     _write_json(job_dir / "job.json", job)
+    finish_iso_run_success(run_context, result)
     return job
 
 
@@ -103,9 +116,11 @@ def _write_progress(
     iso_meta: dict[str, Any],
     loaded_profile: dict[str, Any],
     request: IsoWorkflowRequest,
+    run_context: IsoRunLogContext,
 ) -> None:
     done = len(rows)
     percent = round(done / total * 100) if total else 0
+    row_done_event = {"code": "ROW_DONE", "tone": "ready", "title": f"{done}/{total}", "detail": rows[-1]["source_name"]}
     job.update(
         {
             "state": "running",
@@ -115,12 +130,13 @@ def _write_progress(
             "issues": events,
             "events": [
                 *job.get("events", []),
-                {"code": "ROW_DONE", "tone": "ready", "title": f"{done}/{total}", "detail": rows[-1]["source_name"]},
+                row_done_event,
             ],
             "result": _result_payload(rows, events, source_kind, page_folder, iso_meta, loaded_profile, request),
         }
     )
     _write_json(job_dir / "job.json", job)
+    append_iso_run_event(run_context, row_done_event)
 
 
 def _cancel_job(
@@ -129,6 +145,7 @@ def _cancel_job(
     rows: list[dict[str, Any]],
     events: list[dict[str, str]],
     total: int,
+    run_context: IsoRunLogContext | None = None,
 ) -> dict[str, Any]:
     job.update(
         {
@@ -141,6 +158,8 @@ def _cancel_job(
         }
     )
     _write_json(job_dir / "job.json", job)
+    if run_context is not None:
+        finish_iso_run_cancelled(run_context, job)
     return job
 
 
@@ -149,6 +168,13 @@ def _fail_job(job_dir: Path, exc: Exception) -> None:
     job = _read_json(job_path) if job_path.exists() else {}
     job.update({"state": "failed", "updated_at": _now(), "error": str(exc)})
     _write_json(job_path, job)
+    try:
+        request_payload = _read_json(job_dir / "request.json")
+        request = IsoWorkflowRequest(**_normalize_request(request_payload))
+        run_context = ensure_iso_run(_request_payload(request), action="start_batch_detect", run_id=request.run_id or job.get("run_id"))
+        finish_iso_run_failure(run_context, exc, action="start_batch_detect", payload=job)
+    except Exception:
+        pass
 
 
 def _result_payload(

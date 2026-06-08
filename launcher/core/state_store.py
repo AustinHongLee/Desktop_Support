@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from launcher.core.context_model import LauncherContext
+from launcher.core.paths import default_state_path as _default_state_path
 
 SCHEMA_VERSION = 1
 ISO_NAMING_PROFILE_LIMIT = 50
@@ -15,10 +17,7 @@ SUPPORTED_THEME_NAMES = {"graphite-light", "graphite-dark", "engineering-blue-2"
 
 
 def default_state_path() -> Path:
-    root = os.environ.get("LOCALAPPDATA")
-    if root:
-        return Path(root) / "EngineeringLauncher" / "state.json"
-    return Path.home() / ".engineering_launcher" / "state.json"
+    return _default_state_path()
 
 
 @dataclass(frozen=True)
@@ -203,20 +202,111 @@ class AppStateStore:
         self._save()
 
     def iso_naming_profile(self, folder: Path) -> dict[str, Any] | None:
+        record = self._iso_naming_profile_record(folder)
+        if record is None:
+            return None
+        published = record.get("published")
+        return dict(published) if isinstance(published, dict) else None
+
+    def iso_naming_profile_draft(self, folder: Path) -> dict[str, Any] | None:
+        record = self._iso_naming_profile_record(folder)
+        if record is None:
+            return None
+        draft = record.get("draft")
+        return dict(draft) if isinstance(draft, dict) else None
+
+    def iso_naming_profile_history(self, folder: Path) -> list[dict[str, Any]]:
+        record = self._iso_naming_profile_record(folder)
+        if record is None:
+            return []
+        history = record.get("history")
+        return [dict(item) for item in history if isinstance(item, dict)] if isinstance(history, list) else []
+
+    def set_iso_naming_profile(self, folder: Path, payload: dict[str, Any]) -> None:
+        record = self._iso_naming_profile_record(folder) or _empty_iso_profile_record()
+        current = record.get("published")
+        if isinstance(current, dict) and current != payload:
+            record["history"] = _prepend_profile_history(record.get("history"), current, event="publish")
+        record["published"] = dict(payload)
+        record["published_at"] = _now()
+        record["draft"] = None
+        record["draft_updated_at"] = None
+        self._set_iso_naming_profile_record(folder, record)
+
+    def set_iso_naming_profile_draft(self, folder: Path, payload: dict[str, Any]) -> None:
+        record = self._iso_naming_profile_record(folder) or _empty_iso_profile_record()
+        record["draft"] = dict(payload)
+        record["draft_updated_at"] = _now()
+        self._set_iso_naming_profile_record(folder, record)
+
+    def publish_iso_naming_profile(self, folder: Path, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        record = self._iso_naming_profile_record(folder) or _empty_iso_profile_record()
+        next_profile = dict(payload) if payload is not None else record.get("draft")
+        if not isinstance(next_profile, dict):
+            raise ValueError("沒有可發布的 ISO profile 草稿。")
+        current = record.get("published")
+        if isinstance(current, dict) and current != next_profile:
+            record["history"] = _prepend_profile_history(record.get("history"), current, event="publish")
+        record["published"] = dict(next_profile)
+        record["published_at"] = _now()
+        record["draft"] = None
+        record["draft_updated_at"] = None
+        self._set_iso_naming_profile_record(folder, record)
+        return dict(next_profile)
+
+    def revert_iso_naming_profile(self, folder: Path) -> dict[str, Any]:
+        record = self._iso_naming_profile_record(folder)
+        if record is None:
+            raise ValueError("找不到可回復的 ISO profile。")
+        history = record.get("history")
+        if not isinstance(history, list) or not history:
+            raise ValueError("沒有 ISO profile 歷史版本可回復。")
+        previous = history.pop(0)
+        previous_profile = previous.get("profile") if isinstance(previous, dict) else None
+        if not isinstance(previous_profile, dict):
+            raise ValueError("ISO profile 歷史版本格式不正確。")
+        current = record.get("published")
+        if isinstance(current, dict):
+            history = _prepend_profile_history(history, current, event="revert_from")
+        record["published"] = dict(previous_profile)
+        record["published_at"] = _now()
+        record["history"] = history[:ISO_NAMING_PROFILE_LIMIT]
+        self._set_iso_naming_profile_record(folder, record)
+        return dict(previous_profile)
+
+    def _iso_naming_profile_record(self, folder: Path) -> dict[str, Any] | None:
         profiles = self._data.get("iso_naming_profiles", {})
         if not isinstance(profiles, dict):
             return None
         payload = profiles.get(_path_key(folder))
-        return dict(payload) if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            return None
+        if _is_iso_profile_record(payload):
+            return {
+                "schema_version": 2,
+                "published": dict(payload["published"]) if isinstance(payload.get("published"), dict) else None,
+                "published_at": payload.get("published_at"),
+                "draft": dict(payload["draft"]) if isinstance(payload.get("draft"), dict) else None,
+                "draft_updated_at": payload.get("draft_updated_at"),
+                "history": [dict(item) for item in payload.get("history", []) if isinstance(item, dict)],
+            }
+        return {
+            "schema_version": 2,
+            "published": dict(payload),
+            "published_at": None,
+            "draft": None,
+            "draft_updated_at": None,
+            "history": [],
+        }
 
-    def set_iso_naming_profile(self, folder: Path, payload: dict[str, Any]) -> None:
+    def _set_iso_naming_profile_record(self, folder: Path, record: dict[str, Any]) -> None:
         key = _path_key(folder)
         profiles = self._data.get("iso_naming_profiles", {})
         if not isinstance(profiles, dict):
             profiles = {}
         order = [str(item) for item in self._data.get("iso_naming_profile_order", [])]
         order = [key, *[item for item in order if item != key]][:ISO_NAMING_PROFILE_LIMIT]
-        profiles[key] = dict(payload)
+        profiles[key] = dict(record)
         self._data["iso_naming_profile_order"] = order
         self._data["iso_naming_profiles"] = {
             item: profiles[item] for item in order if item in profiles
@@ -269,3 +359,34 @@ def _context_key(item: dict[str, Any]) -> str:
 
 def _path_key(path: Path) -> str:
     return str(path.expanduser().resolve())
+
+
+def _empty_iso_profile_record() -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "published": None,
+        "published_at": None,
+        "draft": None,
+        "draft_updated_at": None,
+        "history": [],
+    }
+
+
+def _is_iso_profile_record(payload: dict[str, Any]) -> bool:
+    return payload.get("schema_version") == 2 and any(key in payload for key in ("published", "draft", "history"))
+
+
+def _prepend_profile_history(history: Any, profile: dict[str, Any], *, event: str) -> list[dict[str, Any]]:
+    items = [dict(item) for item in history if isinstance(item, dict)] if isinstance(history, list) else []
+    return [
+        {
+            "event": event,
+            "created_at": _now(),
+            "profile": dict(profile),
+        },
+        *items,
+    ][:ISO_NAMING_PROFILE_LIMIT]
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")

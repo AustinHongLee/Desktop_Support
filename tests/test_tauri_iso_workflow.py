@@ -21,6 +21,9 @@ from launcher.app.tauri_iso_workflow import (
     export_plan_csv,
     load_iso_profile,
     load_iso_table,
+    publish_iso_profile_action,
+    revert_iso_profile_action,
+    save_iso_draft_profile,
     save_iso_profile,
     split_iso_pdf,
 )
@@ -243,6 +246,96 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(restored["serial_col"], 2)
         self.assertEqual(restored["line_col"], 5)
         self.assertEqual(restored["pattern"], "{serial}-{line}.pdf")
+
+    def test_save_draft_profile_does_not_change_published_plan_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state.json"
+            folder = root / "job"
+            folder.mkdir()
+            pdf = folder / "combine.pdf"
+            iso_list = folder / "iso_list.xlsx"
+            _write_pdf(pdf, pages=1)
+            _write_iso_list(iso_list)
+            save_iso_naming_profile(
+                AppStateStore(state_path),
+                folder,
+                IsoNamingProfile(
+                    pattern="{serial}_{line}.pdf",
+                    iso_list_path=iso_list,
+                    sheet_name="ISO",
+                    serial_col=0,
+                    line_col=1,
+                ),
+            )
+
+            with patch.dict(os.environ, {"DESKTOP_SUPPORT_STATE_PATH": str(state_path)}):
+                draft = save_iso_draft_profile(
+                    IsoWorkflowRequest(
+                        action="save_draft_profile",
+                        profile_folder=folder,
+                        iso_list=iso_list,
+                        sheet_name="ISO",
+                        serial_col=0,
+                        line_col=1,
+                        pattern="{serial}-{line}.pdf",
+                    )
+                )
+                plan = build_iso_plan(IsoWorkflowRequest(action="plan", work_folder=folder))
+
+        self.assertEqual(draft["profile_scope"], "draft")
+        self.assertTrue(draft["published_exists"])
+        self.assertTrue(draft["draft_exists"])
+        self.assertEqual(plan["source"]["pattern"], "{serial}_{line}.pdf")
+        self.assertEqual(plan["rows"][0]["new_name"], "1_PIPE-A.pdf")
+
+    def test_publish_and_revert_profile_actions_control_plan_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_path = root / "state.json"
+            folder = root / "job"
+            folder.mkdir()
+            pdf = folder / "combine.pdf"
+            iso_list = folder / "iso_list.xlsx"
+            _write_pdf(pdf, pages=1)
+            _write_iso_list(iso_list)
+            save_iso_naming_profile(
+                AppStateStore(state_path),
+                folder,
+                IsoNamingProfile(
+                    pattern="{serial}_{line}.pdf",
+                    iso_list_path=iso_list,
+                    sheet_name="ISO",
+                    serial_col=0,
+                    line_col=1,
+                ),
+            )
+
+            with patch.dict(os.environ, {"DESKTOP_SUPPORT_STATE_PATH": str(state_path)}):
+                save_iso_draft_profile(
+                    IsoWorkflowRequest(
+                        action="save_draft_profile",
+                        profile_folder=folder,
+                        iso_list=iso_list,
+                        sheet_name="ISO",
+                        serial_col=0,
+                        line_col=1,
+                        pattern="{serial}-{line}.pdf",
+                    )
+                )
+                published = publish_iso_profile_action(IsoWorkflowRequest(action="publish_profile", profile_folder=folder))
+                plan_after_publish = build_iso_plan(IsoWorkflowRequest(action="plan", work_folder=folder))
+                reverted = revert_iso_profile_action(IsoWorkflowRequest(action="revert_profile", profile_folder=folder))
+                plan_after_revert = build_iso_plan(IsoWorkflowRequest(action="plan", work_folder=folder))
+
+        self.assertEqual(published["profile_scope"], "published")
+        self.assertFalse(published["draft_exists"])
+        self.assertGreaterEqual(published["history_count"], 1)
+        self.assertEqual(plan_after_publish["source"]["pattern"], "{serial}-{line}.pdf")
+        self.assertEqual(plan_after_publish["rows"][0]["new_name"], "1-PIPE-A.pdf")
+        self.assertEqual(reverted["pattern"], "{serial}_{line}.pdf")
+        self.assertGreaterEqual(reverted["history_count"], 1)
+        self.assertEqual(plan_after_revert["rows"][0]["new_name"], "1_PIPE-A.pdf")
 
     def test_build_iso_plan_uses_profile_defaults_when_request_omits_iso_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -13,7 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from launcher.core.paths import PROJECT_ROOT_ENV, STATE_PATH_ENV, runtime_root
 from launcher.core.state_store import AppStateStore
+from launcher.plugins.iso_tools.debug_bundle import export_iso_debug_bundle
 from launcher.plugins.iso_tools.iso_naming import (
     IsoRecord,
     build_record_lookup,
@@ -26,14 +28,30 @@ from launcher.plugins.iso_tools.iso_naming import (
     records_from_table,
     split_pdf_to_pages,
 )
-from launcher.plugins.iso_tools.profile import IsoNamingProfile, load_iso_naming_profile, save_iso_naming_profile
+from launcher.plugins.iso_tools.profile import (
+    IsoNamingProfile,
+    iso_naming_profile_history,
+    load_iso_naming_profile,
+    load_iso_naming_profile_draft,
+    publish_iso_naming_profile,
+    revert_iso_naming_profile,
+    save_iso_naming_profile,
+    save_iso_naming_profile_draft,
+)
+from launcher.plugins.iso_tools.run_log import (
+    ensure_iso_run,
+    finish_iso_run_failure,
+    finish_iso_run_success,
+    mark_iso_run_started,
+    public_run_ref,
+    start_iso_run,
+)
 from launcher.plugins.iso_tools.serial_correction import correct_result_with_iso_lookup
 from launcher.plugins.iso_tools.serial_vision import DEFAULT_SERIAL_REGION, SerialVisionRegion, SerialVisionResult
 from launcher.plugins.rename_tools.rename_actions import RenameOperation, _apply_operations, _validate_file_name, _validate_operations
 
 SERIAL_AUTO_FILL_CONFIDENCE = 0.70
 DEFAULT_PATTERN = "{serial}--{line}.pdf"
-STATE_PATH_ENV = "DESKTOP_SUPPORT_STATE_PATH"
 
 
 @dataclass(frozen=True)
@@ -54,44 +72,72 @@ class IsoWorkflowRequest:
     detect_serials: bool = False
     export_path: Path | None = None
     job_id: str | None = None
+    run_id: str | None = None
     rows: tuple[dict[str, Any], ...] = ()
 
 
 def main() -> int:
     _configure_stdio()
+    run_context = None
+    request: IsoWorkflowRequest | None = None
     try:
         request = IsoWorkflowRequest(**_normalize_request(json.loads(_read_stdin_json() or "{}")))
-        if request.action == "discover_sources":
-            payload = discover_sources(request)
-        elif request.action == "split_pdf":
-            payload = split_iso_pdf(request)
-        elif request.action == "load_iso_table":
-            payload = load_iso_table(request)
-        elif request.action == "plan":
-            payload = build_iso_plan(request)
-        elif request.action == "build_rename_plan":
-            payload = build_rename_plan(request)
-        elif request.action == "export_plan_csv":
-            payload = export_plan_csv(request)
-        elif request.action == "start_batch_detect":
-            payload = start_batch_detect(request)
-        elif request.action == "job_status":
-            payload = iso_job_status(request)
-        elif request.action == "cancel_job":
-            payload = cancel_iso_job(request)
-        elif request.action == "apply":
-            payload = apply_iso_plan(request)
-        elif request.action == "load_profile":
-            payload = load_iso_profile(request)
-        elif request.action == "save_profile":
-            payload = save_iso_profile(request)
-        else:
-            raise ValueError(f"unknown action: {request.action}")
+        if _should_write_run_log(request):
+            if request.run_id:
+                run_context = ensure_iso_run(_request_payload(request), action=request.action, run_id=request.run_id)
+            else:
+                run_context = start_iso_run(_request_payload(request), action=request.action)
+            request = replace(request, run_id=run_context.run_id)
+        payload = _dispatch_request(request)
+        if run_context is not None:
+            if request.action == "start_batch_detect":
+                mark_iso_run_started(run_context, payload)
+            else:
+                finish_iso_run_success(run_context, payload)
+            payload = {**payload, "run_log": public_run_ref(run_context)}
         print(json.dumps(payload, ensure_ascii=False), flush=True)
         return 0
     except Exception as exc:
+        if run_context is not None:
+            finish_iso_run_failure(run_context, exc, action=request.action if request is not None else None)
         print(str(exc), file=sys.stderr, flush=True)
         return 1
+
+
+def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
+    if request.action == "discover_sources":
+        return discover_sources(request)
+    if request.action == "split_pdf":
+        return split_iso_pdf(request)
+    if request.action == "load_iso_table":
+        return load_iso_table(request)
+    if request.action == "plan":
+        return build_iso_plan(request)
+    if request.action == "build_rename_plan":
+        return build_rename_plan(request)
+    if request.action == "export_plan_csv":
+        return export_plan_csv(request)
+    if request.action == "export_debug_bundle":
+        return export_debug_bundle(request)
+    if request.action == "start_batch_detect":
+        return start_batch_detect(request)
+    if request.action == "job_status":
+        return iso_job_status(request)
+    if request.action == "cancel_job":
+        return cancel_iso_job(request)
+    if request.action == "apply":
+        return apply_iso_plan(request)
+    if request.action == "load_profile":
+        return load_iso_profile(request)
+    if request.action == "save_profile":
+        return save_iso_profile(request)
+    if request.action == "save_draft_profile":
+        return save_iso_draft_profile(request)
+    if request.action == "publish_profile":
+        return publish_iso_profile_action(request)
+    if request.action == "revert_profile":
+        return revert_iso_profile_action(request)
+    raise ValueError(f"unknown action: {request.action}")
 
 
 def build_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -247,6 +293,62 @@ def save_iso_profile(request: IsoWorkflowRequest) -> dict[str, Any]:
     )
 
 
+def save_iso_draft_profile(request: IsoWorkflowRequest) -> dict[str, Any]:
+    folder = _profile_folder(request)
+    if folder is None:
+        raise ValueError("請先選擇工作資料夾，才能儲存 ISO profile 草稿。")
+    store = _state_store()
+    existing = load_iso_naming_profile_draft(store, folder) or load_iso_naming_profile(store, folder)
+    profile = _profile_from_request(request, existing or IsoNamingProfile())
+    save_iso_naming_profile_draft(store, folder, profile)
+    return _profile_response(
+        action="save_draft_profile",
+        folder=folder,
+        profile=profile,
+        exists=True,
+        candidates=_profile_folder_candidates(request),
+        message=f"已儲存 ISO profile 草稿：{folder}",
+        profile_scope="draft",
+    )
+
+
+def publish_iso_profile_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    folder = _profile_folder(request)
+    if folder is None:
+        raise ValueError("請先選擇工作資料夾，才能發布 ISO profile。")
+    store = _state_store()
+    draft = load_iso_naming_profile_draft(store, folder)
+    existing = load_iso_naming_profile(store, folder)
+    profile = _profile_from_request(request, draft or existing or IsoNamingProfile()) if _request_has_profile_values(request) else None
+    published = publish_iso_naming_profile(store, folder, profile)
+    return _profile_response(
+        action="publish_profile",
+        folder=folder,
+        profile=published,
+        exists=True,
+        candidates=_profile_folder_candidates(request),
+        message=f"已發布 ISO profile：{folder}",
+        profile_scope="published",
+    )
+
+
+def revert_iso_profile_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    folder = _profile_folder(request)
+    if folder is None:
+        raise ValueError("請先選擇工作資料夾，才能回復 ISO profile。")
+    store = _state_store()
+    profile = revert_iso_naming_profile(store, folder)
+    return _profile_response(
+        action="revert_profile",
+        folder=folder,
+        profile=profile,
+        exists=True,
+        candidates=_profile_folder_candidates(request),
+        message=f"已回復上一版 ISO profile：{folder}",
+        profile_scope="published",
+    )
+
+
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
     operations = [
         RenameOperation(Path(row["source_path"]), Path(row["target_path"]))
@@ -327,11 +429,19 @@ def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:
     }
 
 
+def export_debug_bundle(request: IsoWorkflowRequest) -> dict[str, Any]:
+    if not request.run_id:
+        raise ValueError("缺少 run_id，無法匯出 ISO 問題包。")
+    return export_iso_debug_bundle(request.run_id, request.export_path)
+
+
 def start_batch_detect(request: IsoWorkflowRequest) -> dict[str, Any]:
     job_id = request.job_id or uuid.uuid4().hex
     job_dir = _job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
     job = _initial_job_payload(job_id, "queued")
+    if request.run_id:
+        job["run_id"] = request.run_id
     _write_json(job_dir / "job.json", job)
     _write_json(job_dir / "request.json", _request_payload(request))
     _spawn_iso_worker(job_dir)
@@ -670,6 +780,7 @@ def _normalize_request(payload: dict[str, Any]) -> dict[str, Any]:
         "detect_serials": bool(payload.get("detect_serials")),
         "export_path": _path_or_none(payload.get("export_path")),
         "job_id": str(payload.get("job_id") or "").strip() or None,
+        "run_id": str(payload.get("run_id") or "").strip() or None,
         "rows": tuple(payload.get("rows") or ()),
     }
 
@@ -704,10 +815,10 @@ def _job_root() -> Path:
     root = os.environ.get("DESKTOP_SUPPORT_JOB_ROOT")
     if root:
         return Path(root)
-    project_root = os.environ.get("DESKTOP_SUPPORT_PROJECT_ROOT")
+    project_root = os.environ.get(PROJECT_ROOT_ENV)
     if project_root:
         return Path(project_root) / ".runtime" / "jobs" / "iso"
-    return Path.cwd() / ".runtime" / "jobs" / "iso"
+    return runtime_root() / ".runtime" / "jobs" / "iso"
 
 
 def _job_dir(job_id: str) -> Path:
@@ -760,7 +871,15 @@ def _request_payload(request: IsoWorkflowRequest) -> dict[str, Any]:
         "drawing_region": request.drawing_region,
         "confidence_threshold": request.confidence_threshold,
         "detect_serials": request.detect_serials,
+        "export_path": str(request.export_path or ""),
+        "job_id": request.job_id,
+        "run_id": request.run_id,
+        "rows": list(request.rows),
     }
+
+
+def _should_write_run_log(request: IsoWorkflowRequest) -> bool:
+    return request.action in {"plan", "build_rename_plan", "start_batch_detect", "apply"}
 
 
 def _spawn_iso_worker(job_dir: Path) -> None:
@@ -922,14 +1041,27 @@ def _profile_response(
     exists: bool,
     candidates: list[Path],
     message: str,
+    profile_scope: str = "published",
 ) -> dict[str, Any]:
     payload = profile.to_payload()
     discovery = _source_discovery(folder=folder, profile=profile)
+    draft_exists = False
+    published_exists = exists
+    history_count = 0
+    if folder is not None:
+        store = _state_store()
+        draft_exists = load_iso_naming_profile_draft(store, folder) is not None
+        published_exists = load_iso_naming_profile(store, folder) is not None
+        history_count = len(iso_naming_profile_history(store, folder))
     return {
         "schema_version": 1,
         "action": action,
         "created_at": _now(),
         "exists": exists,
+        "profile_scope": profile_scope,
+        "published_exists": published_exists,
+        "draft_exists": draft_exists,
+        "history_count": history_count,
         "folder": str(folder or ""),
         "folder_exists": bool(folder and folder.exists()),
         "candidate_folders": [str(candidate) for candidate in candidates],
@@ -944,6 +1076,22 @@ def _profile_response(
         **discovery,
         "message": message,
     }
+
+
+def _request_has_profile_values(request: IsoWorkflowRequest) -> bool:
+    return any(
+        value is not None and value != ""
+        for value in (
+            request.serial_region,
+            request.drawing_region,
+            request.confidence_threshold,
+            request.pattern,
+            request.iso_list,
+            request.sheet_name,
+            request.serial_col,
+            request.line_col,
+        )
+    )
 
 
 def _source_discovery(*, folder: Path | None, profile: IsoNamingProfile) -> dict[str, Any]:

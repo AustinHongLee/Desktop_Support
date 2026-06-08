@@ -50,6 +50,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   applyIsoPlan,
   cancelIsoJob,
+  exportIsoDebugBundle,
   exportIsoPlanCsv,
   loadIsoJobStatus,
   loadIsoProfile,
@@ -58,18 +59,22 @@ import {
   pickIsoListFile,
   pickIsoPageFolder,
   pickIsoWorkFolder,
+  publishIsoProfile,
+  revertIsoProfile,
   runIsoPlan,
-  saveIsoProfile,
+  saveIsoDraftProfile,
   startIsoBatchDetect,
   type IsoJobPayload,
   type IsoPlanRow,
   type IsoProfilePayload,
   type IsoPreviewPayload,
   type IsoRegion,
+  type IsoRunLogRef,
   type IsoWorkflowIssue,
   type IsoWorkflowRequest,
   type IsoWorkflowPlan,
 } from "./isoWorkflow";
+import { FailureCard, type IsoFailureInfo } from "./iso/components/FailureCard";
 import { openLegacyWorkbench, type LegacyWorkbench } from "./legacy";
 import { loadShutdownReport, type SafeToKill, type ShutdownBlocker, type ShutdownSafetyReport } from "./report";
 
@@ -175,7 +180,6 @@ export default function App() {
   const dockDragSnapArmedRef = useRef(false);
   const dockDragSnapTimerRef = useRef<number | undefined>(undefined);
   const dockDragDisarmTimerRef = useRef<number | undefined>(undefined);
-  const focusExpandArmedRef = useRef(false);
 
   async function refresh() {
     setBusy(true);
@@ -199,10 +203,10 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!reportLoaded && (surface === "cockpit" || !dockCollapsed)) {
+    if (!reportLoaded && surface === "cockpit" && mode === "shutdown") {
       void refresh();
     }
-  }, [dockCollapsed, reportLoaded, surface]);
+  }, [mode, reportLoaded, surface]);
 
   useEffect(() => {
     void applyWindowSurface(surface, dockCollapsed, dockEdge, dockOffset);
@@ -219,10 +223,6 @@ export default function App() {
     }
 
     let unlisten: (() => void) | undefined;
-    const armFocusExpand = window.setTimeout(() => {
-      focusExpandArmedRef.current = true;
-    }, 350);
-
     void getCurrentWindow().onCloseRequested((event) => {
       event.preventDefault();
       void getCurrentWindow().hide().catch(() => {
@@ -234,17 +234,27 @@ export default function App() {
     });
 
     return () => {
-      window.clearTimeout(armFocusExpand);
       unlisten?.();
     };
   }, []);
 
   useEffect(() => {
     function handleSurfaceEvent(event: Event) {
-      const detail = (event as CustomEvent<{ surface?: SurfaceMode; collapsed?: boolean }>).detail;
+      const detail = (event as CustomEvent<{ surface?: SurfaceMode; collapsed?: boolean; mode?: AppMode; refresh?: boolean; quitReason?: string }>).detail;
       if (detail?.surface === "cockpit") {
+        if (isAppMode(detail.mode)) {
+          setMode(detail.mode);
+        }
         setSurface("cockpit");
         setDockCollapsed(false);
+        if (detail.refresh) {
+          setReportLoaded(false);
+        }
+        if (detail.quitReason === "blocked") {
+          setError("Quit paused: review Shutdown Safety blockers before exiting.");
+        } else if (detail.quitReason === "scan_failed") {
+          setError("Quit paused: Shutdown Safety scan failed. Review the cockpit before exiting.");
+        }
         return;
       }
       if (detail?.surface === "dock") {
@@ -308,29 +318,6 @@ export default function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!isTauri()) {
-      return;
-    }
-
-    let unlisten: (() => void) | undefined;
-    void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-      if (focused && focusExpandArmedRef.current && surfaceRef.current === "dock" && dockCollapsedRef.current) {
-        window.setTimeout(() => {
-          if (!dockDragSnapArmedRef.current && surfaceRef.current === "dock" && dockCollapsedRef.current) {
-            setDockCollapsed(false);
-          }
-        }, 80);
-      }
-    }).then((handler) => {
-      unlisten = handler;
-    });
-
-    return () => {
-      unlisten?.();
-    };
-  }, []);
-
   const blockers = useMemo(() => {
     const items = report?.blockers ?? [];
     const filtered = levelFilter === "All" ? items : items.filter((blocker) => blocker.safe_to_kill === levelFilter);
@@ -346,9 +333,6 @@ export default function App() {
     setMode(nextMode);
     setDockCollapsed(false);
     setSurface("cockpit");
-    if (!reportLoaded) {
-      void refresh();
-    }
   }
 
   function collapseToDock() {
@@ -1052,13 +1036,18 @@ function IsoPdfAutopilot() {
   const [resultOpen, setResultOpen] = useState(false);
   const [oneClickStage, setOneClickStage] = useState<"idle" | "running" | "applying" | "review" | "done">("idle");
   const [recordPath, setRecordPath] = useState("");
+  const [activeIsoRunId, setActiveIsoRunId] = useState("");
+  const [oneClickRunLog, setOneClickRunLog] = useState<IsoRunLogRef | null>(null);
+  const [isoFailure, setIsoFailure] = useState<IsoFailureInfo | null>(null);
+  const [failureCopied, setFailureCopied] = useState(false);
+  const [debugBundleBusy, setDebugBundleBusy] = useState(false);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
   const oneClickActiveRef = useRef(false);
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const previewCacheRef = useRef(new Map<string, IsoPreviewPayload>());
 
-  function requestPayload(rows?: IsoPlanRow[]) {
+  function requestPayload(rows?: IsoPlanRow[], overrides: Partial<IsoWorkflowRequest> = {}) {
     return {
       action: rows ? "apply" as const : "plan" as const,
       profile_folder: activeProfileFolder(),
@@ -1074,6 +1063,7 @@ function IsoPdfAutopilot() {
       drawing_region: drawingRegion,
       confidence_threshold: confidenceThreshold,
       detect_serials: detectSerials,
+      run_id: overrides.run_id || activeIsoRunId || undefined,
       rows,
     };
   }
@@ -1143,10 +1133,89 @@ function IsoPdfAutopilot() {
     if (result.detected_iso_list) {
       parts.push(`ISO ${compactPath(result.detected_iso_list)}`);
     }
-    if (result.exists) {
+    if (result.published_exists ?? result.exists) {
       parts.push(`Profile ${compactPath(result.folder)}`);
+    } else if (result.draft_exists) {
+      parts.push("Profile draft");
     }
     return parts.length ? `已自動載入：${parts.join(" · ")}` : fallback;
+  }
+
+  function registerRunLog(ref?: IsoRunLogRef | null, fallbackRunId = "") {
+    if (ref) {
+      setOneClickRunLog(ref);
+      setActiveIsoRunId(ref.run_id);
+      return ref.run_id;
+    }
+    if (fallbackRunId) {
+      setActiveIsoRunId(fallbackRunId);
+      return fallbackRunId;
+    }
+    return activeIsoRunId;
+  }
+
+  function setOneClickFailure(title: string, caught: unknown, runId = activeIsoRunId, runLog = oneClickRunLog) {
+    const detail = caught instanceof Error ? caught.message : String(caught || "");
+    const knownRunId = runLog?.run_id || runId || activeIsoRunId;
+    setFailureCopied(false);
+    setIsoFailure({
+      run_id: knownRunId || undefined,
+      title,
+      summary: detail || "ISO 一鍵命名沒有完成，請把此 Run ID 交給工程師檢查。",
+      detail: runLog?.run_json ? `run log: ${compactPath(runLog.run_json)}` : "",
+      run_json: runLog?.run_json,
+      events_jsonl: runLog?.events_jsonl,
+    });
+  }
+
+  async function copyFailureForEngineer() {
+    if (!isoFailure) {
+      return;
+    }
+    const text = [
+      "ISO 一鍵命名失敗摘要",
+      `Run ID: ${isoFailure.run_id || "未取得"}`,
+      `原因: ${isoFailure.summary}`,
+      isoFailure.run_json ? `Run log: ${isoFailure.run_json}` : "",
+      isoFailure.events_jsonl ? `Events: ${isoFailure.events_jsonl}` : "",
+      workFolder ? `工作資料夾: ${workFolder}` : "",
+      combinePdf ? `Combine PDF: ${combinePdf}` : "",
+      pageFolder ? `Page folder: ${pageFolder}` : "",
+      isoList ? `ISO List: ${isoList}` : "",
+    ].filter(Boolean).join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setFailureCopied(true);
+      setMessage("已複製 ISO 失敗摘要。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function exportFailureBundle() {
+    if (!isoFailure?.run_id) {
+      setError("缺少 run_id，無法匯出問題包。");
+      return;
+    }
+    setDebugBundleBusy(true);
+    setError("");
+    try {
+      const result = await exportIsoDebugBundle({ run_id: isoFailure.run_id });
+      setMessage(result.message);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setDebugBundleBusy(false);
+    }
+  }
+
+  function openFailureWorkbench() {
+    const firstProblem = plan?.rows.find((row) => row.status === "blocked" || row.status === "warn");
+    if (firstProblem) {
+      setSelectedRowId(firstProblem.id);
+      setProblemOnly(true);
+    }
+    setIsoView("workbench");
   }
 
   async function chooseWorkFolder() {
@@ -1157,6 +1226,7 @@ function IsoPdfAutopilot() {
         setCombinePdf("");
         setPageFolder("");
         setPlan(null);
+        setIsoFailure(null);
         const restored = await restoreProfile({ work_folder: path }, { syncPageFolder: true });
         setMessage(sourceLoadMessage(restored, "已選工作資料夾，可直接產生命名草稿。"));
       }
@@ -1174,6 +1244,7 @@ function IsoPdfAutopilot() {
         const folder = parentPath(path);
         setWorkFolder(folder);
         setPlan(null);
+        setIsoFailure(null);
         const restored = await restoreProfile({ work_folder: folder, combine_pdf: path }, { syncPageFolder: true });
         setMessage(sourceLoadMessage(restored, "已選 Combine PDF，可直接產生命名草稿。"));
       }
@@ -1190,6 +1261,7 @@ function IsoPdfAutopilot() {
         setCombinePdf("");
         setWorkFolder(path);
         setPlan(null);
+        setIsoFailure(null);
         const restored = await restoreProfile({ work_folder: path, page_folder: path });
         setMessage(sourceLoadMessage(restored, "已選 Page folder，可直接產生命名草稿。"));
       }
@@ -1204,6 +1276,7 @@ function IsoPdfAutopilot() {
       if (path) {
         setIsoList(path);
         setPlan(null);
+        setIsoFailure(null);
         setProfile((current) => current ? { ...current, iso_list_path: path } : current);
       }
     } catch (caught) {
@@ -1227,7 +1300,7 @@ function IsoPdfAutopilot() {
       setResultOpen(true);
       let profileNote = "";
       try {
-        const savedProfile = await saveIsoProfile({
+        const savedProfile = await saveIsoDraftProfile({
           profile_folder:
             result.source.profile?.folder ||
             result.source.work_folder ||
@@ -1247,15 +1320,84 @@ function IsoPdfAutopilot() {
           drawing_region: drawingRegion,
         });
         setProfile(savedProfile);
-        profileNote = " Profile 已保存。";
+        profileNote = " Profile 草稿已保存（未發布到一鍵）。";
       } catch (caught) {
-        profileNote = ` Profile 保存失敗：${caught instanceof Error ? caught.message : String(caught)}`;
+        profileNote = ` Profile 草稿保存失敗：${caught instanceof Error ? caught.message : String(caught)}`;
       }
       setMessage(`已產生命名草稿：${result.summary.selected} / ${result.summary.total} 可套用。${profileNote}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function publishProfileToOneClick() {
+    if (!isTauri()) {
+      setError("請用 Tauri 桌面版發布 Profile。");
+      return;
+    }
+    const folder = activeProfileFolder();
+    if (!folder) {
+      setError("請先選擇工作資料夾或來源檔案，才能發布 Profile。");
+      return;
+    }
+    setProfileBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await publishIsoProfile({
+        profile_folder: folder,
+        work_folder: workFolder,
+        combine_pdf: combinePdf,
+        page_folder: pageFolder,
+        iso_list: isoList,
+        sheet_name: sheetName,
+        serial_col: serialCol,
+        line_col: lineCol,
+        pattern,
+        confidence_threshold: confidenceThreshold,
+        serial_region: serialRegion,
+        drawing_region: drawingRegion,
+      });
+      setProfile(result);
+      applyProfile(result);
+      setMessage(`已發布 Profile 到一鍵：${compactPath(result.folder)}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function revertPublishedProfile() {
+    if (!isTauri()) {
+      setError("請用 Tauri 桌面版回復 Profile。");
+      return;
+    }
+    const folder = activeProfileFolder();
+    if (!folder) {
+      setError("請先選擇工作資料夾或來源檔案，才能回復 Profile。");
+      return;
+    }
+    setProfileBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await revertIsoProfile({
+        profile_folder: folder,
+        work_folder: workFolder,
+        combine_pdf: combinePdf,
+        page_folder: pageFolder,
+        iso_list: isoList,
+      });
+      setProfile(result);
+      applyProfile(result);
+      setMessage(`已回復上一版 Profile：${compactPath(result.folder)}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setProfileBusy(false);
     }
   }
 
@@ -1323,6 +1465,9 @@ function IsoPdfAutopilot() {
       setPlan(null);
       setOneClickStage("idle");
       setRecordPath("");
+      setActiveIsoRunId("");
+      setOneClickRunLog(null);
+      setIsoFailure(null);
       setMessage("");
       return;
     }
@@ -1353,12 +1498,19 @@ function IsoPdfAutopilot() {
     setRecordPath("");
     setPlan(null);
     setRunStartedAt(Date.now());
+    const runId = createIsoRunId();
+    setActiveIsoRunId(runId);
+    setOneClickRunLog(null);
+    setIsoFailure(null);
+    setFailureCopied(false);
     oneClickActiveRef.current = true;
     try {
-      const job = await startIsoBatchDetect({ ...requestPayload(), detect_serials: true });
+      const job = await startIsoBatchDetect({ ...requestPayload(undefined, { run_id: runId }), detect_serials: true });
+      registerRunLog(job.run_log, runId);
       setBatchJob(job);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      setOneClickFailure("一鍵命名啟動失敗", caught, runId);
       setOneClickStage("idle");
       oneClickActiveRef.current = false;
     }
@@ -1402,6 +1554,7 @@ function IsoPdfAutopilot() {
         recordWarning = `更名記錄寫入失敗:${recErr instanceof Error ? recErr.message : String(recErr)} `;
       }
       const result = await applyIsoPlan(requestPayload(applyRows));
+      registerRunLog(result.run_log);
       const renamedIds = new Set(applyRows.map((row) => row.id));
       updatePlanRows((rows) => rows.filter((row) => !renamedIds.has(row.id)));
       setSelectedRowId(currentPlan.rows.find((row) => !renamedIds.has(row.id))?.id ?? "");
@@ -1409,6 +1562,7 @@ function IsoPdfAutopilot() {
       setMessage(`${recordWarning}${result.message}${recPath ? ` 記錄已存:${recPath}` : ""}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      setOneClickFailure("套用更名失敗", caught);
       setOneClickStage("review");
     } finally {
       setApplyBusy(false);
@@ -1555,7 +1709,16 @@ function IsoPdfAutopilot() {
     : "auto";
   const headers = plan?.source.headers ?? [];
   const sheetOptions = plan?.source.sheet_options ?? (sheetName ? [sheetName] : []);
-  const profileLabel = profileBusy ? "loading" : profile?.exists ? compactPath(profile.folder) : activeProfileFolder() ? "default profile" : "waiting";
+  const hasPublishedProfile = profile?.published_exists ?? (profile?.profile_scope === "draft" ? false : profile?.exists);
+  const hasDraftProfile = profile?.draft_exists ?? (profile?.profile_scope === "draft" && profile.exists);
+  const profileHistoryCount = profile?.history_count ?? 0;
+  const profileLabel = profileBusy
+    ? "loading"
+    : profile?.profile_scope === "draft"
+      ? "draft saved"
+      : hasPublishedProfile
+        ? compactPath(profile?.folder || "")
+        : activeProfileFolder() ? "default profile" : "waiting";
   const batchRunning = batchJob?.state === "queued" || batchJob?.state === "running" || batchJob?.state === "cancel_requested";
   const workflowEvents = [...(batchJob?.events ?? []), ...(plan?.issues ?? [])];
   const hasOneClickSource = Boolean(workFolder || combinePdf || pageFolder);
@@ -1648,6 +1811,7 @@ function IsoPdfAutopilot() {
             return;
           }
           setBatchJob(job);
+          registerRunLog(job.run_log, job.run_id || activeIsoRunId);
           if (job.result && (job.state === "completed" || job.state === "cancelled")) {
             setPlan(job.result);
             if (oneClickActiveRef.current) {
@@ -1673,6 +1837,7 @@ function IsoPdfAutopilot() {
           }
           if (job.error) {
             setError(job.error);
+            setOneClickFailure("一鍵命名沒有完成", job.error, job.run_id || activeIsoRunId, job.run_log || oneClickRunLog);
             if (oneClickActiveRef.current) {
               oneClickActiveRef.current = false;
               setOneClickStage("idle");
@@ -1682,6 +1847,9 @@ function IsoPdfAutopilot() {
         .catch((caught) => {
           if (!cancelled) {
             setError(caught instanceof Error ? caught.message : String(caught));
+            if (oneClickActiveRef.current) {
+              setOneClickFailure("讀取一鍵進度失敗", caught);
+            }
           }
         });
     }, 350);
@@ -1689,7 +1857,7 @@ function IsoPdfAutopilot() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [batchJob?.job_id, batchRunning]);
+  }, [batchJob?.job_id, batchRunning, activeIsoRunId, oneClickRunLog]);
 
   useEffect(() => {
     if (oneClickStage !== "running" && oneClickStage !== "applying") {
@@ -1819,6 +1987,17 @@ function IsoPdfAutopilot() {
               </div>
             ) : null}
 
+            {isoFailure ? (
+              <FailureCard
+                copied={failureCopied}
+                exportBusy={debugBundleBusy}
+                failure={isoFailure}
+                onCopy={copyFailureForEngineer}
+                onExport={exportFailureBundle}
+                onOpenWorkbench={openFailureWorkbench}
+              />
+            ) : null}
+
             <button className="one-click-button" onClick={runOneClick} disabled={oneClickBusy}>
               {oneClickButton.icon}
               <span>{oneClickButton.label}</span>
@@ -1856,7 +2035,7 @@ function IsoPdfAutopilot() {
             <PathPickerRow icon={<FileText size={16} />} label="Combine PDF" value={combinePdf} onPick={chooseCombinePdf} />
             <PathPickerRow icon={<Layers3 size={16} />} label="Page folder" value={pageFolder} onPick={choosePageFolder} />
             <PathPickerRow icon={<Table2 size={16} />} label="ISO List" value={isoList} onPick={chooseIsoList} />
-            <div className={`profile-chip ${profile?.exists ? "ready" : "idle"}`}>
+            <div className={`profile-chip ${hasPublishedProfile ? "ready" : "idle"}`}>
               <Settings size={14} />
               <span>Profile</span>
               <strong>{profileLabel}</strong>
@@ -1866,7 +2045,7 @@ function IsoPdfAutopilot() {
               <Gate label="PDF 來源" state={plan?.summary.total ? "ready" : workFolder || combinePdf || pageFolder ? "idle" : "warn"} />
               <Gate label="ISO List" state={plan?.source.record_count ? "ready" : isoList || workFolder ? "idle" : "warn"} />
               <Gate label="欄位對應" state={plan?.source.serial_col !== undefined && plan.source.line_col !== undefined ? "ready" : "idle"} />
-              <Gate label="Profile" state={profile?.exists ? "ready" : activeProfileFolder() ? "idle" : "warn"} />
+              <Gate label="Profile" state={hasPublishedProfile ? "ready" : activeProfileFolder() ? "idle" : "warn"} />
             </div>
           </aside>
 
@@ -1927,6 +2106,22 @@ function IsoPdfAutopilot() {
                 <StatusTile icon={<Braces size={18} />} title="Columns" value={columnSummary} tone={plan?.source.record_count ? "ready" : "warn"} />
                 <StatusTile icon={<SearchCheck size={18} />} title="Threshold" value={`${Math.round(confidenceThreshold * 100)}%`} tone="ready" />
               </div>
+              <div className="engineer-actions profile-actions">
+                <button className="action-button" onClick={publishProfileToOneClick} disabled={profileBusy || !activeProfileFolder()}>
+                  <ShieldCheck size={15} />
+                  <span>{profileBusy ? "處理中" : hasDraftProfile ? "發布草稿到一鍵" : "發布到一鍵"}</span>
+                </button>
+                <button className="action-button" onClick={revertPublishedProfile} disabled={profileBusy || !hasPublishedProfile || profileHistoryCount < 1}>
+                  <RefreshCcw size={15} />
+                  <span>回復上一版</span>
+                </button>
+                <StatusTile
+                  icon={<Settings size={18} />}
+                  title="Profile"
+                  value={`${hasPublishedProfile ? "published" : "not published"}${hasDraftProfile ? " · draft" : ""}${profileHistoryCount ? ` · ${profileHistoryCount} old` : ""}`}
+                  tone={hasPublishedProfile ? "ready" : hasDraftProfile ? "warn" : "warn"}
+                />
+              </div>
             </div>
 
             <div className="engineer-section">
@@ -1986,7 +2181,7 @@ function IsoPdfAutopilot() {
           <PathPickerRow icon={<FileText size={16} />} label="Combine PDF" value={combinePdf} onPick={chooseCombinePdf} />
           <PathPickerRow icon={<Layers3 size={16} />} label="Page folder" value={pageFolder} onPick={choosePageFolder} />
           <PathPickerRow icon={<Table2 size={16} />} label="ISO List" value={isoList} onPick={chooseIsoList} />
-          <div className={`profile-chip ${profile?.exists ? "ready" : "idle"}`}>
+          <div className={`profile-chip ${hasPublishedProfile ? "ready" : "idle"}`}>
             <Settings size={14} />
             <span>Profile</span>
             <strong>{profileLabel}</strong>
@@ -2038,7 +2233,7 @@ function IsoPdfAutopilot() {
             <Gate label="PDF 來源" state={plan?.summary.total ? "ready" : workFolder || combinePdf || pageFolder ? "idle" : "warn"} />
             <Gate label="ISO List" state={plan?.source.record_count ? "ready" : isoList || workFolder ? "idle" : "warn"} />
             <Gate label="欄位對應" state={plan?.source.serial_col !== undefined && plan.source.line_col !== undefined ? "ready" : "idle"} />
-            <Gate label="Profile" state={profile?.exists ? "ready" : activeProfileFolder() ? "idle" : "warn"} />
+            <Gate label="Profile" state={hasPublishedProfile ? "ready" : activeProfileFolder() ? "idle" : "warn"} />
             <Gate label="問題列" state={blockedCount ? "warn" : plan ? "ready" : "idle"} />
             <Gate label="舊工作台備援" state="ready" />
           </div>
@@ -2683,6 +2878,12 @@ function formatIsoFilename(pattern: string, serial: string, line: string): strin
   return /\.[^\\/.\s]+$/.test(name) ? name : `${name}.pdf`;
 }
 
+function createIsoRunId(): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "").replace("T", "-");
+  const suffix = Math.random().toString(16).slice(2, 8).padEnd(6, "0");
+  return `iso-${stamp}-${suffix}`;
+}
+
 function normalizeRegion(region: IsoRegion): IsoRegion {
   const width = clamp(region.width, 0.05, 1);
   const height = clamp(region.height, 0.05, 1);
@@ -2871,6 +3072,10 @@ function initialSurface(): SurfaceMode {
     return requested;
   }
   return isTauri() ? "dock" : "cockpit";
+}
+
+function isAppMode(value: unknown): value is AppMode {
+  return value === "command" || value === "iso" || value === "shutdown" || value === "cleanup" || value === "locks";
 }
 
 async function applyWindowSurface(surface: SurfaceMode, dockCollapsed: boolean, dockEdge: DockEdge, dockOffset: number): Promise<void> {

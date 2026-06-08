@@ -62,8 +62,30 @@ def load_iso_naming_profile(state_store: Any, folder: Path) -> IsoNamingProfile 
     return IsoNamingProfile.from_payload(payload) if payload else None
 
 
+def load_iso_naming_profile_draft(state_store: Any, folder: Path) -> IsoNamingProfile | None:
+    payload = state_store.iso_naming_profile_draft(folder)
+    return IsoNamingProfile.from_payload(payload) if payload else None
+
+
 def save_iso_naming_profile(state_store: Any, folder: Path, profile: IsoNamingProfile) -> None:
     state_store.set_iso_naming_profile(folder, profile.to_payload())
+
+
+def save_iso_naming_profile_draft(state_store: Any, folder: Path, profile: IsoNamingProfile) -> None:
+    state_store.set_iso_naming_profile_draft(folder, profile.to_payload())
+
+
+def publish_iso_naming_profile(state_store: Any, folder: Path, profile: IsoNamingProfile | None = None) -> IsoNamingProfile:
+    payload = state_store.publish_iso_naming_profile(folder, profile.to_payload() if profile is not None else None)
+    return IsoNamingProfile.from_payload(payload)
+
+
+def revert_iso_naming_profile(state_store: Any, folder: Path) -> IsoNamingProfile:
+    return IsoNamingProfile.from_payload(state_store.revert_iso_naming_profile(folder))
+
+
+def iso_naming_profile_history(state_store: Any, folder: Path) -> list[dict[str, Any]]:
+    return state_store.iso_naming_profile_history(folder)
 
 
 def _region_from_payload(payload: Any, *, default: SerialVisionRegion = DEFAULT_SERIAL_REGION) -> SerialVisionRegion:
