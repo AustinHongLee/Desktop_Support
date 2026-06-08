@@ -1007,11 +1007,12 @@ class DockWindow(QWidget):
         return dialog.exec() == QDialog.DialogCode.Accepted
 
     def _handle_windows_shutdown_event(self, reason: str) -> None:
-        from launcher.core.shutdown_safety import apply_shutdown_policy, scan_shutdown_blockers, write_report
+        from launcher.core.shutdown_safety import record_windows_shutdown_event
 
-        report = scan_shutdown_blockers(scan_reason=f"windows.{reason.lower()}")
-        write_report(report)
-        apply_shutdown_policy(report, kill_safe=True)
+        try:
+            record_windows_shutdown_event(f"windows.{reason.lower()}")
+        except Exception:
+            pass
         if reason == "WM_ENDSESSION":
             self._shutdown_safety_bypass = True
             app = QApplication.instance()
@@ -1044,6 +1045,10 @@ def _windows_message_id(message) -> int:  # noqa: ANN001
         import ctypes
         from ctypes import wintypes
 
+        address = int(message)
+        if address <= 0:
+            return 0
+
         class MSG(ctypes.Structure):
             _fields_ = [
                 ("hwnd", wintypes.HWND),
@@ -1054,7 +1059,7 @@ def _windows_message_id(message) -> int:  # noqa: ANN001
                 ("pt", wintypes.POINT),
             ]
 
-        return int(MSG.from_address(int(message)).message)
+        return int(MSG.from_address(address).message)
     except Exception:
         return 0
 

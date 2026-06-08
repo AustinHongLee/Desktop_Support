@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from launcher.core.context_model import LauncherContext
-from launcher.core.paths import project_root
+from launcher.core.paths import runtime_root
 
 SafeToKill = Literal["Safe", "Caution", "Dangerous", "Unknown"]
 ShutdownAction = Literal[
@@ -635,6 +635,19 @@ def write_report(report: ShutdownSafetyReport, *, project_root_path: Path | str 
     return path
 
 
+def record_windows_shutdown_event(reason: str, *, project_root_path: Path | str | None = None) -> Path:
+    root = _root(project_root_path)
+    report = ShutdownSafetyReport(
+        project_root=str(root),
+        scan_reason=reason,
+        created_at=_now_iso(),
+        blockers=(),
+    )
+    report_path = write_report(report, project_root_path=root)
+    _append_safety_log(runtime_layout(root), f"windows shutdown event reason={reason} report={report_path}")
+    return report_path
+
+
 def apply_shutdown_policy(
     report: ShutdownSafetyReport,
     *,
@@ -1038,9 +1051,6 @@ def _matching_relationships(metadata: JobMetadata | None, relationships: tuple[F
 def _metadata_for_process(pid: int, lock: RuntimeProcessLock | None, jobs: dict[str, JobMetadata]) -> JobMetadata | None:
     if lock is not None and lock.job_id in jobs:
         return jobs[lock.job_id]
-    for metadata in jobs.values():
-        if metadata.pid == pid:
-            return metadata
     return None
 
 
@@ -1127,7 +1137,7 @@ def _pathish_token(value: str) -> str:
 
 
 def _root(project_root_path: Path | str | None) -> Path:
-    return Path(project_root_path) if project_root_path is not None else project_root()
+    return Path(project_root_path) if project_root_path is not None else runtime_root()
 
 
 def _safe_level(value: object) -> SafeToKill:

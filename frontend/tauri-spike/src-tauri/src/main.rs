@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use rfd::{MessageButtons, MessageDialog, MessageLevel};
 use std::io::Write;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::{env, fs};
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -16,11 +18,14 @@ const TRAY_HIDE_DOCK: &str = "hide_dock";
 const TRAY_SHOW_COCKPIT: &str = "show_cockpit";
 const TRAY_QUIT: &str = "quit";
 
+const APP_DIR_NAME: &str = "EngineeringLauncher";
+const DATA_ROOT_ENV: &str = "DESKTOP_SUPPORT_DATA_ROOT";
 const PROJECT_ROOT_ENV: &str = "DESKTOP_SUPPORT_PROJECT_ROOT";
 const BACKEND_ENV: &str = "DESKTOP_SUPPORT_BACKEND_EXE";
 const BACKEND_EXE: &str = "desktop-support-backend.exe";
 const BACKEND_SIDECAR_EXE: &str = "desktop-support-backend-x86_64-pc-windows-msvc.exe";
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/icon.ico");
+const HIDE_TO_TRAY_NOTICE_FLAG: &str = "hide-to-tray-notified";
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -262,7 +267,7 @@ fn run_json_stdin_command(
 }
 
 fn runtime_root() -> Result<PathBuf, String> {
-    if let Ok(value) = std::env::var(PROJECT_ROOT_ENV) {
+    if let Ok(value) = env::var(PROJECT_ROOT_ENV) {
         let path = PathBuf::from(value);
         if !path.as_os_str().is_empty() {
             return Ok(path);
@@ -273,21 +278,39 @@ fn runtime_root() -> Result<PathBuf, String> {
         return Ok(root);
     }
 
-    if let Ok(current_exe) = std::env::current_exe() {
+    if let Some(root) = local_app_data_root() {
+        let _ = fs::create_dir_all(&root);
+        return Ok(root);
+    }
+
+    if let Ok(current_exe) = env::current_exe() {
         if let Some(parent) = current_exe.parent() {
             return Ok(parent.to_path_buf());
         }
     }
 
-    std::env::current_dir().map_err(|error| format!("cannot read runtime root: {error}"))
+    env::current_dir().map_err(|error| format!("cannot read runtime root: {error}"))
+}
+
+fn local_app_data_root() -> Option<PathBuf> {
+    if let Ok(value) = env::var(DATA_ROOT_ENV) {
+        let path = PathBuf::from(value);
+        if !path.as_os_str().is_empty() {
+            return Some(path);
+        }
+    }
+    env::var("LOCALAPPDATA")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| PathBuf::from(value).join(APP_DIR_NAME))
 }
 
 fn project_root_from_process_context() -> Option<PathBuf> {
     let mut starts = Vec::new();
-    if let Ok(current) = std::env::current_dir() {
+    if let Ok(current) = env::current_dir() {
         starts.push(current);
     }
-    if let Ok(current_exe) = std::env::current_exe() {
+    if let Ok(current_exe) = env::current_exe() {
         if let Some(parent) = current_exe.parent() {
             starts.push(parent.to_path_buf());
         }
@@ -312,7 +335,7 @@ fn project_root_from_process_context() -> Option<PathBuf> {
 fn sidecar_executable(app: &tauri::AppHandle) -> Option<PathBuf> {
     let names = [BACKEND_EXE, BACKEND_SIDECAR_EXE];
 
-    if let Ok(value) = std::env::var(BACKEND_ENV) {
+    if let Ok(value) = env::var(BACKEND_ENV) {
         let path = PathBuf::from(value);
         if path.exists() {
             return Some(path);
@@ -320,7 +343,7 @@ fn sidecar_executable(app: &tauri::AppHandle) -> Option<PathBuf> {
     }
 
     let mut folders = Vec::new();
-    if let Ok(current_exe) = std::env::current_exe() {
+    if let Ok(current_exe) = env::current_exe() {
         if let Some(parent) = current_exe.parent() {
             folders.push(parent.to_path_buf());
         }
@@ -329,7 +352,7 @@ fn sidecar_executable(app: &tauri::AppHandle) -> Option<PathBuf> {
         folders.push(resource_dir.clone());
         folders.push(resource_dir.join("binaries"));
     }
-    if let Ok(current) = std::env::current_dir() {
+    if let Ok(current) = env::current_dir() {
         folders.push(current.join("src-tauri").join("binaries"));
         folders.push(current.join("binaries"));
     }
@@ -384,6 +407,7 @@ fn main() {
             if window.label() == MAIN_WINDOW_LABEL {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
+                    maybe_show_hide_to_tray_notice();
                     let _ = window.hide();
                 }
             }
@@ -426,7 +450,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
             TRAY_SHOW_DOCK => show_main_window(app, false),
             TRAY_SHOW_COCKPIT => show_main_window(app, true),
             TRAY_HIDE_DOCK => hide_main_window(app),
-            TRAY_QUIT => app.exit(0),
+            TRAY_QUIT => request_shutdown_safe_quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -464,5 +488,74 @@ fn show_main_window(app: &tauri::AppHandle, cockpit: bool) {
 fn hide_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let _ = window.hide();
+    }
+}
+
+fn maybe_show_hide_to_tray_notice() {
+    let Some(flag_path) = hide_to_tray_notice_flag_path() else {
+        return;
+    };
+    if flag_path.exists() {
+        return;
+    }
+
+    let _ = MessageDialog::new()
+        .set_level(MessageLevel::Info)
+        .set_title("Desktop Support")
+        .set_description(
+            "關閉視窗會隱藏到系統匣，程式仍會常駐。若要結束程式，請從 tray 右鍵選單選「離開」。",
+        )
+        .set_buttons(MessageButtons::Ok)
+        .show();
+
+    if let Some(parent) = flag_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(flag_path, "shown\n");
+}
+
+fn hide_to_tray_notice_flag_path() -> Option<PathBuf> {
+    runtime_root().ok().map(|root| {
+        root.join(".runtime")
+            .join("flags")
+            .join(HIDE_TO_TRAY_NOTICE_FLAG)
+    })
+}
+
+fn request_shutdown_safe_quit(app: &tauri::AppHandle) {
+    match scan_shutdown_safety(app.clone()) {
+        Ok(payload) if !shutdown_report_has_blockers(&payload) => app.exit(0),
+        Ok(_) => show_shutdown_cockpit_for_quit(app, "blocked"),
+        Err(_) => show_shutdown_cockpit_for_quit(app, "scan_failed"),
+    }
+}
+
+fn shutdown_report_has_blockers(payload: &str) -> bool {
+    match serde_json::from_str::<serde_json::Value>(payload) {
+        Ok(value) => value
+            .get("blockers")
+            .and_then(|blockers| blockers.as_array())
+            .map(|blockers| !blockers.is_empty())
+            .unwrap_or_else(|| {
+                value
+                    .get("blocker_count")
+                    .and_then(|count| count.as_u64())
+                    .unwrap_or(0)
+                    > 0
+            }),
+        Err(_) => true,
+    }
+}
+
+fn show_shutdown_cockpit_for_quit(app: &tauri::AppHandle, reason: &str) {
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let script = format!(
+            "window.dispatchEvent(new CustomEvent('desktop-support:set-surface', {{ detail: {{ surface: 'cockpit', mode: 'shutdown', refresh: true, quitReason: '{}' }} }}));",
+            reason
+        );
+        let _ = window.eval(&script);
     }
 }

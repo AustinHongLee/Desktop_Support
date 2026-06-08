@@ -5,7 +5,7 @@ import hashlib
 import sys
 
 from launcher.core.context_inbox import ContextInbox
-from launcher.core.paths import project_root
+from launcher.core.paths import runtime_root
 from launcher.app.self_test import run_self_test
 from launcher.windows.single_instance import SingleInstanceGuard
 
@@ -105,7 +105,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def _instance_mutex_name() -> str:
-    identity = str(project_root().resolve()).casefold()
+    identity = str(runtime_root().resolve(strict=False)).casefold()
     digest = hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
     return f"Local\\EngineeringLauncher_{INSTANCE_MUTEX_VERSION}_{digest}"
 

@@ -9,13 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from launcher.core.context_model import LauncherContext
+from launcher.core.paths import default_inbox_path as _default_inbox_path
 
 
 def default_inbox_path() -> Path:
-    root = os.environ.get("LOCALAPPDATA")
-    if root:
-        return Path(root) / "EngineeringLauncher" / "context_request.json"
-    return Path.home() / ".engineering_launcher" / "context_request.json"
+    return _default_inbox_path()
 
 
 class ContextInbox:

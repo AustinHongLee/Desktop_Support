@@ -181,20 +181,21 @@ class DockWindowTests(unittest.TestCase):
         self.assertTrue(allowed)
         dialog.assert_not_called()
 
-    def test_windows_shutdown_event_does_not_open_dialog(self) -> None:
+    def test_windows_shutdown_event_records_marker_without_scan_or_kill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = AppStateStore(Path(tmp) / "state.json")
             window = _make_window(state)
-            report = ShutdownSafetyReport(project_root=str(tmp), scan_reason="windows", created_at="now", blockers=())
 
-            with patch("launcher.core.shutdown_safety.scan_shutdown_blockers", return_value=report):
-                with patch("launcher.core.shutdown_safety.write_report"):
+            with patch("launcher.core.shutdown_safety.record_windows_shutdown_event") as record_event:
+                with patch("launcher.core.shutdown_safety.scan_shutdown_blockers") as scan:
                     with patch("launcher.core.shutdown_safety.apply_shutdown_policy") as apply_policy:
                         with patch("launcher.ui.dock_window.ShutdownSafetyDialog") as dialog:
                             with patch("launcher.ui.dock_window.QTimer.singleShot") as single_shot:
                                 window._handle_windows_shutdown_event("WM_ENDSESSION")
 
-        apply_policy.assert_called_once()
+        record_event.assert_called_once_with("windows.wm_endsession")
+        scan.assert_not_called()
+        apply_policy.assert_not_called()
         dialog.assert_not_called()
         single_shot.assert_called_once()
         self.assertTrue(window._shutdown_safety_bypass)

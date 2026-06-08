@@ -4,9 +4,8 @@ import os
 import sys
 from pathlib import Path
 
+from launcher.core.paths import PROJECT_ROOT_ENV
 from launcher.core.shutdown_safety import run_cli
-
-PROJECT_ROOT_ENV = "DESKTOP_SUPPORT_PROJECT_ROOT"
 
 
 def main() -> int:

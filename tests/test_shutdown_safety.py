@@ -305,6 +305,40 @@ class ShutdownSafetyCoreTests(unittest.TestCase):
         self.assertEqual(levels[203], "Dangerous")
         self.assertEqual(levels[204], "Unknown")
 
+    def test_pid_reuse_without_active_lock_is_not_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            layout = runtime_layout(root).ensure()
+            metadata = JobMetadata(
+                job_id="old-safe-job",
+                component="tests",
+                process_role="Worker process",
+                pid=12345,
+                parent_pid=1,
+                command_summary=f"python worker --project-root {root}",
+                started_at="2026-06-01T10:00:00+08:00",
+                safe_to_kill="Safe",
+            )
+            _write(layout.jobs / "old-safe-job.json", metadata.to_payload())
+            snapshot = (
+                ProcessSnapshot(
+                    pid=12345,
+                    process_name="pwsh.exe",
+                    parent_pid=1,
+                    command_line=f'pwsh.exe -NoProfile -Command "Set-Location {root}"',
+                ),
+            )
+
+            report = scan_shutdown_blockers(project_root_path=root, process_snapshot=snapshot)
+
+        self.assertEqual(len(report.blockers), 1)
+        blocker = report.blockers[0]
+        self.assertEqual(blocker.pid, 12345)
+        self.assertEqual(blocker.job_id, "")
+        self.assertEqual(blocker.safe_to_kill, "Unknown")
+        self.assertFalse(blocker.can_automatically_stop)
+        self.assertNotIn("job metadata status=running", blocker.reasons)
+
     def test_dry_run_does_not_stop_processes(self) -> None:
         report = ShutdownSafetyReport(
             project_root="C:/Project",
