@@ -13,7 +13,7 @@ from typing import Any, Callable
 from launcher.core.action_model import ActionDefinition
 from launcher.core.context_model import LauncherContext
 from launcher.core.job_model import JobEvent, JobResult
-from launcher.core.paths import project_root
+from launcher.core.paths import PROJECT_ROOT_ENV, project_root, runtime_root
 from launcher.core.shutdown_safety import ProcessGuard
 
 EventCallback = Callable[[JobEvent], None]
@@ -70,12 +70,15 @@ class ActionRunner:
         }
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
-        command = [sys.executable, "-m", "launcher.workers.worker_host", "--project-root", str(project_root())]
-        guard = ProcessGuard.for_action(action.id, action.title, context, command=command)
+        code_root = project_root()
+        work_root = runtime_root()
+        env[PROJECT_ROOT_ENV] = str(work_root)
+        command = [sys.executable, "-m", "launcher.workers.worker_host", "--project-root", str(work_root)]
+        guard = ProcessGuard.for_action(action.id, action.title, context, command=command, project_root_path=work_root)
         try:
             process = subprocess.Popen(
                 command,
-                cwd=str(project_root()),
+                cwd=str(code_root),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

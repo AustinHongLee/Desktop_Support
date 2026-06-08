@@ -12,15 +12,24 @@ The launcher is intentionally small:
 
 ## Start
 
-一般使用者建議雙擊根目錄的 `START.vbs`。它會直接啟動 Tauri 桌面版，不會掛著 cmd 視窗；工具列可從系統匣圖示叫回來。
+根目錄只保留一個給人雙擊的入口：
 
-`START.cmd` 只是一個薄啟動器：已建置 Tauri exe 時會轉交給 `START.vbs` 並立刻退出；找不到 exe 時才停下來提示 build 指令。
+```text
+START_HERE.cmd
+```
 
-啟動問題請雙擊 `START_DEBUG.cmd`，它會用前景模式啟動並保留錯誤輸出。
+它會顯示選單：
 
-右鍵登錄管理請雙擊根目錄的 `RIGHT_CLICK_MANAGER.vbs`。它會開啟管理視窗，讓不熟 regedit 的使用者直接安裝、修復或移除 Explorer 右鍵入口。
+- Start Desktop Support
+- Debug startup
+- Right-click menu manager
+- Run unit tests
+- Tauri dev/test UI
+- Check dev environment
 
-進階/除錯入口已集中放在 `scripts\launcher\`：
+舊的 `START.vbs`、`START.cmd`、`START_DEBUG.cmd`、`RIGHT_CLICK_MANAGER.vbs`、`TEST_TAURI_UI.cmd` 已移到 `scripts\shortcuts\`，只保留作相容/內部捷徑。一般使用者不要從那裡挑檔案。
+
+進階/內部 launcher 腳本集中在 `scripts\launcher\`：
 
 - `scripts\launcher\run_launcher.ps1`：背景啟動
 - `scripts\launcher\run_launcher.ps1 -ShowDock`：背景啟動並顯示工具列
@@ -28,16 +37,74 @@ The launcher is intentionally small:
 - `scripts\launcher\run_launcher_debug.ps1 -Restart -Tail`：重啟並明確追蹤 ISO 工作台 log
 - `scripts\launcher\run_self_test.ps1`：無 UI 自測
 
-Tauri / React 桌面版目前是主要桌面入口。它啟動時走桌面 dock 小尾巴，點開後才展開未來感 cockpit：
+Tauri / React 桌面版目前仍是測試中的新版 UI，不是一般啟動的預設入口。要做 PyQt-to-Tauri 搬遷測試時，從 `START_HERE.cmd` 選 `Tauri dev/test UI`，或手動執行：
 
 ```powershell
-.\scripts\tauri\build_desktop_app.ps1 -Configuration Release
-.\frontend\tauri-spike\src-tauri\target\release\desktop-support-tauri-spike.exe
+.\scripts\tauri\run_dev_app.ps1
 ```
 
-這個 build 會同時用 PyInstaller 打包 `desktop-support-backend.exe`，並放在 Tauri exe 同資料夾。Tauri 會優先呼叫 sidecar；開發環境找不到 sidecar 時才 fallback 到本機 Python。若要掃描既有專案 runtime，請保留專案資料夾，或用 `DESKTOP_SUPPORT_PROJECT_ROOT` 指向要檢查的 runtime root。
+這個 dev/test 入口會優先啟動原生 Tauri 視窗；如果本機還沒有 Rust/MSVC/Windows SDK 原生工具鏈，會退到 browser fallback 並自動開啟 `http://127.0.0.1:1420/?surface=dock`，讓 React UI 仍可測。fallback 只能測 UI，tray、原生 window、sidecar 等 Tauri API 要等 Visual Studio Build Tools 的 Desktop development with C++、MSVC linker (`link.exe`) 和 Windows SDK resource tools (`rc.exe`) 完整後才能測。
 
-Tauri 桌面版會常駐系統匣。關閉視窗會隱藏到系統匣，不會結束程式；左鍵點 tray 圖示可叫回 dock，右鍵選單可顯示 dock、開 Cockpit、隱藏或離開。
+完整 Tauri release build 另外走 `scripts\tauri\build_desktop_app.ps1`；它需要 MSVC `link.exe` 和 Windows SDK `RC.EXE`，等正式打包整理時再處理。
+
+Tauri 桌面版會常駐系統匣。第一次關閉視窗會提示這是隱藏到系統匣，不會結束程式；左鍵點 tray 圖示可叫回 dock，右鍵選單可顯示 dock、開 Cockpit、隱藏或離開。
+
+## Dev Environment
+
+檢查目前開發環境：
+
+```powershell
+.\scripts\dev\prepare_dev_environment.ps1
+```
+
+這個檢查也可以從 `START_HERE.cmd` 選 `Check dev environment`，或走統一入口：
+
+```powershell
+.\scripts\test.ps1 -Suite env
+```
+
+如果要補齊 Tauri 原生 dev/build 工具鏈，再明確執行：
+
+```powershell
+.\scripts\dev\prepare_dev_environment.ps1 -InstallMissing
+```
+
+它會嘗試用 winget / Visual Studio Installer 補 Rustup、Visual Studio Build Tools C++ workload、MSVC linker、Windows SDK。這一步可能需要 UAC、下載時間，完成後建議開新的 PowerShell 再重跑環境檢查。
+
+`-InstallMissing` 會先詢問確認；自動化環境才使用 `-AssumeYes`。
+
+## Runtime Foundation
+
+後續包成 exe / 常駐程式時，程式位置和資料位置不可混在一起：
+
+- code root：程式碼、外掛、開發期 `.venv`。
+- runtime root：`.runtime`、job、lock、log、shutdown report。
+
+Python 端統一由 `launcher.core.paths.runtime_root()` 解析 runtime root。相容順序是 `DESKTOP_SUPPORT_PROJECT_ROOT`、source checkout、最後 `%LOCALAPPDATA%\EngineeringLauncher`。打包後預設不把 runtime 寫到 exe 安裝資料夾；Windows shutdown event 也只做輕量記錄，不做同步掃描或 kill。
+
+完整規則見 `docs\system_residency_foundation_2026-06-08.md`。
+
+## Test
+
+統一測試入口：
+
+```powershell
+.\scripts\test.ps1
+```
+
+常用 suite：
+
+```powershell
+.\scripts\test.ps1 -Suite shutdown
+.\scripts\test.ps1 -Suite env
+.\scripts\test.ps1 -Suite smoke
+.\scripts\test.ps1 -Suite unit
+.\scripts\test.ps1 -Suite frontend
+.\scripts\test.ps1 -Suite all
+.\scripts\test.ps1 -Suite tauri-ui
+```
+
+`-Suite shutdown` 是 Shutdown Safety focused tests；`-Suite env` 檢查 Tauri/Windows 開發環境；`-Suite smoke` 檢查入口、dev-env JSON、Tauri fallback 腳本與 import chain；`-Suite unit` 跑 Python tests；`-Suite frontend` 跑 Tauri/React build；`-Suite tauri-ui` 啟動 Tauri dev/test UI，缺原生工具鏈時會退到 browser fallback。只有真的要測 release build 時才加 `-BuildTauri`。
 
 ## Explorer Right-Click Context
 
@@ -123,7 +190,7 @@ UI flow:
    - `Unknown`：資訊不足，只列出不自動處理。
 5. 使用者可選 Wait、Graceful stop、Force stop、Open log、Open related folder、Inspect dependency graph、Ignore once、Cancel shutdown / close。
 
-自動策略：`Safe` 可預設 graceful stop；`Caution` 需要確認才 force stop；`Dangerous` / `Unknown` 預設不殺。Windows shutdown event 的時間通常很短，因此事件中只快速寫入 JSON report、嘗試停止 Safe blocker，然後放行，不永久阻止 Windows 關機。停止程序一律不用 `shell=True`；`taskkill.exe` 只用參數陣列，且拒絕停止 command line 不含本專案路徑的 PID。
+自動策略：手動關閉 app 時，`Safe` 可由使用者確認後 graceful stop；`Caution` 需要確認才 force stop；`Dangerous` / `Unknown` 預設不殺。Windows shutdown event 的時間通常很短，因此事件中只快速寫入 marker/report 然後放行，不掃 WMI、不套用 `kill_safe`、不永久阻止 Windows 關機。停止程序一律不用 `shell=True`；`taskkill.exe` 只用參數陣列，且拒絕停止 command line 不含本專案路徑的 PID。
 
 手動檢查：
 
@@ -135,7 +202,7 @@ UI flow:
 .\scripts\shutdown_safety_inspector.ps1 -DryRun -MockShutdownEvent
 ```
 
-app 內可從「更多」或指令面板開啟 `Shutdown Safety Inspector`。Windows shutdown event 已由 PyQt native event handler 接入 `WM_QUERYENDSESSION` / `WM_ENDSESSION`；這是保護性檢查與清理，不做真正關機測試。
+app 內可從「更多」或指令面板開啟 `Shutdown Safety Inspector`。Windows shutdown event 已由 PyQt native event handler 接入 `WM_QUERYENDSESSION` / `WM_ENDSESSION`；這是輕量事件記錄，不做真正關機測試，也不在 session end 階段殺程序。
 
 ## Plugin Shape
 

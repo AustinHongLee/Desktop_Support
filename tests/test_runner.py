@@ -9,6 +9,7 @@ from unittest.mock import patch
 from launcher.core.action_model import ActionDefinition, CommandSpec
 from launcher.core.context_model import LauncherContext
 from launcher.core.job_model import JobEvent
+from launcher.core.paths import PROJECT_ROOT_ENV
 from launcher.core.runner import ActionRunner, RunControl
 
 
@@ -49,6 +50,23 @@ class _FakeProcess:
         if self._return_code is None:
             self._return_code = 0
         return self._return_code
+
+
+class _FakeGuard:
+    def record_started(self, process: _FakeProcess) -> None:
+        pass
+
+    def mark_completed(self, *, return_code: int = 0) -> None:
+        pass
+
+    def mark_failed(self, *, return_code: int | None = None, reason: str = "") -> None:
+        pass
+
+    def mark_interrupted(self, *, return_code: int | None = None, reason: str = "") -> None:
+        pass
+
+    def terminate_process_tree(self, process: _FakeProcess, *, grace_seconds: float = 1.5) -> None:
+        process.terminate()
 
 
 class ActionRunnerTests(unittest.TestCase):
@@ -117,6 +135,28 @@ class ActionRunnerTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertTrue(process.stdin.closed)
         self.assertEqual(payload["options"], {"mode": "basename", "include": "files"})
+
+    def test_run_uses_runtime_root_for_worker_identity_and_code_root_for_cwd(self) -> None:
+        process = _FakeProcess(stdout="", return_code=0)
+        code_root = Path("C:/CodeRoot")
+        work_root = Path("C:/RuntimeRoot")
+
+        with (
+            patch("launcher.core.runner.project_root", return_value=code_root),
+            patch("launcher.core.runner.runtime_root", return_value=work_root),
+            patch("launcher.core.runner.ProcessGuard.for_action", return_value=_FakeGuard()) as guard_factory,
+            patch("launcher.core.runner.subprocess.Popen", return_value=process) as popen,
+        ):
+            result = ActionRunner().run(self.action, self.context)
+
+        self.assertTrue(result.ok)
+        command = popen.call_args.args[0]
+        kwargs = popen.call_args.kwargs
+        self.assertEqual(command[-2:], ["--project-root", str(work_root)])
+        self.assertEqual(kwargs["cwd"], str(code_root))
+        self.assertEqual(kwargs["env"][PROJECT_ROOT_ENV], str(work_root))
+        guard_factory.assert_called_once()
+        self.assertEqual(guard_factory.call_args.kwargs["project_root_path"], work_root)
 
     def test_run_reports_worker_start_failure(self) -> None:
         received: list[JobEvent] = []

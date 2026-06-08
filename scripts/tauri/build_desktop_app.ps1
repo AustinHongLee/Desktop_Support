@@ -11,7 +11,6 @@ $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $FrontendRoot = Join-Path $ProjectRoot "frontend\tauri-spike"
-$CargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
 $TauriRoot = Join-Path $FrontendRoot "src-tauri"
 $BackendName = "desktop-support-backend"
 $SidecarName = "$BackendName-$TargetTriple.exe"
@@ -19,10 +18,11 @@ $BackendDist = Join-Path $TauriRoot "backend-dist"
 $BackendWork = Join-Path $TauriRoot "backend-build"
 $BackendSpec = Join-Path $BackendWork "spec"
 $BackendBinaries = Join-Path $TauriRoot "binaries"
+$SharedRoot = Join-Path $ProjectRoot "scripts\_shared"
 
-if (Test-Path $CargoBin) {
-    $env:Path = "$CargoBin;$env:Path"
-}
+. (Join-Path $SharedRoot "path_utils.ps1")
+. (Join-Path $SharedRoot "vs_env.ps1")
+Add-CargoBinToProcessPath
 
 function Require-Command {
     param([string]$Name)
@@ -36,6 +36,24 @@ function Require-Command {
 
 $npm = Require-Command "npm.cmd"
 $null = Require-Command "cargo.exe"
+$link = Get-Command "link.exe" -ErrorAction SilentlyContinue
+$rc = Get-Command "rc.exe" -ErrorAction SilentlyContinue
+$vsDevCmd = $null
+
+if (-not $link -or -not $rc) {
+    $vsDevCmd = Find-VsDevCmd
+}
+
+if ((-not $link -or -not $rc) -and -not $vsDevCmd) {
+    $missingTools = @()
+    if (-not $link) {
+        $missingTools += "link.exe"
+    }
+    if (-not $rc) {
+        $missingTools += "rc.exe"
+    }
+    throw ("Missing command: {0}. Tauri release builds require Visual Studio Build Tools with Desktop development with C++, MSVC, and Windows SDK." -f ($missingTools -join ", "))
+}
 
 function Build-PythonBackend {
     if ($SkipBackendBuild) {
@@ -89,7 +107,14 @@ if ($Configuration -eq "Debug") {
 
 Push-Location $FrontendRoot
 try {
-    & $npm @tauriArgs
+    if ($vsDevCmd) {
+        $npmArgs = $tauriArgs -join " "
+        $cmdLine = '"{0}" -no_logo -arch=x64 -host_arch=x64 && "{1}" {2}' -f $vsDevCmd, $npm, $npmArgs
+        & cmd.exe /d /s /c $cmdLine
+    }
+    else {
+        & $npm @tauriArgs
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Tauri build failed with exit code $LASTEXITCODE"
     }
