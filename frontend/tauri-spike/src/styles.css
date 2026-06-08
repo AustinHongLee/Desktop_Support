@@ -2752,7 +2752,7 @@ h3 {
 
 .iso-table-toolbar {
   display: grid;
-  grid-template-columns: minmax(150px, auto) minmax(220px, 1fr) auto;
+  grid-template-columns: minmax(150px, auto) minmax(220px, 1fr) minmax(120px, auto) auto;
   gap: 10px;
   align-items: center;
 }
@@ -2768,6 +2768,31 @@ h3 {
 
 .table-toggle {
   white-space: nowrap;
+}
+
+.table-sort {
+  display: grid;
+  grid-template-columns: auto minmax(84px, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.table-sort select {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.095);
+  border-radius: 9px;
+  padding: 0 8px;
+  color: var(--text-strong);
+  background: rgba(0, 0, 0, 0.24);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .iso-table.live {
@@ -2811,6 +2836,20 @@ h3 {
 .iso-table-row.selected {
   border-color: rgba(47, 245, 200, 0.45);
   box-shadow: inset 0 0 0 1px rgba(47, 245, 200, 0.1), 0 0 22px rgba(47, 245, 200, 0.08);
+}
+
+.iso-table-row.low-confidence {
+  border-left: 3px solid rgba(255, 209, 102, 0.82);
+}
+
+.iso-table-row.missing-serial,
+.iso-table-row.missing-line,
+.iso-table-row.duplicate {
+  border-left: 3px solid rgba(255, 79, 123, 0.82);
+}
+
+.iso-table-row.manual-corrected {
+  border-left: 3px solid rgba(47, 245, 200, 0.82);
 }
 
 .table-cell-input {

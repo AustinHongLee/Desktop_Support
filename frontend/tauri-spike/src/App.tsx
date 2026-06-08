@@ -69,6 +69,7 @@ import {
   type IsoProfilePayload,
   type IsoPreviewPayload,
   type IsoRegion,
+  type IsoRowStatus,
   type IsoRunLogRef,
   type IsoWorkflowIssue,
   type IsoWorkflowRequest,
@@ -89,6 +90,7 @@ const LEVEL_SCORE: Record<SafeToKill, number> = {
 type AppMode = "command" | "iso" | "shutdown" | "cleanup" | "locks";
 type SurfaceMode = "dock" | "cockpit";
 type DockEdge = "top" | "bottom" | "left" | "right";
+type IsoSortMode = "page" | "status" | "confidence" | "filename";
 
 const DOCK_EDGE_STORAGE_KEY = "desktop-support.dock.edge";
 const DOCK_OFFSET_STORAGE_KEY = "desktop-support.dock.offset";
@@ -1022,6 +1024,7 @@ function IsoPdfAutopilot() {
   const [error, setError] = useState("");
   const [problemOnly, setProblemOnly] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [sortMode, setSortMode] = useState<IsoSortMode>("page");
   const [selectedRowId, setSelectedRowId] = useState("");
   const [preview, setPreview] = useState<IsoPreviewPayload | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -1405,9 +1408,19 @@ function IsoPdfAutopilot() {
     if (!plan) {
       return;
     }
-    const selected = plan.rows.filter((row) => row.selected && row.status !== "blocked");
+    if (blockedCount) {
+      setError(`還有 ${blockedCount} 筆 blocked，修正前不能套用。`);
+      chooseProblemRow();
+      return;
+    }
+    if (warnCount) {
+      setError(`還有 ${warnCount} 筆 warn，請逐列確認後再套用。`);
+      chooseProblemRow();
+      return;
+    }
+    const selected = plan.rows.filter((row) => row.selected && row.status === "ready");
     if (!selected.length) {
-      setError("沒有可套用的列；請先勾選 ready/warn 列或修正 blocked 列。");
+      setError("沒有可套用的 ready 列；請先勾選 ready 列。");
       return;
     }
     setDryRunOpen(true);
@@ -1417,9 +1430,14 @@ function IsoPdfAutopilot() {
     if (!plan) {
       return;
     }
-    const selected = plan.rows.filter((row) => row.selected && row.status !== "blocked");
+    if (blockedCount || warnCount) {
+      setError(blockedCount ? `還有 ${blockedCount} 筆 blocked，修正前不能套用。` : `還有 ${warnCount} 筆 warn，請逐列確認後再套用。`);
+      chooseProblemRow();
+      return;
+    }
+    const selected = plan.rows.filter((row) => row.selected && row.status === "ready");
     if (!selected.length) {
-      setError("沒有勾選任何可更名的列。");
+      setError("沒有勾選任何 ready 可更名列。");
       return;
     }
     setApplyBusy(true);
@@ -1482,12 +1500,17 @@ function IsoPdfAutopilot() {
     }
     if (oneClickStage === "review" && plan) {
       const blockedRows = plan.rows.filter((row) => row.status === "blocked");
-      const canApplyRows = plan.rows.filter((row) => row.selected && row.status !== "blocked");
-      if (!canApplyRows.length && blockedRows.length) {
-        setSelectedRowId(blockedRows[0]?.id ?? "");
+      const warnRows = plan.rows.filter((row) => row.status === "warn");
+      const canApplyRows = plan.rows.filter((row) => row.selected && row.status === "ready");
+      if (blockedRows.length || warnRows.length) {
+        setSelectedRowId(blockedRows[0]?.id ?? warnRows[0]?.id ?? "");
         setProblemOnly(true);
         setIsoView("workbench");
-        setMessage(`還有 ${blockedRows.length} 個 blocked 列,先在工作台修正後再更名。`);
+        setMessage(blockedRows.length ? `還有 ${blockedRows.length} 個 blocked 列,先在工作台修正後再更名。` : `還有 ${warnRows.length} 個 warn 列,逐列確認後才能更名。`);
+        return;
+      }
+      if (!canApplyRows.length) {
+        setMessage("沒有 ready 且勾選的列可更名。");
         return;
       }
       await autoApplyWithRecord(plan);
@@ -1517,15 +1540,17 @@ function IsoPdfAutopilot() {
   }
 
   async function autoApplyWithRecord(currentPlan: IsoWorkflowPlan) {
-    const applyRows = currentPlan.rows.filter((row) => row.selected && row.status !== "blocked");
+    const blockedRows = currentPlan.rows.filter((row) => row.status === "blocked");
+    const warnRows = currentPlan.rows.filter((row) => row.status === "warn");
+    if (blockedRows.length || warnRows.length) {
+      setSelectedRowId(blockedRows[0]?.id ?? warnRows[0]?.id ?? "");
+      setProblemOnly(true);
+      setOneClickStage("review");
+      setMessage(blockedRows.length ? `還有 ${blockedRows.length} 個 blocked 列,先修正後才能完成一鍵更名。` : `還有 ${warnRows.length} 個 warn 列,逐列確認後才能完成一鍵更名。`);
+      return;
+    }
+    const applyRows = currentPlan.rows.filter((row) => row.selected && row.status === "ready");
     if (!applyRows.length) {
-      const blockedRows = currentPlan.rows.filter((row) => row.status === "blocked");
-      if (blockedRows.length) {
-        setSelectedRowId(blockedRows[0]?.id ?? "");
-        setOneClickStage("review");
-        setMessage(`還有 ${blockedRows.length} 個 blocked 列,先修正後才能完成一鍵更名。`);
-        return;
-      }
       setOneClickStage("done");
       setMessage("沒有需要更名的檔案。");
       return;
@@ -1654,7 +1679,7 @@ function IsoPdfAutopilot() {
       if (row.id !== rowId) {
         return row;
       }
-      const next = { ...row, [field]: value, note: "manual edit" };
+      const next = { ...row, [field]: value, note: "manual corrected", vision_message: "manual corrected" };
       if (field === "serial" || field === "line_no") {
         next.new_name = formatIsoFilename(pattern, field === "serial" ? value : next.serial, field === "line_no" ? value : next.line_no);
       }
@@ -1675,11 +1700,15 @@ function IsoPdfAutopilot() {
   }
 
   function chooseProblemRow() {
-    const first = plan?.rows.find((row) => row.status === "blocked" || row.status === "warn");
-    if (first) {
-      setSelectedRowId(first.id);
-      setProblemOnly(true);
+    const allRows = plan?.rows ?? [];
+    const problems = allRows.filter((row) => row.status === "blocked" || row.status === "warn");
+    if (!problems.length) {
+      return;
     }
+    const currentIndex = allRows.findIndex((row) => row.id === selectedRowId);
+    const next = problems.find((row) => allRows.findIndex((candidate) => candidate.id === row.id) > currentIndex) ?? problems[0];
+    setSelectedRowId(next.id);
+    setProblemOnly(true);
   }
 
   function adoptPreviewVision() {
@@ -1693,16 +1722,16 @@ function IsoPdfAutopilot() {
     if (!selectedRow) {
       return;
     }
-    updatePlanRows((rows) => rows.map((row) => row.id === selectedRow.id ? { ...row, status: "ready", note: "", vision_message: "", selected: row.new_name !== row.source_name } : row));
+    updatePlanRows((rows) => rows.map((row) => row.id === selectedRow.id ? { ...row, status: "ready", note: "", vision_message: row.vision_message.includes("manual") ? "manual confirmed" : "", selected: row.new_name !== row.source_name } : row));
   }
 
   const rows = plan?.rows ?? [];
-  const selectedCount = rows.filter((row) => row.selected && row.status !== "blocked").length;
+  const selectedCount = rows.filter((row) => row.selected && row.status === "ready").length;
   const blockedCount = rows.filter((row) => row.status === "blocked").length;
   const warnCount = rows.filter((row) => row.status === "warn").length;
   const readyCount = rows.filter((row) => row.status === "ready").length;
   const issueRows = rows.filter((row) => row.status === "blocked" || row.status === "warn");
-  const visibleRows = useMemo(() => filterIsoRows(rows, searchTerm, problemOnly), [rows, searchTerm, problemOnly]);
+  const visibleRows = useMemo(() => sortIsoRows(filterIsoRows(rows, searchTerm, problemOnly), sortMode), [rows, searchTerm, problemOnly, sortMode]);
   const selectedRow = rows.find((row) => row.id === selectedRowId) ?? rows[0];
   const columnSummary = plan?.source.headers && plan.source.serial_col !== undefined && plan.source.line_col !== undefined
     ? `${plan.source.headers[plan.source.serial_col] ?? `col ${plan.source.serial_col + 1}`} -> ${plan.source.headers[plan.source.line_col] ?? `col ${plan.source.line_col + 1}`}`
@@ -2270,6 +2299,15 @@ function IsoPdfAutopilot() {
               <FileSearch size={15} />
               <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="搜尋 old/new/流水號/圖號/狀態" />
             </label>
+            <label className="table-sort">
+              <span>排序</span>
+              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as IsoSortMode)}>
+                <option value="page">頁序</option>
+                <option value="status">狀態</option>
+                <option value="confidence">信心</option>
+                <option value="filename">檔名</option>
+              </select>
+            </label>
             <label className="toggle-row table-toggle">
               <input type="checkbox" checked={problemOnly} onChange={(event) => setProblemOnly(event.target.checked)} />
               <span>只看問題列</span>
@@ -2331,7 +2369,7 @@ function IsoPdfAutopilot() {
               <ScanLine size={15} />
               <span>{batchRunning ? "取消判讀" : "批次判讀"}</span>
             </button>
-            <button className="action-button" onClick={openDryRun} disabled={!selectedCount || busy || applyBusy}>
+            <button className="action-button" onClick={openDryRun} disabled={!selectedCount || blockedCount > 0 || warnCount > 0 || busy || applyBusy}>
               <ClipboardCheck size={15} />
               <span>套用更名</span>
             </button>
@@ -2354,7 +2392,7 @@ function IsoPdfAutopilot() {
           onApply={applySelectedRows}
           onClose={() => setDryRunOpen(false)}
           onExport={exportRenameCsv}
-          rows={plan.rows.filter((row) => row.selected && row.status !== "blocked")}
+          rows={plan.rows.filter((row) => row.selected && row.status === "ready")}
           summary={plan.summary}
         />
       ) : null}
@@ -2438,7 +2476,7 @@ function IsoPlanTable({
         <span>New filename</span>
       </div>
       {rows.map((row) => (
-        <div className={`iso-table-row ${row.status} ${selectedRowId === row.id ? "selected" : ""}`} key={row.id} onClick={() => selectRow(row.id)}>
+        <div className={`iso-table-row ${row.status} ${isoIssueKind(row)} ${selectedRowId === row.id ? "selected" : ""}`} key={row.id} onClick={() => selectRow(row.id)}>
           <label className="row-check">
             <input type="checkbox" checked={row.selected} disabled={row.status === "blocked"} onChange={() => toggleRow(row.id)} onClick={(event) => event.stopPropagation()} />
           </label>
@@ -2447,7 +2485,7 @@ function IsoPlanTable({
           <input className="table-cell-input serial" value={row.serial} onChange={(event) => updateRow(row.id, "serial", event.target.value)} onClick={(event) => event.stopPropagation()} />
           <input className="table-cell-input" value={row.line_no} onChange={(event) => updateRow(row.id, "line_no", event.target.value)} onClick={(event) => event.stopPropagation()} />
           <span className={`confidence-chip ${row.confidence >= 0.8 ? "ready" : row.confidence > 0 ? "warn" : "idle"}`}>{row.confidence ? `${Math.round(row.confidence * 100)}%` : "-"}</span>
-          <span className={`plan-state ${row.status}`}>{row.status}</span>
+          <span className={`plan-state ${row.status}`} title={row.note || isoIssueLabel(row)}>{row.status}</span>
           <input className="table-cell-input mono" value={row.new_name} title={row.note || row.target_path} onChange={(event) => updateRow(row.id, "new_name", event.target.value)} onClick={(event) => event.stopPropagation()} />
         </div>
       ))}
@@ -2557,6 +2595,7 @@ function IsoResultDialog({
   plan: IsoWorkflowPlan;
 }) {
   const issueRows = plan.rows.filter((row) => row.status === "warn" || row.status === "blocked");
+  const selectedReady = plan.rows.filter((row) => row.selected && row.status === "ready").length;
   return (
     <div className="modal-backdrop" role="presentation">
       <div className="result-dialog" role="dialog" aria-modal="true" aria-label="ISO 結果">
@@ -2590,7 +2629,7 @@ function IsoResultDialog({
             <FileJson size={15} />
             <span>匯出 CSV</span>
           </button>
-          <button className="launch-button" onClick={onDryRun} disabled={!plan.summary.selected}>
+          <button className="launch-button" onClick={onDryRun} disabled={!selectedReady || issueRows.length > 0}>
             <ClipboardCheck size={18} />
             <span>開啟 dry-run</span>
           </button>
@@ -2791,11 +2830,71 @@ function filterIsoRows(rows: IsoPlanRow[], searchTerm: string, problemOnly: bool
       row.line_no,
       row.new_name,
       row.status,
+      isoIssueKind(row),
       row.note,
       row.vision_message,
     ].join(" ").toLowerCase();
     return terms.every((term) => text.includes(term));
   });
+}
+
+const ISO_STATUS_ORDER: Record<IsoRowStatus, number> = {
+  blocked: 0,
+  warn: 1,
+  ready: 2,
+  idle: 3,
+};
+
+function sortIsoRows(rows: IsoPlanRow[], sortMode: IsoSortMode): IsoPlanRow[] {
+  const copy = [...rows];
+  if (sortMode === "status") {
+    return copy.sort((a, b) => ISO_STATUS_ORDER[a.status] - ISO_STATUS_ORDER[b.status] || a.page - b.page);
+  }
+  if (sortMode === "confidence") {
+    return copy.sort((a, b) => (a.confidence || 0) - (b.confidence || 0) || a.page - b.page);
+  }
+  if (sortMode === "filename") {
+    return copy.sort((a, b) => (a.new_name || a.source_name).localeCompare(b.new_name || b.source_name) || a.page - b.page);
+  }
+  return copy.sort((a, b) => a.page - b.page);
+}
+
+function isoIssueKind(row: IsoPlanRow): string {
+  const note = `${row.note} ${row.vision_message}`.toLowerCase();
+  if (row.vision_message.includes("manual")) {
+    return "manual-corrected";
+  }
+  if (!row.serial.trim()) {
+    return "missing-serial";
+  }
+  if (!row.line_no.trim()) {
+    return "missing-line";
+  }
+  if (note.includes("重複") || note.includes("duplicate")) {
+    return "duplicate";
+  }
+  if (row.confidence > 0 && row.confidence < 0.7) {
+    return "low-confidence";
+  }
+  if (row.status === "blocked") {
+    return "blocked-issue";
+  }
+  if (row.status === "warn") {
+    return "review-issue";
+  }
+  return "normal";
+}
+
+function isoIssueLabel(row: IsoPlanRow): string {
+  const kind = isoIssueKind(row);
+  if (kind === "manual-corrected") return "manual corrected";
+  if (kind === "missing-serial") return "缺流水號";
+  if (kind === "missing-line") return "缺 ISO 對應";
+  if (kind === "duplicate") return "重複";
+  if (kind === "low-confidence") return "低信心";
+  if (kind === "blocked-issue") return "blocked";
+  if (kind === "review-issue") return "待確認";
+  return row.status;
 }
 
 function normalizeIsoRows(rows: IsoPlanRow[]): IsoPlanRow[] {
@@ -2864,7 +2963,7 @@ function summarizeIsoRows(rows: IsoPlanRow[]): IsoWorkflowPlan["summary"] {
     ready: rows.filter((row) => row.status === "ready").length,
     warn: rows.filter((row) => row.status === "warn").length,
     blocked: rows.filter((row) => row.status === "blocked").length,
-    selected: rows.filter((row) => row.selected && row.status !== "blocked").length,
+    selected: rows.filter((row) => row.selected && row.status === "ready").length,
   };
 }
 
