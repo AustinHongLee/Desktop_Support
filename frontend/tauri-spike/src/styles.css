@@ -3411,7 +3411,8 @@ h3 {
 }
 
 .run-log-item strong,
-.run-log-item small {
+.run-log-item small,
+.run-log-item em {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3420,7 +3421,14 @@ h3 {
 
 .run-log-item strong {
   color: var(--text-strong);
-  font-size: 12px;
+  font-size: 14px;
+}
+
+.run-log-item em {
+  color: rgba(183, 198, 190, 0.72);
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 760;
 }
 
 .run-log-summary {
@@ -3454,7 +3462,7 @@ h3 {
 .pilot-mini-item {
   min-width: 0;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px;
   align-items: center;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -3477,7 +3485,7 @@ h3 {
 
 .pilot-mini-item strong {
   color: var(--text-strong);
-  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-size: 13px;
 }
 
 .pilot-mini-item span,
@@ -3493,6 +3501,21 @@ h3 {
   font-style: normal;
   font-size: 11px;
   font-weight: 850;
+}
+
+.pilot-mini-item span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.run-log-footer small {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .run-event-list {

@@ -68,6 +68,7 @@ import {
   saveIsoDraftProfile,
   startIsoBatchDetect,
   type IsoJobPayload,
+  type IsoPilotItem,
   type IsoPlanRow,
   type IsoProfilePayload,
   type IsoPreviewPayload,
@@ -1223,7 +1224,7 @@ function IsoPdfAutopilot() {
 
   async function openRunLogDrawer(runId = activeIsoRunId) {
     if (!isTauri()) {
-      setError("請用 Tauri 桌面版讀取 Run logs。");
+      setError("請用 Tauri 桌面版讀取處理紀錄。");
       return;
     }
     setRunLogOpen(true);
@@ -2120,7 +2121,7 @@ function IsoPdfAutopilot() {
             <div className="one-click-terminal">
               <div className="terminal-head">
                 <TerminalSquare size={14} />
-                <span>event log</span>
+                <span>流程紀錄</span>
                 <em>{oneClickRunning || oneClickApplying ? `${elapsedSec}s` : oneClickStage === "done" ? "done" : "idle"}</em>
               </div>
               <div className="terminal-body" ref={terminalRef}>
@@ -2264,7 +2265,7 @@ function IsoPdfAutopilot() {
                 </button>
                 <button className="action-button" onClick={() => void openRunLogDrawer()} disabled={runLogBusy}>
                   <FileSearch size={15} />
-                  <span>{runLogBusy ? "讀取中" : "Run logs"}</span>
+                  <span>{runLogBusy ? "讀取中" : "處理紀錄"}</span>
                 </button>
               </div>
             </div>
@@ -2467,7 +2468,7 @@ function IsoPdfAutopilot() {
             </button>
             <button className="action-button" onClick={() => void openRunLogDrawer()} disabled={runLogBusy}>
               <FileSearch size={15} />
-              <span>{runLogBusy ? "讀取中" : "Run logs"}</span>
+              <span>{runLogBusy ? "讀取中" : "處理紀錄"}</span>
             </button>
             <button className="action-button" onClick={legacy.launch} disabled={legacy.busy}>
               <PanelRightOpen size={15} />
@@ -2764,12 +2765,12 @@ function RunLogDrawer({
   const blockedPilot = pilotItems.filter((item) => item.status === "blocked").length;
   const warnPilot = pilotItems.filter((item) => item.status === "warn").length;
   return (
-    <div className="run-log-drawer" role="dialog" aria-modal="true" aria-label="ISO run logs">
+    <div className="run-log-drawer" role="dialog" aria-modal="true" aria-label="ISO 處理紀錄">
       <div className="run-log-shell">
         <div className="run-log-head">
           <div>
-            <div className="eyebrow">ISO run logs</div>
-            <h2>Run Log 抽屜</h2>
+            <div className="eyebrow">ISO 執行紀錄</div>
+            <h2>最近處理紀錄</h2>
           </div>
           <div className="run-log-actions">
             <button className="dock-icon-button" onClick={onRefresh} disabled={busy} title="重新整理">
@@ -2784,10 +2785,11 @@ function RunLogDrawer({
         <div className="run-log-grid">
           <aside className="run-log-list">
             {runs.length ? runs.map((run) => (
-              <button className={`run-log-item ${run.status} ${run.run_id === selectedRunId ? "selected" : ""}`} key={run.run_id} onClick={() => onSelect(run.run_id)}>
-                <span>{run.status || "unknown"}</span>
-                <strong>{run.run_id}</strong>
-                <small>{run.action} · {formatRunTime(run.updated_at || run.created_at)}</small>
+              <button className={`run-log-item ${run.status} ${run.run_id === selectedRunId ? "selected" : ""}`} key={run.run_id} onClick={() => onSelect(run.run_id)} title={run.run_id}>
+                <span>{runStatusLabel(run.status)}</span>
+                <strong>{runActionLabel(run.action)}</strong>
+                <small>{runSummaryText(run)} · {formatRunTime(run.updated_at || run.created_at)}</small>
+                <em>{shortRunId(run.run_id)}</em>
               </button>
             )) : (
               <div className="run-log-empty">
@@ -2801,16 +2803,16 @@ function RunLogDrawer({
             {detail ? (
               <>
                 <div className="run-log-summary">
-                  <StatusTile icon={<GitBranch size={18} />} title="Run" value={detail.run.run_id} tone={detail.run.status === "failed" ? "danger" : detail.run.status === "completed" ? "ready" : "warn"} />
-                  <StatusTile icon={<CircleAlert size={18} />} title="Pilot" value={`${blockedPilot} blocked · ${warnPilot} warn`} tone={blockedPilot ? "danger" : warnPilot ? "warn" : "ready"} />
-                  <StatusTile icon={<FileJson size={18} />} title="Events" value={String(detail.events.length)} tone={detail.events.length ? "ready" : "warn"} />
+                  <StatusTile icon={<GitBranch size={18} />} title="本次流程" value={`${runActionLabel(detail.run.action)} · ${runStatusLabel(detail.run.status)}`} tone={detail.run.status === "failed" ? "danger" : detail.run.status === "completed" ? "ready" : "warn"} />
+                  <StatusTile icon={<CircleAlert size={18} />} title="檢查結果" value={pilotSummaryText(blockedPilot, warnPilot)} tone={blockedPilot ? "danger" : warnPilot ? "warn" : "ready"} />
+                  <StatusTile icon={<FileJson size={18} />} title="過程紀錄" value={`${detail.events.length} 筆`} tone={detail.events.length ? "ready" : "warn"} />
                 </div>
 
                 {detail.run.failure ? (
                   <div className="run-log-failure">
                     <AlertTriangle size={18} />
                     <div>
-                      <strong>{detail.run.failure.failed_stage || "failed"}</strong>
+                      <strong>{failedStageLabel(detail.run.failure.failed_stage || "failed")}</strong>
                       <span>{detail.run.failure.user_summary || detail.run.failure.error_message}</span>
                     </div>
                   </div>
@@ -2818,10 +2820,10 @@ function RunLogDrawer({
 
                 <div className="pilot-mini-list">
                   {(pilotItems.length ? pilotItems : []).map((item) => (
-                    <div className={`pilot-mini-item ${item.status}`} key={item.id}>
-                      <strong>{item.id}</strong>
-                      <span>{item.stage}</span>
-                      <em>{item.status}</em>
+                    <div className={`pilot-mini-item ${item.status}`} key={item.id} title={`${item.id} ${item.stage}: ${item.engineer_detail}`}>
+                      <strong>{pilotLabel(item.id, item.stage)}</strong>
+                      <span>{pilotHint(item)}</span>
+                      <em>{pilotStatusLabel(item.status)}</em>
                     </div>
                   ))}
                 </div>
@@ -2829,8 +2831,8 @@ function RunLogDrawer({
                 <div className="run-event-list">
                   {detail.events.slice(-18).reverse().map((event, index) => (
                     <div className={`event-log-item ${event.tone || "ready"}`} key={`${event.code || "event"}-${index}`}>
-                      <strong>{event.code || "EVENT"}</strong>
-                      <span>{event.title || event.ts || ""}</span>
+                      <strong>{eventLabel(event.code || "EVENT")}</strong>
+                      <span>{event.title || formatRunTime(event.ts || "")}</span>
                       <small>{event.detail || ""}</small>
                     </div>
                   ))}
@@ -2839,8 +2841,9 @@ function RunLogDrawer({
                 <div className="run-log-footer">
                   <button className="launch-button" onClick={() => onReplay(detail.run.run_id)} disabled={busy}>
                     <RefreshCcw size={18} />
-                    <span>{busy ? "Replay 中" : "Replay dry-run"}</span>
+                    <span>{busy ? "回放中" : "回放試算"}</span>
                   </button>
+                  <small title={detail.run.run_id}>Run ID: {shortRunId(detail.run.run_id)}</small>
                 </div>
               </>
             ) : (
@@ -2860,7 +2863,7 @@ function IsoEventLog({ issues }: { issues: IsoWorkflowIssue[] }) {
   const items = issues.slice(-8).reverse();
   return (
     <div className="iso-event-log">
-      <div className="eyebrow">Event log</div>
+      <div className="eyebrow">流程紀錄</div>
       {items.length ? items.map((issue, index) => (
         <div className={`event-log-item ${issue.tone}`} key={`${issue.code}-${index}`}>
           <strong>{issue.code}</strong>
@@ -3596,4 +3599,137 @@ function formatRunTime(value: string): string {
     return value;
   }
   return parsed.toLocaleString();
+}
+
+function runStatusLabel(status: string): string {
+  if (status === "completed") return "已完成";
+  if (status === "cancelled") return "已取消";
+  if (status === "failed") return "失敗";
+  if (status === "running") return "執行中";
+  if (status === "queued") return "等待中";
+  return status || "未知";
+}
+
+function runActionLabel(action: string): string {
+  if (action === "start_batch_detect") return "一鍵批次判讀";
+  if (action === "plan") return "命名草稿";
+  if (action === "build_rename_plan") return "命名草稿";
+  if (action === "apply") return "套用更名";
+  if (action === "replay_run_log") return "回放試算";
+  return action || "ISO 流程";
+}
+
+function runSummaryText(run: IsoRunLogSummary): string {
+  const summary = run.summary || {};
+  const total = numberFromSummary(summary.total);
+  const ready = numberFromSummary(summary.ready);
+  const warn = numberFromSummary(summary.warn);
+  const blocked = numberFromSummary(summary.blocked);
+  if (total || ready || warn || blocked) {
+    return `${total || ready + warn + blocked} 頁 · ${ready} 可用 · ${warn + blocked} 待處理`;
+  }
+  if (run.failure?.failed_stage) {
+    return failedStageLabel(run.failure.failed_stage);
+  }
+  if (run.action === "start_batch_detect") return "批次判讀紀錄";
+  if (run.action === "plan" || run.action === "build_rename_plan") return "草稿產生紀錄";
+  if (run.action === "apply") return "更名套用紀錄";
+  return run.run_type === "iso" ? "ISO 流程紀錄" : "流程紀錄";
+}
+
+function shortRunId(runId: string): string {
+  if (!runId) {
+    return "";
+  }
+  const parts = runId.split("-");
+  if (parts.length >= 4) {
+    return `${parts[0]}-${parts[1]}-${parts[2]}...`;
+  }
+  return runId.length > 18 ? `${runId.slice(0, 18)}...` : runId;
+}
+
+function pilotLabel(id: string, stage: string): string {
+  const labels: Record<string, string> = {
+    P01: "來源",
+    P02: "PDF 檢查",
+    P03: "拆頁",
+    P04: "ISO 清單",
+    P05: "欄位對應",
+    P06: "流水號判讀",
+    P07: "ISO 對應",
+    P08: "重複流水號",
+    P09: "缺流水號",
+    P10: "命名格式",
+    P11: "命名草稿",
+    P12: "可否套用",
+  };
+  return labels[id] ? `${id} ${labels[id]}` : stage || id;
+}
+
+function pilotHint(item: IsoPilotItem): string {
+  if (item.status === "ready") {
+    return "這一步已通過";
+  }
+  if (item.status === "skipped") {
+    return "本次不用檢查";
+  }
+  if (item.status === "running") {
+    return "正在處理";
+  }
+  return item.manual_hint || item.user_text || item.stage;
+}
+
+function pilotStatusLabel(status: IsoPilotItem["status"]): string {
+  if (status === "ready") return "通過";
+  if (status === "warn") return "待確認";
+  if (status === "blocked") return "需處理";
+  if (status === "skipped") return "略過";
+  if (status === "running") return "執行中";
+  return "等待";
+}
+
+function eventLabel(code: string): string {
+  const normalized = code.toUpperCase();
+  const labels: Record<string, string> = {
+    RUN_STARTED: "流程開始",
+    RUN_COMPLETED: "流程完成",
+    RUN_FAILED: "流程失敗",
+    RUN_CANCELLED: "流程取消",
+    JOB_STARTED: "工作建立",
+    JOB_RUNNING: "批次開始",
+    ROW_DONE: "完成一頁",
+    CANCELLED: "已取消",
+  };
+  return labels[normalized] || code || "事件";
+}
+
+function pilotSummaryText(blockedPilot: number, warnPilot: number): string {
+  if (!blockedPilot && !warnPilot) {
+    return "沒有待處理";
+  }
+  const parts = [];
+  if (blockedPilot) {
+    parts.push(`${blockedPilot} 個需處理`);
+  }
+  if (warnPilot) {
+    parts.push(`${warnPilot} 個待確認`);
+  }
+  return parts.join(" · ");
+}
+
+function failedStageLabel(stage: string): string {
+  const labels: Record<string, string> = {
+    iso_parse: "ISO 清單讀取失敗",
+    pdf_source: "PDF 來源失敗",
+    serial_detection: "流水號判讀失敗",
+    naming_draft: "命名草稿失敗",
+    apply: "套用更名失敗",
+    profile: "Profile 讀寫失敗",
+    failed: "流程失敗",
+  };
+  return labels[stage] || stage || "流程失敗";
+}
+
+function numberFromSummary(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
