@@ -55,11 +55,14 @@ import {
   loadIsoJobStatus,
   loadIsoProfile,
   loadIsoPreview,
+  listIsoRunLogs,
   pickIsoCombinePdf,
   pickIsoListFile,
   pickIsoPageFolder,
   pickIsoWorkFolder,
   publishIsoProfile,
+  readIsoRunLog,
+  replayIsoRunLog,
   revertIsoProfile,
   runIsoPlan,
   saveIsoDraftProfile,
@@ -70,7 +73,9 @@ import {
   type IsoPreviewPayload,
   type IsoRegion,
   type IsoRowStatus,
+  type IsoRunLogDetail,
   type IsoRunLogRef,
+  type IsoRunLogSummary,
   type IsoWorkflowIssue,
   type IsoWorkflowRequest,
   type IsoWorkflowPlan,
@@ -1041,6 +1046,10 @@ function IsoPdfAutopilot() {
   const [recordPath, setRecordPath] = useState("");
   const [activeIsoRunId, setActiveIsoRunId] = useState("");
   const [oneClickRunLog, setOneClickRunLog] = useState<IsoRunLogRef | null>(null);
+  const [runLogOpen, setRunLogOpen] = useState(false);
+  const [runLogs, setRunLogs] = useState<IsoRunLogSummary[]>([]);
+  const [runLogDetail, setRunLogDetail] = useState<IsoRunLogDetail | null>(null);
+  const [runLogBusy, setRunLogBusy] = useState(false);
   const [isoFailure, setIsoFailure] = useState<IsoFailureInfo | null>(null);
   const [failureCopied, setFailureCopied] = useState(false);
   const [debugBundleBusy, setDebugBundleBusy] = useState(false);
@@ -1209,6 +1218,81 @@ function IsoPdfAutopilot() {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       setDebugBundleBusy(false);
+    }
+  }
+
+  async function openRunLogDrawer(runId = activeIsoRunId) {
+    if (!isTauri()) {
+      setError("請用 Tauri 桌面版讀取 Run logs。");
+      return;
+    }
+    setRunLogOpen(true);
+    await refreshRunLogs(runId);
+  }
+
+  async function refreshRunLogs(preferredRunId = runLogDetail?.run.run_id || activeIsoRunId) {
+    setRunLogBusy(true);
+    setError("");
+    try {
+      const payload = await listIsoRunLogs();
+      setRunLogs(payload.runs);
+      const nextRunId = preferredRunId || payload.runs[0]?.run_id || "";
+      if (nextRunId) {
+        await loadRunLogDetail(nextRunId);
+      } else {
+        setRunLogDetail(null);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRunLogBusy(false);
+    }
+  }
+
+  async function loadRunLogDetail(runId: string) {
+    if (!runId) {
+      return;
+    }
+    setRunLogBusy(true);
+    setError("");
+    try {
+      const detail = await readIsoRunLog(runId);
+      setRunLogDetail(detail);
+      setActiveIsoRunId(runId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRunLogBusy(false);
+    }
+  }
+
+  async function replayRunLog(runId: string) {
+    if (!runId) {
+      return;
+    }
+    setRunLogBusy(true);
+    setError("");
+    try {
+      const replay = await replayIsoRunLog(runId);
+      setPlan(replay);
+      setWorkFolder(replay.source.work_folder || workFolder);
+      setCombinePdf(replay.source.combine_pdf || combinePdf);
+      setPageFolder(replay.source.page_folder || pageFolder);
+      setIsoList(replay.source.iso_list || isoList);
+      setSheetName(replay.source.sheet_name || sheetName);
+      setSerialCol(replay.source.serial_col ?? serialCol);
+      setLineCol(replay.source.line_col ?? lineCol);
+      setSelectedRowId(replay.rows[0]?.id ?? "");
+      setResultOpen(false);
+      setDryRunOpen(false);
+      setProblemOnly(false);
+      setIsoView("workbench");
+      setRunLogOpen(false);
+      setMessage(replay.message || `已 replay：${runId}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setRunLogBusy(false);
     }
   }
 
@@ -2178,6 +2262,10 @@ function IsoPdfAutopilot() {
                   <FileJson size={15} />
                   <span>{exportBusy ? "匯出中" : "匯出 CSV"}</span>
                 </button>
+                <button className="action-button" onClick={() => void openRunLogDrawer()} disabled={runLogBusy}>
+                  <FileSearch size={15} />
+                  <span>{runLogBusy ? "讀取中" : "Run logs"}</span>
+                </button>
               </div>
             </div>
           </main>
@@ -2377,6 +2465,10 @@ function IsoPdfAutopilot() {
               <FileJson size={15} />
               <span>匯出 CSV</span>
             </button>
+            <button className="action-button" onClick={() => void openRunLogDrawer()} disabled={runLogBusy}>
+              <FileSearch size={15} />
+              <span>{runLogBusy ? "讀取中" : "Run logs"}</span>
+            </button>
             <button className="action-button" onClick={legacy.launch} disabled={legacy.busy}>
               <PanelRightOpen size={15} />
               <span>{legacy.busy ? "開啟中" : "舊版"}</span>
@@ -2394,6 +2486,17 @@ function IsoPdfAutopilot() {
           onExport={exportRenameCsv}
           rows={plan.rows.filter((row) => row.selected && row.status === "ready")}
           summary={plan.summary}
+        />
+      ) : null}
+      {runLogOpen ? (
+        <RunLogDrawer
+          busy={runLogBusy}
+          detail={runLogDetail}
+          onClose={() => setRunLogOpen(false)}
+          onRefresh={() => void refreshRunLogs()}
+          onReplay={(runId) => void replayRunLog(runId)}
+          onSelect={(runId) => void loadRunLogDetail(runId)}
+          runs={runLogs}
         />
       ) : null}
       <IsoEventLog issues={workflowEvents} />
@@ -2633,6 +2736,120 @@ function IsoResultDialog({
             <ClipboardCheck size={18} />
             <span>開啟 dry-run</span>
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RunLogDrawer({
+  busy,
+  detail,
+  onClose,
+  onRefresh,
+  onReplay,
+  onSelect,
+  runs,
+}: {
+  busy: boolean;
+  detail: IsoRunLogDetail | null;
+  onClose: () => void;
+  onRefresh: () => void;
+  onReplay: (runId: string) => void;
+  onSelect: (runId: string) => void;
+  runs: IsoRunLogSummary[];
+}) {
+  const selectedRunId = detail?.run.run_id ?? "";
+  const pilotItems = detail?.run.pilot_results ?? [];
+  const blockedPilot = pilotItems.filter((item) => item.status === "blocked").length;
+  const warnPilot = pilotItems.filter((item) => item.status === "warn").length;
+  return (
+    <div className="run-log-drawer" role="dialog" aria-modal="true" aria-label="ISO run logs">
+      <div className="run-log-shell">
+        <div className="run-log-head">
+          <div>
+            <div className="eyebrow">ISO run logs</div>
+            <h2>Run Log 抽屜</h2>
+          </div>
+          <div className="run-log-actions">
+            <button className="dock-icon-button" onClick={onRefresh} disabled={busy} title="重新整理">
+              <RefreshCcw size={15} />
+            </button>
+            <button className="dock-icon-button" onClick={onClose} title="關閉">
+              <Minimize2 size={15} />
+            </button>
+          </div>
+        </div>
+
+        <div className="run-log-grid">
+          <aside className="run-log-list">
+            {runs.length ? runs.map((run) => (
+              <button className={`run-log-item ${run.status} ${run.run_id === selectedRunId ? "selected" : ""}`} key={run.run_id} onClick={() => onSelect(run.run_id)}>
+                <span>{run.status || "unknown"}</span>
+                <strong>{run.run_id}</strong>
+                <small>{run.action} · {formatRunTime(run.updated_at || run.created_at)}</small>
+              </button>
+            )) : (
+              <div className="run-log-empty">
+                <FileSearch size={22} />
+                <span>{busy ? "讀取中" : "尚無 ISO run log"}</span>
+              </div>
+            )}
+          </aside>
+
+          <main className="run-log-detail">
+            {detail ? (
+              <>
+                <div className="run-log-summary">
+                  <StatusTile icon={<GitBranch size={18} />} title="Run" value={detail.run.run_id} tone={detail.run.status === "failed" ? "danger" : detail.run.status === "completed" ? "ready" : "warn"} />
+                  <StatusTile icon={<CircleAlert size={18} />} title="Pilot" value={`${blockedPilot} blocked · ${warnPilot} warn`} tone={blockedPilot ? "danger" : warnPilot ? "warn" : "ready"} />
+                  <StatusTile icon={<FileJson size={18} />} title="Events" value={String(detail.events.length)} tone={detail.events.length ? "ready" : "warn"} />
+                </div>
+
+                {detail.run.failure ? (
+                  <div className="run-log-failure">
+                    <AlertTriangle size={18} />
+                    <div>
+                      <strong>{detail.run.failure.failed_stage || "failed"}</strong>
+                      <span>{detail.run.failure.user_summary || detail.run.failure.error_message}</span>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="pilot-mini-list">
+                  {(pilotItems.length ? pilotItems : []).map((item) => (
+                    <div className={`pilot-mini-item ${item.status}`} key={item.id}>
+                      <strong>{item.id}</strong>
+                      <span>{item.stage}</span>
+                      <em>{item.status}</em>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="run-event-list">
+                  {detail.events.slice(-18).reverse().map((event, index) => (
+                    <div className={`event-log-item ${event.tone || "ready"}`} key={`${event.code || "event"}-${index}`}>
+                      <strong>{event.code || "EVENT"}</strong>
+                      <span>{event.title || event.ts || ""}</span>
+                      <small>{event.detail || ""}</small>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="run-log-footer">
+                  <button className="launch-button" onClick={() => onReplay(detail.run.run_id)} disabled={busy}>
+                    <RefreshCcw size={18} />
+                    <span>{busy ? "Replay 中" : "Replay dry-run"}</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="run-log-empty large">
+                <FileSearch size={28} />
+                <span>{busy ? "讀取中" : "選擇一筆 run log"}</span>
+              </div>
+            )}
+          </main>
         </div>
       </div>
     </div>
@@ -3368,4 +3585,15 @@ function compactPath(path: string): string {
     return path;
   }
   return `...\\${parts.slice(-3).join("\\")}`;
+}
+
+function formatRunTime(value: string): string {
+  if (!value) {
+    return "time unknown";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
 }

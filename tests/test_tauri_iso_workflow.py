@@ -22,6 +22,7 @@ from launcher.app.tauri_iso_workflow import (
     load_iso_profile,
     load_iso_table,
     publish_iso_profile_action,
+    replay_run_log_action,
     revert_iso_profile_action,
     save_iso_draft_profile,
     save_iso_profile,
@@ -76,6 +77,40 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         payload = json.loads(result.stdout.decode("utf-8"))
         self.assertEqual(payload["summary"]["ready"], 1)
         self.assertEqual(payload["source"]["iso_list"], str(iso_list))
+
+    def test_replay_run_log_rebuilds_plan_without_creating_new_run(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_root = root / "runs"
+            pdf = root / "combine.pdf"
+            iso_list = root / "iso_list.xlsx"
+            _write_pdf(pdf, pages=1)
+            _write_iso_list(iso_list)
+            request = {
+                "action": "plan",
+                "combine_pdf": str(pdf),
+                "iso_list": str(iso_list),
+                "run_id": "iso-replay-test",
+            }
+            subprocess.run(
+                [sys.executable, "-m", "launcher.app.tauri_iso_workflow"],
+                input=json.dumps(request, ensure_ascii=False).encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, "DESKTOP_SUPPORT_ISO_RUN_ROOT": str(run_root)},
+            )
+
+            with patch.dict(os.environ, {"DESKTOP_SUPPORT_ISO_RUN_ROOT": str(run_root)}):
+                replay = replay_run_log_action(IsoWorkflowRequest(action="replay_run_log", run_id="iso-replay-test"))
+                run_dirs = [path for path in run_root.iterdir() if path.is_dir()]
+
+        self.assertEqual(replay["action"], "replay_run_log")
+        self.assertTrue(replay["replay_dry_run"])
+        self.assertEqual(replay["source_run_id"], "iso-replay-test")
+        self.assertEqual(replay["rows"][0]["new_name"], "1--PIPE-A.pdf")
+        self.assertEqual(len(run_dirs), 1)
 
     def test_work_folder_autodetects_combine_pdf_and_iso_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

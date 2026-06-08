@@ -10,6 +10,9 @@ export type IsoWorkflowAction =
   | "export_plan_csv"
   | "export_debug_bundle"
   | "pilot_report"
+  | "list_run_logs"
+  | "read_run_log"
+  | "replay_run_log"
   | "start_batch_detect"
   | "job_status"
   | "cancel_job"
@@ -141,7 +144,7 @@ export interface IsoWorkflowStep {
 
 export interface IsoWorkflowPlan {
   schema_version: number;
-  action: "plan" | "build_rename_plan" | "batch_detect_result";
+  action: "plan" | "build_rename_plan" | "batch_detect_result" | "replay_run_log";
   created_at: string;
   source: {
     kind: string;
@@ -174,6 +177,53 @@ export interface IsoWorkflowPlan {
   pilot_results?: IsoPilotItem[];
   pilot_summary?: Record<IsoPilotItem["status"], number>;
   run_log?: IsoRunLogRef;
+  source_run_id?: string;
+  replay_dry_run?: boolean;
+  message?: string;
+}
+
+export interface IsoRunLogSummary {
+  schema_version: number;
+  run_id: string;
+  run_type: string;
+  action: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  summary: Record<string, unknown>;
+  failure?: {
+    failed_stage?: string;
+    user_summary?: string;
+    error_message?: string;
+  } | null;
+  run_dir: string;
+  run_json: string;
+}
+
+export interface IsoRunLogDetail {
+  schema_version: number;
+  action: "read_run_log";
+  run: {
+    run_id: string;
+    action: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+    summary?: Record<string, unknown>;
+    failure?: IsoRunLogSummary["failure"];
+    pilot_results?: IsoPilotItem[];
+    rows?: IsoPlanRow[];
+    replay?: { action?: string; request?: Partial<IsoWorkflowRequest> };
+  };
+  events: Array<{ code?: string; tone?: string; title?: string; detail?: string; ts?: string }>;
+  run_log: IsoRunLogRef;
+}
+
+export interface IsoRunLogListPayload {
+  schema_version: number;
+  action: "list_run_logs";
+  created_at: string;
+  runs: IsoRunLogSummary[];
 }
 
 export interface IsoProfilePayload {
@@ -351,6 +401,18 @@ export async function exportIsoDebugBundle(request: Pick<IsoWorkflowRequest, "ru
 
 export async function loadIsoPilotReport(request: Partial<IsoWorkflowRequest>): Promise<IsoPilotReport> {
   return invokeJson<IsoPilotReport>("run_iso_workflow", { ...request, action: "pilot_report" });
+}
+
+export async function listIsoRunLogs(): Promise<IsoRunLogListPayload> {
+  return invokeJson<IsoRunLogListPayload>("run_iso_workflow", { action: "list_run_logs" });
+}
+
+export async function readIsoRunLog(runId: string): Promise<IsoRunLogDetail> {
+  return invokeJson<IsoRunLogDetail>("run_iso_workflow", { action: "read_run_log", run_id: runId });
+}
+
+export async function replayIsoRunLog(runId: string): Promise<IsoWorkflowPlan> {
+  return invokeJson<IsoWorkflowPlan>("run_iso_workflow", { action: "replay_run_log", run_id: runId });
 }
 
 export async function startIsoBatchDetect(request: Partial<IsoWorkflowRequest>): Promise<IsoJobPayload> {

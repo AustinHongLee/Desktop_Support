@@ -207,6 +207,51 @@ def read_iso_run(context: IsoRunLogContext) -> dict[str, Any]:
     return json.loads(context.run_json_path.read_text(encoding="utf-8"))
 
 
+def list_iso_run_logs(*, limit: int = 20) -> list[dict[str, Any]]:
+    root = iso_run_root()
+    if not root.exists():
+        return []
+    runs: list[dict[str, Any]] = []
+    for run_json in root.glob("*/run.json"):
+        try:
+            payload = json.loads(run_json.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        runs.append(_run_summary(payload, run_json))
+    runs.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    return runs[: max(1, min(int(limit), 100))]
+
+
+def read_iso_run_log(run_id: str) -> dict[str, Any]:
+    safe_run_id = _safe_run_id(run_id)
+    run_dir = iso_run_root() / safe_run_id
+    run_json = run_dir / "run.json"
+    if not run_json.exists():
+        raise FileNotFoundError(f"找不到 ISO run log：{safe_run_id}")
+    payload = json.loads(run_json.read_text(encoding="utf-8"))
+    events = []
+    events_path = run_dir / "events.jsonl"
+    if events_path.exists():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            try:
+                events.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return {
+        "schema_version": RUN_LOG_SCHEMA_VERSION,
+        "action": "read_run_log",
+        "run": payload,
+        "events": events,
+        "run_log": {
+            "schema_version": RUN_LOG_SCHEMA_VERSION,
+            "run_id": safe_run_id,
+            "run_dir": str(run_dir),
+            "run_json": str(run_json),
+            "events_jsonl": str(events_path),
+        },
+    }
+
+
 def public_run_ref(context: IsoRunLogContext) -> dict[str, Any]:
     return {
         "schema_version": RUN_LOG_SCHEMA_VERSION,
@@ -328,6 +373,23 @@ def _pilot_from_payload(payload: dict[str, Any]) -> list[Any]:
     if isinstance(result, dict) and isinstance(result.get("pilot_results"), list):
         return result["pilot_results"]
     return []
+
+
+def _run_summary(payload: dict[str, Any], run_json: Path) -> dict[str, Any]:
+    failure = payload.get("failure") if isinstance(payload.get("failure"), dict) else None
+    return {
+        "schema_version": RUN_LOG_SCHEMA_VERSION,
+        "run_id": payload.get("run_id") or run_json.parent.name,
+        "run_type": payload.get("run_type") or "",
+        "action": payload.get("action") or "",
+        "status": payload.get("status") or "",
+        "created_at": payload.get("created_at") or "",
+        "updated_at": payload.get("updated_at") or "",
+        "summary": payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
+        "failure": failure,
+        "run_dir": str(run_json.parent),
+        "run_json": str(run_json),
+    }
 
 
 def _inputs_from_request(request: dict[str, Any]) -> dict[str, Any]:

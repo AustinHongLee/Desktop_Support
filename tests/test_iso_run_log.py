@@ -12,6 +12,7 @@ from unittest.mock import patch
 from openpyxl import Workbook
 from pypdf import PdfWriter
 
+from launcher.plugins.iso_tools.run_log import list_iso_run_logs, read_iso_run_log
 from launcher.app.tauri_iso_worker import run_job
 
 
@@ -69,7 +70,36 @@ class IsoRunLogTests(unittest.TestCase):
         self.assertEqual(run["summary"]["ready"], 1)
         self.assertEqual(run["rows"][0]["new_name"], "1--PIPE-A.pdf")
         self.assertEqual(run["inputs"]["iso_list"], str(iso_list))
+        self.assertEqual(run["pilot_results"][0]["id"], "P01")
         self.assertEqual(payload["run_log"]["run_id"], run["run_id"])
+
+    def test_list_and_read_run_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_root = root / "runs"
+            pdf = root / "combine.pdf"
+            iso_list = root / "iso_list.xlsx"
+            _write_pdf(pdf, pages=1)
+            _write_iso_list(iso_list)
+
+            result = _run_workflow_cli(
+                {
+                    "action": "plan",
+                    "combine_pdf": str(pdf),
+                    "iso_list": str(iso_list),
+                    "run_id": "iso-list-read-test",
+                },
+                run_root=run_root,
+            )
+            with patch.dict(os.environ, {"DESKTOP_SUPPORT_ISO_RUN_ROOT": str(run_root)}):
+                runs = list_iso_run_logs()
+                detail = read_iso_run_log("iso-list-read-test")
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertEqual(runs[0]["run_id"], "iso-list-read-test")
+        self.assertEqual(runs[0]["status"], "completed")
+        self.assertEqual(detail["run"]["run_id"], "iso-list-read-test")
+        self.assertTrue(any(event["code"] == "RUN_COMPLETED" for event in detail["events"]))
 
     def test_worker_appends_events_jsonl_and_completes_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

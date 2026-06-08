@@ -43,8 +43,10 @@ from launcher.plugins.iso_tools.run_log import (
     ensure_iso_run,
     finish_iso_run_failure,
     finish_iso_run_success,
+    list_iso_run_logs,
     mark_iso_run_started,
     public_run_ref,
+    read_iso_run_log,
     start_iso_run,
 )
 from launcher.plugins.iso_tools.serial_correction import correct_result_with_iso_lookup
@@ -122,6 +124,12 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return export_debug_bundle(request)
     if request.action == "pilot_report":
         return pilot_report(request)
+    if request.action == "list_run_logs":
+        return list_run_logs_action(request)
+    if request.action == "read_run_log":
+        return read_run_log_action(request)
+    if request.action == "replay_run_log":
+        return replay_run_log_action(request)
     if request.action == "start_batch_detect":
         return start_batch_detect(request)
     if request.action == "job_status":
@@ -285,6 +293,46 @@ def pilot_report(request: IsoWorkflowRequest) -> dict[str, Any]:
     plan = build_iso_plan(request)
     report = build_pilot_report(request=_request_payload(request), plan=plan)
     return {**report, "source": plan.get("source", {}), "rows": plan.get("rows", [])}
+
+
+def list_run_logs_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
+    runs = list_iso_run_logs(limit=30)
+    return {
+        "schema_version": 1,
+        "action": "list_run_logs",
+        "created_at": _now(),
+        "runs": runs,
+    }
+
+
+def read_run_log_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    if not request.run_id:
+        raise ValueError("缺少 run_id，無法讀取 ISO run log。")
+    return read_iso_run_log(request.run_id)
+
+
+def replay_run_log_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    if not request.run_id:
+        raise ValueError("缺少 run_id，無法 replay ISO run log。")
+    payload = read_iso_run_log(request.run_id)
+    run = payload["run"]
+    replay = run.get("replay") if isinstance(run.get("replay"), dict) else {}
+    replay_request = replay.get("request") if isinstance(replay.get("request"), dict) else {}
+    if not replay_request:
+        raise ValueError("此 ISO run log 沒有可 replay 的 request。")
+    dry_run_request = dict(replay_request)
+    dry_run_request["action"] = "plan"
+    dry_run_request["run_id"] = ""
+    dry_run_request["rows"] = []
+    dry_run_request["export_path"] = ""
+    plan = build_iso_plan(IsoWorkflowRequest(**_normalize_request(dry_run_request)))
+    return {
+        **plan,
+        "action": "replay_run_log",
+        "source_run_id": run.get("run_id") or request.run_id,
+        "replay_dry_run": True,
+        "message": f"已 dry-run replay：{run.get('run_id') or request.run_id}",
+    }
 
 
 def load_iso_profile(request: IsoWorkflowRequest) -> dict[str, Any]:
