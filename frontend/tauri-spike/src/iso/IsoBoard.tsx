@@ -26,6 +26,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { BridgeStatus } from "../components/BridgeStatus";
 import { Gate } from "../components/Gate";
 import { StatusTile } from "../components/StatusTile";
+import { AutopilotView } from "./AutopilotView";
 import {
   applyIsoPlan,
   cancelIsoJob,
@@ -1146,84 +1147,33 @@ export function IsoBoard() {
       ) : null}
 
       {isoView === "autopilot" ? (
-        <div className="iso-autopilot-grid one-click-grid">
-          <main className="iso-autopilot-main">
-            <div className="one-click-head">
-              <div className="eyebrow">一鍵命名</div>
-              <h2>選資料夾,其餘交給它</h2>
-              <p>自動拆頁、判讀流水號、對 ISO List、命名、更名。全綠就一路到底;只有出現低自信值才會停下來請你確認。</p>
-            </div>
-
-            <div className="pipeline">
-              {pipelineStages.map((stage, index) => (
-                <Fragment key={stage.key}>
-                  <div className={`pipeline-card ${stage.state}`}>
-                    <div className="pipeline-card-top">
-                      {stage.icon}
-                      {stage.seconds != null ? <em>{stage.seconds}s</em> : stage.state === "done" ? <CircleCheck size={14} /> : null}
-                    </div>
-                    <strong>{stage.label}</strong>
-                    <span>{stage.detail}</span>
-                  </div>
-                  {index < pipelineStages.length - 1 ? <ChevronRight className="pipeline-arrow" size={18} /> : null}
-                </Fragment>
-              ))}
-            </div>
-
-            {oneClickStage === "review" ? (
-              <div className="one-click-checklist">
-                <ChecklistGate label="流水號判讀" detail={warnCount ? `${readyCount} 已確認 · ${warnCount} 待確認` : `${readyCount} 已確認`} state={warnCount ? "warn" : "ready"}>
-                  {warnCount ? (
-                    <div className="checklist-problem-rows">
-                      {issueRows.filter((row) => row.status === "warn").map((row) => (
-                        <button className={`checklist-problem-row ${selectedRow?.id === row.id ? "selected" : ""}`} key={row.id} onClick={() => { setSelectedRowId(row.id); setIsoView("workbench"); }}>
-                          <span className="mono">{String(row.page).padStart(3, "0")}</span>
-                          <span className="checklist-problem-detail">{row.note || row.vision_message || "需確認"}</span>
-                          <ChevronRight size={14} />
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </ChecklistGate>
-                {blockedCount ? <ChecklistGate label="命名衝突" detail={`${blockedCount} 個無法更名,請到工作台處理`} state="danger" /> : null}
-              </div>
-            ) : null}
-
-            {isoFailure ? (
-              <FailureCard
-                copied={failureCopied}
-                exportBusy={debugBundleBusy}
-                failure={isoFailure}
-                onCopy={copyFailureForEngineer}
-                onExport={exportFailureBundle}
-                onOpenWorkbench={openFailureWorkbench}
-              />
-            ) : null}
-
-            <button className="one-click-button" onClick={runOneClick} disabled={oneClickBusy}>
-              {oneClickButton.icon}
-              <span>{oneClickButton.label}</span>
-            </button>
-            <div className="one-click-hint">{oneClickButton.hint}</div>
-
-            <div className="one-click-terminal">
-              <div className="terminal-head">
-                <TerminalSquare size={14} />
-                <span>流程紀錄</span>
-                <em>{oneClickRunning || oneClickApplying ? `${elapsedSec}s` : oneClickStage === "done" ? "done" : "idle"}</em>
-              </div>
-              <div className="terminal-body" ref={terminalRef}>
-                {echoLines.length ? echoLines.map((line, index) => (
-                  <div className={`terminal-line ${line.tone || ""}`} key={`${line.code}-${index}`}>
-                    <span className="terminal-code">{line.code || "LOG"}</span>
-                    <span>{line.title}{line.detail ? ` · ${line.detail}` : ""}</span>
-                  </div>
-                )) : <div className="terminal-line idle"><span className="terminal-code">SYS</span><span>等待一鍵命名啟動…</span></div>}
-                {oneClickRunning || oneClickApplying ? <div className="terminal-cursor">_</div> : null}
-              </div>
-            </div>
-          </main>
-        </div>
+        <AutopilotView
+          blockedCount={blockedCount}
+          copyFailureForEngineer={copyFailureForEngineer}
+          debugBundleBusy={debugBundleBusy}
+          echoLines={echoLines}
+          elapsedSec={elapsedSec}
+          exportFailureBundle={exportFailureBundle}
+          failureCopied={failureCopied}
+          isoFailure={isoFailure}
+          issueRows={issueRows}
+          oneClickApplying={oneClickApplying}
+          oneClickBusy={oneClickBusy}
+          oneClickButton={oneClickButton}
+          oneClickRunning={oneClickRunning}
+          oneClickStage={oneClickStage}
+          openFailureWorkbench={openFailureWorkbench}
+          openWorkbenchRow={(rowId) => {
+            setSelectedRowId(rowId);
+            setIsoView("workbench");
+          }}
+          pipelineStages={pipelineStages}
+          readyCount={readyCount}
+          runOneClick={runOneClick}
+          selectedRowId={selectedRow?.id}
+          terminalRef={terminalRef}
+          warnCount={warnCount}
+        />
       ) : isoView === "engineer" ? (
         <div className="iso-engineer-grid">
           <aside className="iso-engineer-panel">
