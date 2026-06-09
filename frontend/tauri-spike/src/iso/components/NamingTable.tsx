@@ -1,0 +1,51 @@
+import type { IsoPlanRow } from "../../isoWorkflow";
+import { isoIssueKind, isoIssueLabel } from "../helpers";
+
+export function IsoPlanTable({
+  rows,
+  selectedRowId,
+  selectRow,
+  toggleRow,
+  toggleAll,
+  updateRow,
+}: {
+  rows: IsoPlanRow[];
+  selectedRowId: string;
+  selectRow: (rowId: string) => void;
+  toggleRow: (rowId: string) => void;
+  toggleAll: (select: boolean) => void;
+  updateRow: (rowId: string, field: "serial" | "line_no" | "new_name", value: string) => void;
+}) {
+  const selectable = rows.filter((row) => row.status !== "blocked");
+  const allSelected = selectable.length > 0 && selectable.every((row) => row.selected);
+  return (
+    <div className="iso-table live">
+      <div className="iso-table-head">
+        <label className="row-check" title="全選 / 全不選(不含 blocked)" onClick={(event) => event.stopPropagation()}>
+          <input type="checkbox" checked={allSelected} onChange={(event) => toggleAll(event.target.checked)} />
+        </label>
+        <span>Page</span>
+        <span>Old file</span>
+        <span>Serial</span>
+        <span>Line / drawing</span>
+        <span>Conf</span>
+        <span>Status</span>
+        <span>New filename</span>
+      </div>
+      {rows.map((row) => (
+        <div className={`iso-table-row ${row.status} ${isoIssueKind(row)} ${selectedRowId === row.id ? "selected" : ""}`} key={row.id} onClick={() => selectRow(row.id)}>
+          <label className="row-check">
+            <input type="checkbox" checked={row.selected} disabled={row.status === "blocked"} onChange={() => toggleRow(row.id)} onClick={(event) => event.stopPropagation()} />
+          </label>
+          <span>{String(row.page).padStart(3, "0")}</span>
+          <strong title={row.source_path}>{row.source_name}</strong>
+          <input className="table-cell-input serial" value={row.serial} onChange={(event) => updateRow(row.id, "serial", event.target.value)} onClick={(event) => event.stopPropagation()} />
+          <input className="table-cell-input" value={row.line_no} onChange={(event) => updateRow(row.id, "line_no", event.target.value)} onClick={(event) => event.stopPropagation()} />
+          <span className={`confidence-chip ${row.confidence >= 0.8 ? "ready" : row.confidence > 0 ? "warn" : "idle"}`}>{row.confidence ? `${Math.round(row.confidence * 100)}%` : "-"}</span>
+          <span className={`plan-state ${row.status}`} title={row.note || isoIssueLabel(row)}>{row.status}</span>
+          <input className="table-cell-input mono" value={row.new_name} title={row.note || row.target_path} onChange={(event) => updateRow(row.id, "new_name", event.target.value)} onClick={(event) => event.stopPropagation()} />
+        </div>
+      ))}
+    </div>
+  );
+}
