@@ -35,6 +35,10 @@ export function WorkbenchView({
   issueRows,
   legacy,
   lineCol,
+  canCancelBatch,
+  canGenerateDraft,
+  canOpenDryRun,
+  canStartBatch,
   openDryRun,
   openRunLogDrawer,
   pageFolder,
@@ -95,6 +99,10 @@ export function WorkbenchView({
   issueRows: IsoPlanRow[];
   legacy: LegacyBridgeState;
   lineCol: number | "";
+  canCancelBatch: boolean;
+  canGenerateDraft: boolean;
+  canOpenDryRun: boolean;
+  canStartBatch: boolean;
   openDryRun: () => void;
   openRunLogDrawer: () => void;
   pageFolder: string;
@@ -298,15 +306,15 @@ export function WorkbenchView({
         </div>
 
         <div className="iso-actions">
-          <button className="action-button" onClick={generatePlan} disabled={busy || applyBusy}>
+          <button className="action-button" onClick={generatePlan} disabled={!canGenerateDraft}>
             <RefreshCcw size={15} />
             <span>重新產生</span>
           </button>
-          <button className="action-button" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={busy || batchBusy || applyBusy}>
+          <button className="action-button" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={batchRunning ? !canCancelBatch : !canStartBatch}>
             <ScanLine size={15} />
             <span>{batchRunning ? "取消判讀" : "批次判讀"}</span>
           </button>
-          <button className="action-button" onClick={openDryRun} disabled={!selectedCount || blockedCount > 0 || warnCount > 0 || busy || applyBusy}>
+          <button className="action-button" onClick={openDryRun} disabled={!canOpenDryRun}>
             <ClipboardCheck size={15} />
             <span>套用更名</span>
           </button>

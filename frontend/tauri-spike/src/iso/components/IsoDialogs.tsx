@@ -4,6 +4,8 @@ import { IsoMetric } from "./IsoControls";
 
 export function IsoDryRunDialog({
   applyBusy,
+  applyBlockReason,
+  canApply,
   exportBusy,
   onApply,
   onClose,
@@ -12,6 +14,8 @@ export function IsoDryRunDialog({
   summary,
 }: {
   applyBusy: boolean;
+  applyBlockReason: string;
+  canApply: boolean;
   exportBusy: boolean;
   onApply: () => void;
   onClose: () => void;
@@ -39,8 +43,8 @@ export function IsoDryRunDialog({
           <IsoMetric label="Blocked" value={summary.blocked} icon={<AlertTriangle size={17} />} tone="danger" />
         </div>
 
-        <div className={`dry-run-warning ${blockedOrWarn ? "warn" : "ready"}`}>
-          {blockedOrWarn ? `${blockedOrWarn} 筆需要注意；blocked 不會套用。` : "所有勾選列皆可套用。"}
+        <div className={`dry-run-warning ${blockedOrWarn || !canApply ? "warn" : "ready"}`}>
+          {blockedOrWarn ? `${blockedOrWarn} 筆需要注意；blocked 不會套用。` : canApply ? "所有勾選列皆可套用。" : applyBlockReason}
         </div>
 
         <div className="dry-run-table">
@@ -69,7 +73,7 @@ export function IsoDryRunDialog({
             <Minimize2 size={15} />
             <span>返回校對</span>
           </button>
-          <button className="launch-button" onClick={onApply} disabled={!rows.length || applyBusy}>
+          <button className="launch-button" onClick={onApply} disabled={!canApply || applyBusy}>
             <ClipboardCheck size={18} />
             <span>{applyBusy ? "套用中" : `確認套用 ${rows.length} 筆`}</span>
           </button>
@@ -80,12 +84,14 @@ export function IsoDryRunDialog({
 }
 
 export function IsoResultDialog({
+  canOpenDryRun,
   onClose,
   onDryRun,
   onExport,
   plan,
 }: {
   onClose: () => void;
+  canOpenDryRun: boolean;
   onDryRun: () => void;
   onExport: () => void;
   plan: IsoWorkflowPlan;
@@ -125,7 +131,7 @@ export function IsoResultDialog({
             <FileJson size={15} />
             <span>匯出 CSV</span>
           </button>
-          <button className="launch-button" onClick={onDryRun} disabled={!selectedReady || issueRows.length > 0}>
+          <button className="launch-button" onClick={onDryRun} disabled={!canOpenDryRun}>
             <ClipboardCheck size={18} />
             <span>開啟 dry-run</span>
           </button>

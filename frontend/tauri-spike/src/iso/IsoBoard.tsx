@@ -83,6 +83,7 @@ import {
   targetPathFor,
   type IsoSortMode,
 } from "./helpers";
+import { getIsoMachine } from "./stateMachine";
 
 const ISO_STEPS = [
   { label: "來源", state: "idle", meta: "select PDF" },
@@ -581,39 +582,34 @@ export function IsoBoard() {
   }
 
   function openDryRun() {
+    if (!isoMachine.canOpenDryRun) {
+      setError(isoMachine.applyBlockReason);
+      chooseProblemRow();
+      return;
+    }
     if (!plan) {
-      return;
-    }
-    if (blockedCount) {
-      setError(`還有 ${blockedCount} 筆 blocked，修正前不能套用。`);
-      chooseProblemRow();
-      return;
-    }
-    if (warnCount) {
-      setError(`還有 ${warnCount} 筆 warn，請逐列確認後再套用。`);
-      chooseProblemRow();
       return;
     }
     const selected = plan.rows.filter((row) => row.selected && row.status === "ready");
     if (!selected.length) {
-      setError("沒有可套用的 ready 列；請先勾選 ready 列。");
+      setError(isoMachine.applyBlockReason);
       return;
     }
     setDryRunOpen(true);
   }
 
   async function applySelectedRows() {
-    if (!plan) {
+    if (!isoMachine.canApply) {
+      setError(isoMachine.applyBlockReason);
+      chooseProblemRow();
       return;
     }
-    if (blockedCount || warnCount) {
-      setError(blockedCount ? `還有 ${blockedCount} 筆 blocked，修正前不能套用。` : `還有 ${warnCount} 筆 warn，請逐列確認後再套用。`);
-      chooseProblemRow();
+    if (!plan) {
       return;
     }
     const selected = plan.rows.filter((row) => row.selected && row.status === "ready");
     if (!selected.length) {
-      setError("沒有勾選任何 ready 可更名列。");
+      setError(isoMachine.applyBlockReason);
       return;
     }
     setApplyBusy(true);
@@ -675,18 +671,17 @@ export function IsoBoard() {
       return;
     }
     if (oneClickStage === "review" && plan) {
-      const blockedRows = plan.rows.filter((row) => row.status === "blocked");
-      const warnRows = plan.rows.filter((row) => row.status === "warn");
-      const canApplyRows = plan.rows.filter((row) => row.selected && row.status === "ready");
-      if (blockedRows.length || warnRows.length) {
-        setSelectedRowId(blockedRows[0]?.id ?? warnRows[0]?.id ?? "");
+      const reviewMachine = getIsoMachine({
+        ...isoMachineInputForPlan(plan),
+        isoView: "autopilot",
+        oneClickStage: "review",
+      });
+      if (!reviewMachine.canApply) {
+        const problem = plan.rows.find((row) => row.status === "blocked") ?? plan.rows.find((row) => row.status === "warn");
+        setSelectedRowId(problem?.id ?? selectedRowId);
         setProblemOnly(true);
         setIsoView("workbench");
-        setMessage(blockedRows.length ? `還有 ${blockedRows.length} 個 blocked 列,先在工作台修正後再更名。` : `還有 ${warnRows.length} 個 warn 列,逐列確認後才能更名。`);
-        return;
-      }
-      if (!canApplyRows.length) {
-        setMessage("沒有 ready 且勾選的列可更名。");
+        setMessage(reviewMachine.applyBlockReason);
         return;
       }
       await autoApplyWithRecord(plan);
@@ -716,19 +711,22 @@ export function IsoBoard() {
   }
 
   async function autoApplyWithRecord(currentPlan: IsoWorkflowPlan) {
-    const blockedRows = currentPlan.rows.filter((row) => row.status === "blocked");
-    const warnRows = currentPlan.rows.filter((row) => row.status === "warn");
-    if (blockedRows.length || warnRows.length) {
-      setSelectedRowId(blockedRows[0]?.id ?? warnRows[0]?.id ?? "");
-      setProblemOnly(true);
-      setOneClickStage("review");
-      setMessage(blockedRows.length ? `還有 ${blockedRows.length} 個 blocked 列,先修正後才能完成一鍵更名。` : `還有 ${warnRows.length} 個 warn 列,逐列確認後才能完成一鍵更名。`);
-      return;
-    }
     const applyRows = currentPlan.rows.filter((row) => row.selected && row.status === "ready");
     if (!applyRows.length) {
       setOneClickStage("done");
       setMessage("沒有需要更名的檔案。");
+      return;
+    }
+    const applyMachine = getIsoMachine({
+      ...isoMachineInputForPlan(currentPlan),
+      oneClickStage: "review",
+    });
+    if (!applyMachine.canApply) {
+      const problem = currentPlan.rows.find((row) => row.status === "blocked") ?? currentPlan.rows.find((row) => row.status === "warn");
+      setSelectedRowId(problem?.id ?? "");
+      setProblemOnly(true);
+      setOneClickStage("review");
+      setMessage(applyMachine.applyBlockReason);
       return;
     }
     setApplyBusy(true);
@@ -927,6 +925,8 @@ export function IsoBoard() {
   const batchRunning = batchJob?.state === "queued" || batchJob?.state === "running" || batchJob?.state === "cancel_requested";
   const workflowEvents = [...(batchJob?.events ?? []), ...(plan?.issues ?? [])];
   const hasOneClickSource = Boolean(workFolder || combinePdf || pageFolder);
+  const isoMachineInput = isoMachineInputForPlan(plan);
+  const isoMachine = getIsoMachine(isoMachineInput);
   const elapsedSec = runStartedAt ? Math.max(0, Math.round((nowTs - runStartedAt) / 1000)) : 0;
   const oneClickRunning = oneClickStage === "running";
   const oneClickApplying = oneClickStage === "applying";
@@ -951,6 +951,27 @@ export function IsoBoard() {
     { key: "apply", label: "更名", icon: <ClipboardCheck size={18} />, state: oneClickStage === "done" ? "done" : oneClickApplying ? "run" : "idle", detail: oneClickStage === "done" ? "完成" : oneClickApplying ? "寫入中" : "等待", seconds: oneClickApplying ? elapsedSec : null },
   ];
   const echoLines = ([...(batchJob?.events ?? []), ...(plan?.issues ?? [])] as unknown as Array<{ code?: string; tone?: string; title?: string; detail?: string }>).slice(-80);
+
+  function isoMachineInputForPlan(currentPlan: IsoWorkflowPlan | null) {
+    const currentRows = currentPlan?.rows ?? [];
+    return {
+      applyBusy,
+      batchBusy,
+      batchRunning,
+      busy,
+      exportBusy,
+      hasFailure: Boolean(isoFailure),
+      hasSource: hasOneClickSource,
+      isoView,
+      oneClickStage,
+      plan: currentPlan,
+      replaying: false,
+      runLogBusy,
+      selectedCount: currentRows.filter((row) => row.selected && row.status === "ready").length,
+      blockedCount: currentRows.filter((row) => row.status === "blocked").length,
+      warnCount: currentRows.filter((row) => row.status === "warn").length,
+    };
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -1225,6 +1246,9 @@ export function IsoBoard() {
           sheetName={sheetName}
           sheetOptions={sheetOptions}
           startBatchDetect={startBatchDetect}
+          canCancelBatch={isoMachine.canCancelBatch}
+          canGenerateDraft={isoMachine.canGenerateDraft}
+          canStartBatch={isoMachine.canStartBatch}
           visualPanel={visualPanel}
           workFolder={workFolder}
         />
@@ -1255,6 +1279,10 @@ export function IsoBoard() {
           issueRows={issueRows}
           legacy={legacy}
           lineCol={lineCol}
+          canCancelBatch={isoMachine.canCancelBatch}
+          canGenerateDraft={isoMachine.canGenerateDraft}
+          canOpenDryRun={isoMachine.canOpenDryRun}
+          canStartBatch={isoMachine.canStartBatch}
           openDryRun={openDryRun}
           openRunLogDrawer={openRunLogDrawer}
           pageFolder={pageFolder}
@@ -1300,6 +1328,8 @@ export function IsoBoard() {
           onExport={exportRenameCsv}
           rows={plan.rows.filter((row) => row.selected && row.status === "ready")}
           summary={plan.summary}
+          canApply={isoMachine.canApply}
+          applyBlockReason={isoMachine.applyBlockReason}
         />
       ) : null}
       {runLogOpen ? (
@@ -1317,6 +1347,7 @@ export function IsoBoard() {
       {resultOpen && plan ? (
         <IsoResultDialog
           onClose={() => setResultOpen(false)}
+          canOpenDryRun={isoMachine.canOpenDryRun}
           onDryRun={openDryRun}
           onExport={exportRenameCsv}
           plan={plan}

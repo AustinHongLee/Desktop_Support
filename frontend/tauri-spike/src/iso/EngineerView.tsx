@@ -31,6 +31,9 @@ export function EngineerView({
   isoList,
   legacy,
   lineCol,
+  canCancelBatch,
+  canGenerateDraft,
+  canStartBatch,
   openRunLogDrawer,
   pageFolder,
   pattern,
@@ -81,6 +84,9 @@ export function EngineerView({
   isoList: string;
   legacy: LegacyBridgeState;
   lineCol: number | "";
+  canCancelBatch: boolean;
+  canGenerateDraft: boolean;
+  canStartBatch: boolean;
   openRunLogDrawer: () => void;
   pageFolder: string;
   pattern: string;
@@ -222,11 +228,11 @@ export function EngineerView({
             <StatusTile icon={<CircleAlert size={18} />} title="Issues" value={String(issueCount)} tone={issueCount ? "warn" : "ready"} />
           </div>
           <div className="engineer-actions">
-            <button className="action-button" onClick={generatePlan} disabled={busy || applyBusy}>
+            <button className="action-button" onClick={generatePlan} disabled={!canGenerateDraft}>
               <RefreshCcw size={15} />
               <span>{busy ? "產生中" : "重新產生"}</span>
             </button>
-            <button className="action-button" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={busy || batchBusy || applyBusy}>
+            <button className="action-button" onClick={batchRunning ? cancelBatchDetect : startBatchDetect} disabled={batchRunning ? !canCancelBatch : !canStartBatch}>
               <ScanLine size={15} />
               <span>{batchRunning ? "取消判讀" : "批次判讀"}</span>
             </button>
