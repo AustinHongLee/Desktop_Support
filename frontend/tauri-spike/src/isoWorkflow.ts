@@ -10,6 +10,7 @@ export type IsoWorkflowAction =
   | "export_plan_csv"
   | "export_debug_bundle"
   | "pilot_report"
+  | "roi_distribution"
   | "list_run_logs"
   | "read_run_log"
   | "replay_run_log"
@@ -177,6 +178,9 @@ export interface IsoWorkflowPlan {
     record_count: number;
     pattern: string;
     detect_serials: boolean;
+    confidence_threshold?: number;
+    serial_region?: IsoRegion | null;
+    drawing_region?: IsoRegion | null;
     profile?: IsoProfilePayload;
   };
   summary: {
@@ -351,6 +355,24 @@ export interface IsoJobPayload {
   run_log?: IsoRunLogRef;
 }
 
+export interface IsoRoiDistribution {
+  schema_version: number;
+  action: "roi_distribution";
+  created_at: string;
+  threshold: number;
+  total: number;
+  ready: number;
+  low: number;
+  missing: number;
+  samples: Array<{
+    index: number;
+    page: number;
+    source_name: string;
+    confidence: number;
+    bucket: "ready" | "low" | "missing";
+  }>;
+}
+
 export interface IsoApplyResult {
   schema_version: number;
   action: "apply";
@@ -416,6 +438,10 @@ export async function exportIsoDebugBundle(request: Pick<IsoWorkflowRequest, "ru
 
 export async function loadIsoPilotReport(request: Partial<IsoWorkflowRequest>): Promise<IsoPilotReport> {
   return invokeJson<IsoPilotReport>("run_iso_workflow", { ...request, action: "pilot_report" });
+}
+
+export async function loadIsoRoiDistribution(request: Partial<IsoWorkflowRequest>): Promise<IsoRoiDistribution> {
+  return invokeJson<IsoRoiDistribution>("run_iso_workflow", { ...request, action: "roi_distribution" });
 }
 
 export async function listIsoRunLogs(): Promise<IsoRunLogListPayload> {

@@ -2662,6 +2662,45 @@ h3 {
   background: rgba(0, 0, 0, 0.13);
 }
 
+.engineer-stale-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid rgba(255, 209, 102, 0.36);
+  border-radius: 10px;
+  padding: 10px;
+  color: rgba(255, 239, 190, 0.94);
+  background: rgba(255, 209, 102, 0.10);
+}
+
+.engineer-stale-banner > svg {
+  color: #ffd166;
+}
+
+.engineer-stale-banner > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.engineer-stale-banner strong,
+.engineer-stale-banner span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engineer-stale-banner strong {
+  font-size: 13px;
+}
+
+.engineer-stale-banner span {
+  font-size: 12px;
+  color: rgba(255, 239, 190, 0.72);
+}
+
 .engineer-form-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3347,6 +3386,18 @@ h3 {
 .roi-sample-bars {
   display: grid;
   gap: 8px;
+}
+
+.roi-sample-error {
+  border: 1px solid rgba(255, 209, 102, 0.18);
+  border-radius: 8px;
+  padding: 7px 9px;
+  color: #ffd166;
+  background: rgba(255, 209, 102, 0.08);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .roi-sample-bar {
@@ -4904,7 +4955,8 @@ code + code {
 .pilot-next-cta { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; font-size: 12px; color: #2ff5c8; }
 
 .pilot-list-panel { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.pilot-list { display: flex; flex-direction: column; gap: 6px; overflow: auto; min-height: 0; }
+.iso-engineer-panel > .pilot-list-panel { max-height: 360px; }
+.pilot-list { display: flex; flex-direction: column; gap: 6px; overflow: auto; min-height: 0; padding-right: 2px; }
 .pilot-list-item { border-radius: 10px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.025); border-left: 3px solid rgba(255,255,255,0.12); }
 .pilot-list-item.ready { border-left-color: rgba(47,245,200,0.7); }
 .pilot-list-item.warn { border-left-color: rgba(255,209,102,0.8); }

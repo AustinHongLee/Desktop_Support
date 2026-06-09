@@ -1,13 +1,23 @@
 import { CircleAlert, CircleCheck, ScanLine } from "lucide-react";
-import type { IsoPlanRow } from "../../isoWorkflow";
+import type { IsoPlanRow, IsoRoiDistribution } from "../../isoWorkflow";
 
-export function RoiSamplePanel({ rows, threshold }: { rows: IsoPlanRow[]; threshold: number }) {
-  const total = rows.length;
-  const ready = rows.filter((row) => row.confidence >= threshold).length;
-  const low = rows.filter((row) => row.confidence > 0 && row.confidence < threshold).length;
-  const missing = rows.filter((row) => !row.confidence).length;
-  const weakestRows = [...rows]
-    .sort((left, right) => (left.confidence || 0) - (right.confidence || 0) || left.page - right.page)
+export function RoiSamplePanel({
+  distribution,
+  error = "",
+  loading = false,
+  rows,
+  threshold,
+}: {
+  distribution?: IsoRoiDistribution | null;
+  error?: string;
+  loading?: boolean;
+  rows: IsoPlanRow[];
+  threshold: number;
+}) {
+  const fallback = buildFallbackDistribution(rows, threshold);
+  const data = distribution ?? fallback;
+  const weakestRows = [...data.samples]
+    .sort((left, right) => (left.confidence || 0) - (right.confidence || 0) || Number(left.page || 0) - Number(right.page || 0))
     .slice(0, 5);
 
   return (
@@ -15,18 +25,21 @@ export function RoiSamplePanel({ rows, threshold }: { rows: IsoPlanRow[]; thresh
       <div className="panel-heading compact">
         <div>
           <span>多頁採樣</span>
-          <small>{total ? `${total} rows · threshold ${Math.round(threshold * 100)}%` : "waiting"}</small>
+          <small>
+            {loading ? "loading" : data.total ? `${data.total} rows · threshold ${Math.round(data.threshold * 100)}%` : "waiting"}
+          </small>
         </div>
       </div>
+      {error ? <div className="roi-sample-error">{error}</div> : null}
       <div className="roi-sample-bars" aria-label="ROI confidence distribution">
-        <SampleBar label="高信心" count={ready} total={total} tone="ready" />
-        <SampleBar label="低信心" count={low} total={total} tone="warn" />
-        <SampleBar label="未判讀" count={missing} total={total} tone="idle" />
+        <SampleBar label="高信心" count={data.ready} total={data.total} tone="ready" />
+        <SampleBar label="低信心" count={data.low} total={data.total} tone="warn" />
+        <SampleBar label="未判讀" count={data.missing} total={data.total} tone="idle" />
       </div>
       <div className="roi-sample-list">
         {weakestRows.length ? weakestRows.map((row) => (
-          <div className="roi-sample-row" key={row.id}>
-            {row.confidence >= threshold ? <CircleCheck size={14} /> : row.confidence > 0 ? <CircleAlert size={14} /> : <ScanLine size={14} />}
+          <div className="roi-sample-row" key={`${row.index}-${row.page}-${row.source_name}`}>
+            {row.bucket === "ready" ? <CircleCheck size={14} /> : row.bucket === "low" ? <CircleAlert size={14} /> : <ScanLine size={14} />}
             <strong>{row.page}</strong>
             <span title={row.source_name}>{row.source_name}</span>
             <code>{row.confidence ? `${Math.round(row.confidence * 100)}%` : "-"}</code>
@@ -37,6 +50,31 @@ export function RoiSamplePanel({ rows, threshold }: { rows: IsoPlanRow[]; thresh
       </div>
     </div>
   );
+}
+
+function buildFallbackDistribution(rows: IsoPlanRow[], threshold: number): IsoRoiDistribution {
+  const samples = rows.map((row, index) => {
+    const confidence = Number(row.confidence || 0);
+    const bucket = confidence >= threshold ? "ready" : confidence > 0 ? "low" : "missing";
+    return {
+      index,
+      page: row.page,
+      source_name: row.source_name,
+      confidence,
+      bucket,
+    };
+  }) satisfies IsoRoiDistribution["samples"];
+  return {
+    schema_version: 1,
+    action: "roi_distribution",
+    created_at: "",
+    threshold,
+    total: samples.length,
+    ready: samples.filter((row) => row.bucket === "ready").length,
+    low: samples.filter((row) => row.bucket === "low").length,
+    missing: samples.filter((row) => row.bucket === "missing").length,
+    samples,
+  };
 }
 
 function SampleBar({ count, label, tone, total }: { count: number; label: string; tone: "ready" | "warn" | "idle"; total: number }) {

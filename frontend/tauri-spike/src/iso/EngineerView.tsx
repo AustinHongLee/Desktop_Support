@@ -3,8 +3,9 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { Gate } from "../components/Gate";
 import { StatusTile } from "../components/StatusTile";
 import type { LegacyBridgeState } from "../hooks/useLegacyBridge";
-import type { IsoJobPayload, IsoPlanRow, IsoWorkflowPlan } from "../isoWorkflow";
+import type { IsoJobPayload, IsoPilotItem, IsoPlanRow, IsoRoiDistribution, IsoWorkflowPlan } from "../isoWorkflow";
 import { PathPickerRow } from "./components/IsoControls";
+import { PilotListPanel } from "./components/PilotListPanel";
 import { RoiSamplePanel } from "./components/RoiSamplePanel";
 
 export function EngineerView({
@@ -38,12 +39,16 @@ export function EngineerView({
   openRunLogDrawer,
   pageFolder,
   pattern,
+  pilotItems,
   plan,
   profileBusy,
   profileHistoryCount,
   profileLabel,
   publishProfileToOneClick,
   revertPublishedProfile,
+  roiDistribution,
+  roiDistributionBusy,
+  roiDistributionError,
   rows,
   rowCount,
   runLogBusy,
@@ -61,6 +66,8 @@ export function EngineerView({
   visualPanel,
   issueCount,
   workFolder,
+  onPilotAutoFix,
+  onPilotJump,
 }: {
   activeProfileFolderReady: boolean;
   applyBusy: boolean;
@@ -92,12 +99,16 @@ export function EngineerView({
   openRunLogDrawer: () => void;
   pageFolder: string;
   pattern: string;
+  pilotItems: IsoPilotItem[];
   plan: IsoWorkflowPlan | null;
   profileBusy: boolean;
   profileHistoryCount: number;
   profileLabel: string;
   publishProfileToOneClick: () => void;
   revertPublishedProfile: () => void;
+  roiDistribution: IsoRoiDistribution | null;
+  roiDistributionBusy: boolean;
+  roiDistributionError: string;
   rows: IsoPlanRow[];
   rowCount: number;
   runLogBusy: boolean;
@@ -115,7 +126,11 @@ export function EngineerView({
   visualPanel: ReactNode;
   issueCount: number;
   workFolder: string;
+  onPilotAutoFix?: (item: IsoPilotItem) => void;
+  onPilotJump?: (item: IsoPilotItem) => void;
 }) {
+  const hasStaleDraft = pilotItems.some((item) => item.freshness === "stale");
+
   return (
     <div className="iso-engineer-grid">
       <aside className="iso-engineer-panel">
@@ -144,6 +159,20 @@ export function EngineerView({
       </aside>
 
       <main className="iso-engineer-panel wide">
+        {hasStaleDraft ? (
+          <div className="engineer-stale-banner">
+            <CircleAlert size={17} />
+            <div>
+              <strong>草稿已過期，請重生</strong>
+              <span>調校參數已變更，先重新產生命名草稿再回工作台套用。</span>
+            </div>
+            <button className="action-button" onClick={generatePlan} disabled={!canGenerateDraft}>
+              <RefreshCcw size={15} />
+              <span>{busy ? "產生中" : "重新產生草稿"}</span>
+            </button>
+          </div>
+        ) : null}
+
         <div className="engineer-section">
           <div className="panel-heading compact">
             <div>
@@ -253,7 +282,14 @@ export function EngineerView({
 
       <aside className="iso-engineer-panel">
         {visualPanel}
-        <RoiSamplePanel rows={rows} threshold={confidenceThreshold} />
+        <RoiSamplePanel
+          distribution={roiDistribution}
+          error={roiDistributionError}
+          loading={roiDistributionBusy}
+          rows={rows}
+          threshold={confidenceThreshold}
+        />
+        <PilotListPanel items={pilotItems} onAutoFix={onPilotAutoFix} onJump={onPilotJump} showEngineerDetail />
         <div className="legacy-fallback-card">
           <div>
             <div className="eyebrow">Legacy fallback</div>

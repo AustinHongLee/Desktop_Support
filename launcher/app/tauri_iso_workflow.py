@@ -39,6 +39,7 @@ from launcher.plugins.iso_tools.profile import (
     save_iso_naming_profile_draft,
 )
 from launcher.plugins.iso_tools.pilot import build_pilot_report
+from launcher.plugins.iso_tools.roi_calibration import confidence_distribution
 from launcher.plugins.iso_tools.run_log import (
     ensure_iso_run,
     finish_iso_run_failure,
@@ -124,6 +125,8 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return export_debug_bundle(request)
     if request.action == "pilot_report":
         return pilot_report(request)
+    if request.action == "roi_distribution":
+        return roi_distribution(request)
     if request.action == "list_run_logs":
         return list_run_logs_action(request)
     if request.action == "read_run_log":
@@ -186,6 +189,9 @@ def build_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
             "record_count": len(records),
             "pattern": pattern,
             "detect_serials": request.detect_serials,
+            "confidence_threshold": request.confidence_threshold if request.confidence_threshold is not None else SERIAL_AUTO_FILL_CONFIDENCE,
+            "serial_region": request.serial_region,
+            "drawing_region": request.drawing_region,
             "profile": loaded_profile,
         },
         "summary": summary,
@@ -282,6 +288,9 @@ def pilot_report(request: IsoWorkflowRequest) -> dict[str, Any]:
                 "line_col": request.line_col,
                 "pattern": _plan_pattern(request),
                 "detect_serials": request.detect_serials,
+                "confidence_threshold": request.confidence_threshold if request.confidence_threshold is not None else SERIAL_AUTO_FILL_CONFIDENCE,
+                "serial_region": request.serial_region,
+                "drawing_region": request.drawing_region,
                 "pdf_count": len(request.rows),
                 "record_count": 0,
             },
@@ -293,6 +302,21 @@ def pilot_report(request: IsoWorkflowRequest) -> dict[str, Any]:
     plan = build_iso_plan(request)
     report = build_pilot_report(request=_request_payload(request), plan=plan)
     return {**report, "source": plan.get("source", {}), "rows": plan.get("rows", [])}
+
+
+def roi_distribution(request: IsoWorkflowRequest) -> dict[str, Any]:
+    rows = [dict(row) for row in request.rows]
+    if not rows:
+        plan = build_iso_plan(request)
+        rows = [dict(row) for row in plan.get("rows", []) if isinstance(row, dict)]
+    threshold = request.confidence_threshold if request.confidence_threshold is not None else SERIAL_AUTO_FILL_CONFIDENCE
+    distribution = confidence_distribution(rows, threshold=threshold)
+    return {
+        "schema_version": 1,
+        "action": "roi_distribution",
+        "created_at": _now(),
+        **distribution,
+    }
 
 
 def list_run_logs_action(_request: IsoWorkflowRequest) -> dict[str, Any]:

@@ -37,6 +37,7 @@ import {
   loadIsoJobStatus,
   loadIsoProfile,
   loadIsoPreview,
+  loadIsoRoiDistribution,
   listIsoRunLogs,
   pickIsoCombinePdf,
   pickIsoListFile,
@@ -55,6 +56,7 @@ import {
   type IsoProfilePayload,
   type IsoPreviewPayload,
   type IsoRegion,
+  type IsoRoiDistribution,
   type IsoRunLogDetail,
   type IsoRunLogRef,
   type IsoRunLogSummary,
@@ -129,6 +131,9 @@ export function IsoBoard() {
   const [preview, setPreview] = useState<IsoPreviewPayload | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [roiDistribution, setRoiDistribution] = useState<IsoRoiDistribution | null>(null);
+  const [roiDistributionBusy, setRoiDistributionBusy] = useState(false);
+  const [roiDistributionError, setRoiDistributionError] = useState("");
   const [profile, setProfile] = useState<IsoProfilePayload | null>(null);
   const [profileBusy, setProfileBusy] = useState(false);
   const [roiDraftDirty, setRoiDraftDirty] = useState(false);
@@ -951,6 +956,18 @@ export function IsoBoard() {
     : "auto";
   const headers = plan?.source.headers ?? [];
   const sheetOptions = plan?.source.sheet_options ?? (sheetName ? [sheetName] : []);
+  const pilotItems = useMemo(
+    () => localizeDraftFreshness(plan?.pilot_results ?? [], plan, {
+      confidenceThreshold,
+      drawingRegion,
+      lineCol,
+      pattern,
+      serialCol,
+      serialRegion,
+      sheetName,
+    }),
+    [confidenceThreshold, drawingRegion, lineCol, pattern, plan, serialCol, serialRegion, sheetName],
+  );
   const hasPublishedProfile = profile?.published_exists ?? (profile?.profile_scope === "draft" ? false : profile?.exists);
   const hasDraftProfile = profile?.draft_exists ?? (profile?.profile_scope === "draft" && profile.exists);
   const profileHistoryCount = profile?.history_count ?? 0;
@@ -1065,6 +1082,48 @@ export function IsoBoard() {
       cancelled = true;
     };
   }, [selectedRow?.source_path, detectSerials, serialRegion, drawingRegion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!rows.length) {
+      setRoiDistribution(null);
+      setRoiDistributionBusy(false);
+      setRoiDistributionError("");
+      return;
+    }
+    if (!isTauri()) {
+      setRoiDistribution(null);
+      setRoiDistributionBusy(false);
+      setRoiDistributionError("");
+      return;
+    }
+    setRoiDistributionBusy(true);
+    setRoiDistributionError("");
+    void loadIsoRoiDistribution({
+      ...requestPayload(rows),
+      confidence_threshold: confidenceThreshold,
+      rows,
+    })
+      .then((payload) => {
+        if (!cancelled) {
+          setRoiDistribution(payload);
+        }
+      })
+      .catch((caught) => {
+        if (!cancelled) {
+          setRoiDistribution(null);
+          setRoiDistributionError(caught instanceof Error ? caught.message : String(caught));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setRoiDistributionBusy(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rows, confidenceThreshold]);
 
   useEffect(() => {
     if (!batchJob || !batchRunning) {
@@ -1318,12 +1377,16 @@ export function IsoBoard() {
           openRunLogDrawer={openRunLogDrawer}
           pageFolder={pageFolder}
           pattern={pattern}
+          pilotItems={pilotItems}
           plan={plan}
           profileBusy={profileBusy}
           profileHistoryCount={profileHistoryCount}
           profileLabel={profileLabel}
           publishProfileToOneClick={publishProfileToOneClick}
           revertPublishedProfile={revertPublishedProfile}
+          roiDistribution={roiDistribution}
+          roiDistributionBusy={roiDistributionBusy}
+          roiDistributionError={roiDistributionError}
           rows={rows}
           rowCount={rows.length}
           runLogBusy={runLogBusy}
@@ -1343,6 +1406,8 @@ export function IsoBoard() {
           canStartBatch={isoMachine.canStartBatch}
           visualPanel={visualPanel}
           workFolder={workFolder}
+          onPilotAutoFix={() => void generatePlan()}
+          onPilotJump={handlePilotJump}
         />
       ) : (
         <WorkbenchView
@@ -1378,7 +1443,7 @@ export function IsoBoard() {
           openRunLogDrawer={openRunLogDrawer}
           pageFolder={pageFolder}
           pattern={pattern}
-          pilotItems={plan?.pilot_results ?? []}
+          pilotItems={pilotItems}
           onPilotJump={handlePilotJump}
           plan={plan}
           problemOnly={problemOnly}
@@ -1441,4 +1506,82 @@ export function IsoBoard() {
       ) : null}
     </section>
   );
+}
+
+type DraftFreshnessInputs = {
+  confidenceThreshold: number;
+  drawingRegion: IsoRegion;
+  lineCol: number | "";
+  pattern: string;
+  serialCol: number | "";
+  serialRegion: IsoRegion;
+  sheetName: string;
+};
+
+function localizeDraftFreshness(
+  items: IsoPilotItem[],
+  plan: IsoWorkflowPlan | null,
+  current: DraftFreshnessInputs,
+): IsoPilotItem[] {
+  if (!items.length || !plan) {
+    return items;
+  }
+  const changed = changedDraftKeys(plan.source, current);
+  if (!changed.length) {
+    return items;
+  }
+  let sawFreshnessItem = false;
+  const localized = items.map((item) => {
+    if (item.id !== "P15") {
+      return item;
+    }
+    sawFreshnessItem = true;
+    return staleDraftItem(item, changed);
+  });
+  return sawFreshnessItem ? localized : [...localized, staleDraftItem(null, changed)];
+}
+
+function changedDraftKeys(source: IsoWorkflowPlan["source"], current: DraftFreshnessInputs): string[] {
+  const checks: Array<[string, unknown, unknown]> = [
+    ["sheet_name", current.sheetName, source.sheet_name],
+    ["serial_col", current.serialCol, source.serial_col],
+    ["line_col", current.lineCol, source.line_col],
+    ["pattern", current.pattern, source.pattern],
+    ["confidence_threshold", current.confidenceThreshold, source.confidence_threshold],
+    ["serial_region", current.serialRegion, source.serial_region],
+    ["drawing_region", current.drawingRegion, source.drawing_region],
+  ];
+  return checks
+    .filter(([, , sourceValue]) => sourceValue !== undefined && sourceValue !== null && sourceValue !== "")
+    .filter(([, currentValue, sourceValue]) => stableValue(currentValue) !== stableValue(sourceValue))
+    .map(([key]) => key);
+}
+
+function staleDraftItem(item: IsoPilotItem | null, changed: string[]): IsoPilotItem {
+  return {
+    ...(item ?? {}),
+    id: "P15",
+    stage: "draft_freshness",
+    status: "warn",
+    user_text: "設定已變更，草稿可能過期，建議重新產生。",
+    engineer_detail: `changed=${changed.join(",")}; local=true`,
+    metrics: { changed, local: true },
+    auto_fix: item?.auto_fix ?? "build_rename_plan。",
+    manual_hint: item?.manual_hint ?? "重新產生命名草稿。",
+    blocks_apply: false,
+    issue_codes: item?.issue_codes ?? [],
+    next_action: item?.next_action ?? { label: "重新產生草稿", view: "workbench", anchor: "dryrun" },
+    freshness: "stale",
+    needs_review: item?.needs_review ?? false,
+  };
+}
+
+function stableValue(value: unknown): string {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value.toFixed(6) : String(value);
+  }
+  if (typeof value === "object" && value !== null) {
+    return JSON.stringify(value, Object.keys(value).sort());
+  }
+  return String(value);
 }

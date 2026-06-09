@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,9 @@ PILOT_ITEM_IDS = (
     "P10",
     "P11",
     "P12",
+    "P13",
+    "P14",
+    "P15",
 )
 PILOT_STATUSES = {"pending", "running", "ready", "warn", "blocked", "skipped"}
 # Orthogonal, append-only freshness flag (schema v2). Kept separate from the 6
@@ -36,10 +40,19 @@ def build_pilot_report(
     request = request or {}
     plan = _plan_payload(plan, job)
     source = _source_payload(request, plan)
+    plan_source = dict(plan.get("source") if isinstance(plan.get("source"), dict) else {})
     rows = _rows_payload(plan, job, request)
     summary = _summary_payload(plan, job, rows)
     issues = _issues_payload(plan, job)
-    items = _build_items(request=request, source=source, rows=rows, summary=summary, issues=issues, job=job or {})
+    items = _build_items(
+        request=request,
+        source=source,
+        plan_source=plan_source,
+        rows=rows,
+        summary=summary,
+        issues=issues,
+        job=job or {},
+    )
     return {
         "schema_version": PILOT_SCHEMA_VERSION,
         "action": "pilot_report",
@@ -53,6 +66,7 @@ def _build_items(
     *,
     request: dict[str, Any],
     source: dict[str, Any],
+    plan_source: dict[str, Any],
     rows: list[dict[str, Any]],
     summary: dict[str, Any],
     issues: list[dict[str, Any]],
@@ -81,6 +95,30 @@ def _build_items(
     blocked_count = _int_value(summary.get("blocked"), status_counts["blocked"])
     warn_count = _int_value(summary.get("warn"), status_counts["warn"])
     job_state = str(job.get("state") or "")
+    confidence_values = [
+        _float_value(row.get("confidence"), 0.0)
+        for row in rows
+        if str(row.get("vision_message") or "").strip()
+    ]
+    avg_confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
+    low_ratio = (len(low_confidence_rows) / len(rows)) if rows else 0.0
+    roi_status = (
+        "ready" if avg_confidence >= 0.85 and low_ratio < 0.10
+        else "blocked" if low_ratio > 0.50
+        else "warn" if rows and detect_serials
+        else "skipped" if not detect_serials
+        else "pending"
+    )
+    profile = source.get("profile") if isinstance(source.get("profile"), dict) else {}
+    missing_profile_paths = [
+        key for key in ("iso_list", "page_folder", "combine_pdf")
+        if str(source.get(key) or "").strip() and not _path_exists(source.get(key))
+    ]
+    draft_mismatch = bool(profile.get("draft_exists")) and not bool(profile.get("published_exists"))
+    profile_status = "blocked" if missing_profile_paths else "warn" if draft_mismatch else "ready"
+    freshness_changed = _changed_source_keys(request, plan_source)
+    is_replay = str((job or {}).get("action") or plan_source.get("action") or "").endswith("replay_run_log")
+    draft_stale = bool(freshness_changed) or is_replay
 
     return [
         _item(
@@ -219,6 +257,41 @@ def _build_items(
             manual_hint="先處理 blocked，warn 需確認後才套用。",
             blocks_apply=bool(blocked_count),
             issue_codes=_issue_codes(issues, stage="apply"),
+        ),
+        _item(
+            "P13",
+            "roi_confidence",
+            roi_status,
+            "判讀品質良好。" if roi_status == "ready" else f"{len(low_confidence_rows)} 頁需確認（平均信心 {avg_confidence:.0%}）。",
+            engineer_detail=f"avg={avg_confidence:.3f}; low_ratio={low_ratio:.2f}; low={len(low_confidence_rows)}",
+            metrics={"avg_confidence": avg_confidence, "low_ratio": low_ratio, "low": len(low_confidence_rows)},
+            auto_fix="重新自動校準 ROI 或降低門檻。",
+            manual_hint="到調校調整 ROI / 門檻。",
+            blocks_apply=False,
+            next_action={"label": "到調校檢查判讀品質", "view": "engineer", "anchor": "roi"},
+        ),
+        _item(
+            "P14",
+            "profile_consistency",
+            profile_status,
+            f"設定指向的檔案不存在：{', '.join(missing_profile_paths)}" if missing_profile_paths else "草稿尚未發布到一鍵。" if draft_mismatch else "Profile 一致。",
+            engineer_detail=f"missing={missing_profile_paths}; draft_mismatch={draft_mismatch}",
+            metrics={"missing": len(missing_profile_paths), "draft_mismatch": draft_mismatch},
+            manual_hint="到調校重新選來源或發布草稿。",
+            blocks_apply=bool(missing_profile_paths),
+            next_action={"label": "到調校檢查 Profile", "view": "engineer", "anchor": "profile"},
+        ),
+        _item(
+            "P15",
+            "draft_freshness",
+            "warn" if draft_stale else "ready",
+            "設定已變更，草稿可能過期，建議重新產生。" if draft_stale else "草稿與目前設定一致。",
+            engineer_detail=f"changed={freshness_changed}; replay={is_replay}",
+            metrics={"changed": freshness_changed, "replay": is_replay},
+            freshness="stale" if draft_stale else "fresh",
+            manual_hint="重新產生命名草稿。",
+            blocks_apply=False,
+            next_action={"label": "重新產生草稿", "view": "workbench", "anchor": "dryrun"},
         ),
     ]
 
@@ -364,6 +437,35 @@ def _pages(rows: list[dict[str, Any]]) -> list[int]:
 def _path_exists(value: Any) -> bool:
     text = str(value or "").strip()
     return bool(text) and Path(text).exists()
+
+
+def _changed_source_keys(request: dict[str, Any], plan_source: dict[str, Any]) -> list[str]:
+    changed: list[str] = []
+    for key in (
+        "sheet_name",
+        "serial_col",
+        "line_col",
+        "pattern",
+        "confidence_threshold",
+        "serial_region",
+        "drawing_region",
+    ):
+        request_value = request.get(key)
+        if request_value in (None, ""):
+            continue
+        if not _values_match(request_value, plan_source.get(key)):
+            changed.append(key)
+    return changed
+
+
+def _values_match(left: Any, right: Any) -> bool:
+    return _stable_value(left) == _stable_value(right)
+
+
+def _stable_value(value: Any) -> str:
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return str(value)
 
 
 def _pattern_has_tokens(pattern: str) -> bool:
