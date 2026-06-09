@@ -3,6 +3,7 @@
 > Date: 2026-06-09
 > Branch: `codex/tauri-react-spike`
 > Status: main uplift complete; this file replaces the earlier stale "Batch 1-5 todo" handoff.
+> Docs index: `docs/iso_pdf_current_status.md`
 
 ---
 
@@ -133,7 +134,7 @@ git diff --check
 | Batch 4 一鍵導引 / 失敗橋接 | done |
 | Batch 5 targeted tests / layout polish | done |
 | ROI slider 卡死風險 | fixed by debounce |
-| 文件去舊化 | this file |
+| 文件去舊化 | done; see `docs/iso_pdf_current_status.md` |
 
 ---
 
@@ -181,7 +182,9 @@ C:\Users\a0976\Downloads\t
 
 ## 7. 相關文件
 
-- 設計總綱：`docs/iso_pdf_pilot_uplift_plan_2026-06-09.md`
-- 三方統整與邊界裁決：`docs/iso_pdf_workbench_integrated_execution_plan_2026-06-08.md`
-- 原始 17 項設計參考：`docs/iso_pdf_next_stage_design_2026-06-08.md`
-- 注意：較早的 audit / blueprint / pilot plan 是設計歷程，不代表目前實作狀態。
+- 目前索引：`docs/iso_pdf_current_status.md`
+- 歷史設計檔案：`docs/archive/iso_pdf/`
+- 設計總綱：`docs/archive/iso_pdf/iso_pdf_pilot_uplift_plan_2026-06-09.md`
+- 三方統整與邊界裁決：`docs/archive/iso_pdf/iso_pdf_workbench_integrated_execution_plan_2026-06-08.md`
+- 原始 17 項設計參考：`docs/archive/iso_pdf/iso_pdf_next_stage_design_2026-06-08.md`
+- 注意：archive 內的 audit / blueprint / pilot plan 是設計歷程，不代表目前實作狀態。

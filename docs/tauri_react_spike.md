@@ -15,13 +15,14 @@ It does not replace the PyQt launcher yet. The intended migration shape is:
 - Tauri debug/release exe builds successfully.
 - Python backend is packaged as a PyInstaller sidecar.
 - The Tauri app starts as a small right-edge dock tail, expands into a compact dock panel, then opens the full cockpit on demand.
+- ISO PDF is backend-connected and the Pilot uplift is complete. See `docs/iso_pdf_current_status.md`.
 - Shutdown Safety Inspector is backend-connected through a Rust command that calls:
 
 ```powershell
 python -m launcher.app.shutdown_safety_inspector --print-json
 ```
 
-ISO PDF, Cleanup, and Locks are cockpit UI prototypes only; their Python workflows are not connected to Tauri commands yet.
+Cleanup and Locks are cockpit UI prototypes only; their Python workflows are not connected to Tauri commands yet.
 
 ## Build
 
@@ -70,7 +71,7 @@ Project root lookup order:
 2. The local repository root, when running from the checked-out project.
 3. The Tauri exe folder, for portable standalone runtime.
 
-The bundled sidecar removes the need for a local Python install for Shutdown Safety Inspector. ISO PDF, Cleanup, and Locks still need their backend commands connected before those workbenches are complete.
+The bundled sidecar removes the need for a local Python install for connected workbenches such as Shutdown Safety Inspector and ISO PDF. Cleanup and Locks still need their backend commands connected before those workbenches are complete.
 
 ## Tail Safety
 
