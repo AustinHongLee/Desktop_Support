@@ -50,6 +50,7 @@ import {
   saveIsoDraftProfile,
   startIsoBatchDetect,
   type IsoJobPayload,
+  type IsoPilotItem,
   type IsoPlanRow,
   type IsoProfilePayload,
   type IsoPreviewPayload,
@@ -78,6 +79,7 @@ import {
   normalizeIsoRows,
   normalizeRegion,
   parentPath,
+  pilotLocation,
   sortIsoRows,
   summarizeIsoRows,
   targetPathFor,
@@ -398,6 +400,33 @@ export function IsoBoard() {
       setProblemOnly(true);
     }
     setIsoView("workbench");
+  }
+
+  function handlePilotJump(item: IsoPilotItem) {
+    const location = pilotLocation(item);
+    if (location.view === "engineer") {
+      setIsoView("engineer");
+      return;
+    }
+    if (location.view === "autopilot") {
+      setIsoView("autopilot");
+      return;
+    }
+    setIsoView("workbench");
+    if (location.anchor === "dryrun") {
+      openDryRun();
+      return;
+    }
+    let target: IsoPlanRow | undefined;
+    if (location.row_ref?.startsWith("page:")) {
+      const page = Number(location.row_ref.slice(5));
+      target = plan?.rows.find((row) => row.page === page);
+    }
+    target = target ?? plan?.rows.find((row) => row.status === "blocked" || row.status === "warn");
+    if (target) {
+      setSelectedRowId(target.id);
+      setProblemOnly(true);
+    }
   }
 
   async function chooseWorkFolder() {
@@ -1349,6 +1378,8 @@ export function IsoBoard() {
           openRunLogDrawer={openRunLogDrawer}
           pageFolder={pageFolder}
           pattern={pattern}
+          pilotItems={plan?.pilot_results ?? []}
+          onPilotJump={handlePilotJump}
           plan={plan}
           problemOnly={problemOnly}
           profileLabel={profileLabel}

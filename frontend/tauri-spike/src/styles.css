@@ -2509,7 +2509,7 @@ h3 {
 }
 
 .iso-table-panel {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
 }
 
 .workbench-table-stack {
@@ -2964,8 +2964,7 @@ h3 {
 }
 
 .workbench-table-stack .iso-table.live {
-  height: 100%;
-  max-height: none;
+  max-height: 100%;
 }
 
 .iso-table.live::-webkit-scrollbar {
@@ -4882,3 +4881,46 @@ code + code {
 .terminal-line.idle { color: rgba(220,235,228,0.45); }
 .terminal-cursor { color: #2ff5c8; animation: oc-blink 1s steps(2) infinite; }
 @keyframes oc-blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+
+/* ===== Pilot uplift (Batch 1): shared PilotStrip / PilotListPanel ===== */
+.pilot-strip { display: flex; flex-direction: column; gap: 8px; border-radius: 12px; padding: 10px 12px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); }
+.pilot-strip-head { display: flex; align-items: center; justify-content: space-between; }
+.pilot-strip-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: rgba(220,235,228,0.55); }
+.pilot-strip-counts { font-size: 12px; font-variant-numeric: tabular-nums; color: rgba(220,235,228,0.7); }
+.pilot-strip-track { display: flex; flex-wrap: wrap; gap: 6px; }
+.pilot-node { display: inline-flex; align-items: center; gap: 5px; min-width: 0; border-radius: 9px; padding: 5px 9px; font-size: 11px; color: rgba(220,235,228,0.78); background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); cursor: pointer; }
+.pilot-node strong { font-size: 11px; font-weight: 750; white-space: nowrap; }
+.pilot-node:hover { border-color: rgba(47,245,200,0.4); }
+.pilot-node.ready { color: #2ff5c8; border-color: rgba(47,245,200,0.3); }
+.pilot-node.warn { color: #ffd166; border-color: rgba(255,209,102,0.4); }
+.pilot-node.danger { color: #ff4f7b; border-color: rgba(255,79,123,0.45); }
+.pilot-node.run { color: #2ff5c8; border-color: rgba(47,245,200,0.55); background: rgba(47,245,200,0.07); }
+.pilot-node.idle { opacity: 0.55; }
+.pilot-node-badge { font-style: normal; font-size: 10px; padding: 1px 5px; border-radius: 999px; background: rgba(255,209,102,0.16); color: #ffd166; }
+.pilot-next-step { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; border-radius: 10px; padding: 8px 11px; background: rgba(47,245,200,0.06); border: 1px solid rgba(47,245,200,0.22); cursor: pointer; }
+.pilot-next-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: #2ff5c8; flex: 0 0 auto; }
+.pilot-next-text { flex: 1 1 auto; min-width: 0; font-size: 12px; color: rgba(220,235,228,0.85); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pilot-next-cta { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; font-size: 12px; color: #2ff5c8; }
+
+.pilot-list-panel { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.pilot-list { display: flex; flex-direction: column; gap: 6px; overflow: auto; min-height: 0; }
+.pilot-list-item { border-radius: 10px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.025); border-left: 3px solid rgba(255,255,255,0.12); }
+.pilot-list-item.ready { border-left-color: rgba(47,245,200,0.7); }
+.pilot-list-item.warn { border-left-color: rgba(255,209,102,0.8); }
+.pilot-list-item.danger { border-left-color: rgba(255,79,123,0.8); }
+.pilot-list-item.run { border-left-color: rgba(47,245,200,0.8); }
+.pilot-list-item > summary { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer; list-style: none; }
+.pilot-list-item > summary::-webkit-details-marker { display: none; }
+.pilot-list-item > summary strong { font-size: 12px; flex: 0 0 auto; }
+.pilot-list-user { flex: 1 1 auto; min-width: 0; font-size: 12px; color: rgba(220,235,228,0.7); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pilot-list-status { flex: 0 0 auto; font-size: 11px; }
+.pilot-list-status.ready { color: #2ff5c8; }
+.pilot-list-status.warn { color: #ffd166; }
+.pilot-list-status.danger { color: #ff4f7b; }
+.pilot-list-body { display: flex; flex-direction: column; gap: 6px; padding: 0 10px 10px; }
+.pilot-list-detail { font-family: ui-monospace, "Cascadia Code", monospace; font-size: 11px; color: rgba(220,235,228,0.66); word-break: break-all; }
+.pilot-list-metrics, .pilot-list-codes, .pilot-list-hint { font-size: 11px; color: rgba(220,235,228,0.6); }
+.pilot-list-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.pilot-list-empty { font-size: 12px; color: rgba(220,235,228,0.55); padding: 10px; }
+.row-review-flag { margin-left: 6px; font-style: normal; font-size: 10px; padding: 1px 5px; border-radius: 999px; background: rgba(255,209,102,0.16); color: #ffd166; }

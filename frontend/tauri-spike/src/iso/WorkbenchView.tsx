@@ -1,13 +1,13 @@
 import { AlertTriangle, Braces, ChevronRight, CircleAlert, CircleCheck, ClipboardCheck, FileJson, FileSearch, FileText, FolderOpen, Layers3, PanelRightOpen, RefreshCcw, ScanLine, SearchCheck, Settings, Table2 } from "lucide-react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { Gate } from "../components/Gate";
 import { StatusTile } from "../components/StatusTile";
 import type { LegacyBridgeState } from "../hooks/useLegacyBridge";
-import type { IsoPlanRow, IsoWorkflowIssue, IsoWorkflowPlan, IsoWorkflowStep } from "../isoWorkflow";
+import type { IsoPilotItem, IsoPlanRow, IsoWorkflowIssue, IsoWorkflowPlan, IsoWorkflowStep } from "../isoWorkflow";
 import type { IsoSortMode } from "./helpers";
 import { compactPath } from "./helpers";
 import { IsoEmptyPlan, IsoMetric, PathPickerRow } from "./components/IsoControls";
 import { IsoPlanTable } from "./components/NamingTable";
+import { PilotStrip } from "./components/PilotStrip";
 
 export function WorkbenchView({
   activeProfileFolderReady,
@@ -40,8 +40,10 @@ export function WorkbenchView({
   openEngineerView,
   openDryRun,
   openRunLogDrawer,
+  onPilotJump,
   pageFolder,
   pattern,
+  pilotItems,
   plan,
   problemOnly,
   profileLabel,
@@ -98,6 +100,8 @@ export function WorkbenchView({
   openRunLogDrawer: () => void;
   pageFolder: string;
   pattern: string;
+  pilotItems: IsoPilotItem[];
+  onPilotJump: (item: IsoPilotItem) => void;
   plan: IsoWorkflowPlan | null;
   problemOnly: boolean;
   profileLabel: string;
@@ -163,18 +167,10 @@ export function WorkbenchView({
           <ReadOnlySetting label="影像判讀" value={detectSerials ? "預設開啟" : "已關閉"} tone={detectSerials ? "ready" : "warn"} />
         </div>
 
-        <div className="iso-side-card checklist">
-          <h3>Checklist</h3>
-          <Gate label="PDF 來源" state={plan?.summary.total ? "ready" : workFolder || combinePdf || pageFolder ? "idle" : "warn"} />
-          <Gate label="ISO List" state={plan?.source.record_count ? "ready" : isoList || workFolder ? "idle" : "warn"} />
-          <Gate label="欄位對應" state={plan?.source.serial_col !== undefined && plan.source.line_col !== undefined ? "ready" : "idle"} />
-          <Gate label="Profile" state={hasPublishedProfile ? "ready" : activeProfileFolderReady ? "idle" : "warn"} />
-          <Gate label="問題列" state={blockedCount ? "warn" : plan ? "ready" : "idle"} />
-          <Gate label="舊工作台備援" state="ready" />
-        </div>
       </aside>
 
       <main className="iso-table-panel">
+        <PilotStrip items={pilotItems} onJump={onPilotJump} />
         <div className="iso-metric-strip">
           <IsoMetric label="PDFs" value={rows.length} icon={<FileText size={17} />} />
           <IsoMetric label="Ready" value={readyCount} icon={<CircleCheck size={17} />} tone="ready" />

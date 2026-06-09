@@ -42,7 +42,10 @@ export function IsoPlanTable({
           <input className="table-cell-input serial" value={row.serial} onChange={(event) => updateRow(row.id, "serial", event.target.value)} onClick={(event) => event.stopPropagation()} />
           <input className="table-cell-input" value={row.line_no} onChange={(event) => updateRow(row.id, "line_no", event.target.value)} onClick={(event) => event.stopPropagation()} />
           <span className={`confidence-chip ${row.confidence >= 0.8 ? "ready" : row.confidence > 0 ? "warn" : "idle"}`}>{row.confidence ? `${Math.round(row.confidence * 100)}%` : "-"}</span>
-          <span className={`plan-state ${row.status}`} title={row.note || isoIssueLabel(row)}>{row.status}</span>
+          <span className={`plan-state ${row.status}`} title={row.note || isoIssueLabel(row)}>
+            {row.status}
+            {row.note === "manual corrected" ? <em className="row-review-flag">未確認</em> : null}
+          </span>
           <input className="table-cell-input mono" value={row.new_name} title={row.note || row.target_path} onChange={(event) => updateRow(row.id, "new_name", event.target.value)} onClick={(event) => event.stopPropagation()} />
         </div>
       ))}
