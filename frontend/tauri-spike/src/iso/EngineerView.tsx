@@ -2,15 +2,9 @@ import { Braces, CircleAlert, ClipboardCheck, FileJson, FileSearch, FileText, Fo
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { Gate } from "../components/Gate";
 import { StatusTile } from "../components/StatusTile";
+import type { LegacyBridgeState } from "../hooks/useLegacyBridge";
 import type { IsoJobPayload, IsoWorkflowPlan } from "../isoWorkflow";
 import { PathPickerRow } from "./components/IsoControls";
-
-export interface LegacyBridgeState {
-  busy: boolean;
-  error: string;
-  launch: () => Promise<void>;
-  message: string;
-}
 
 export function EngineerView({
   activeProfileFolderReady,

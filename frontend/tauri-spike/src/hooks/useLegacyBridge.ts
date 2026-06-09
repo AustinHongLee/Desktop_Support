@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { openLegacyWorkbench, type LegacyWorkbench } from "../legacy";
 
-export function useLegacyBridge(workbench: LegacyWorkbench): {
+export interface LegacyBridgeState {
   busy: boolean;
   error: string;
   launch: () => Promise<void>;
   message: string;
-} {
+}
+
+export function useLegacyBridge(workbench: LegacyWorkbench): LegacyBridgeState {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
