@@ -106,6 +106,8 @@ const ISO_ISSUES = [
   { code: "LEGACY", title: "舊工作台保留", detail: "調校模式仍可叫出既有 PyQt 流程", tone: "ready" },
 ];
 
+const ROI_PREVIEW_DEBOUNCE_MS = 550;
+
 export function IsoBoard() {
   const legacy = useLegacyBridge("iso");
   const [isoView, setIsoView] = useState<"workbench" | "autopilot" | "engineer">("autopilot");
@@ -142,6 +144,8 @@ export function IsoBoard() {
   const [roiDraftSaving, setRoiDraftSaving] = useState(false);
   const [serialRegion, setSerialRegion] = useState<IsoRegion>(DEFAULT_SERIAL_REGION);
   const [drawingRegion, setDrawingRegion] = useState<IsoRegion>(DEFAULT_DRAWING_REGION);
+  const [previewSerialRegion, setPreviewSerialRegion] = useState<IsoRegion>(DEFAULT_SERIAL_REGION);
+  const [previewDrawingRegion, setPreviewDrawingRegion] = useState<IsoRegion>(DEFAULT_DRAWING_REGION);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.7);
   const [activeRoi, setActiveRoi] = useState<"serial" | "drawing">("serial");
   const [dryRunOpen, setDryRunOpen] = useState(false);
@@ -946,7 +950,7 @@ export function IsoBoard() {
   }
 
   function adoptPreviewVision() {
-    if (!selectedRow || !preview?.vision?.text) {
+    if (!selectedRow || previewRegionPending || !preview?.vision?.text) {
       return;
     }
     updateRow(selectedRow.id, "serial", preview.vision.text);
@@ -967,6 +971,7 @@ export function IsoBoard() {
   const issueRows = rows.filter((row) => row.status === "blocked" || row.status === "warn");
   const visibleRows = useMemo(() => sortIsoRows(filterIsoRows(rows, searchTerm, problemOnly), sortMode), [rows, searchTerm, problemOnly, sortMode]);
   const selectedRow = rows.find((row) => row.id === selectedRowId) ?? rows[0];
+  const previewRegionPending = !sameRegion(serialRegion, previewSerialRegion) || !sameRegion(drawingRegion, previewDrawingRegion);
   const columnSummary = plan?.source.headers && plan.source.serial_col !== undefined && plan.source.line_col !== undefined
     ? `${plan.source.headers[plan.source.serial_col] ?? `欄 ${plan.source.serial_col + 1}`} -> ${plan.source.headers[plan.source.line_col] ?? `欄 ${plan.source.line_col + 1}`}`
     : "自動";
@@ -1055,6 +1060,14 @@ export function IsoBoard() {
   }
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPreviewSerialRegion(serialRegion);
+      setPreviewDrawingRegion(drawingRegion);
+    }, ROI_PREVIEW_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [serialRegion, drawingRegion]);
+
+  useEffect(() => {
     let cancelled = false;
     if (!selectedRow?.source_path) {
       setPreview(null);
@@ -1068,7 +1081,7 @@ export function IsoBoard() {
       setPreviewBusy(false);
       return;
     }
-    const cacheKey = `${selectedRow.source_path}|${detectSerials}|${JSON.stringify(serialRegion)}|${JSON.stringify(drawingRegion)}`;
+    const cacheKey = `${selectedRow.source_path}|${detectSerials}|${JSON.stringify(previewSerialRegion)}|${JSON.stringify(previewDrawingRegion)}`;
     const cached = previewCacheRef.current.get(cacheKey);
     if (cached) {
       setPreview(cached);
@@ -1081,8 +1094,8 @@ export function IsoBoard() {
     loadIsoPreview({
       source_path: selectedRow.source_path,
       detect_serial: detectSerials,
-      serial_region: serialRegion,
-      drawing_region: drawingRegion,
+      serial_region: previewSerialRegion,
+      drawing_region: previewDrawingRegion,
     })
       .then((payload) => {
         if (!cancelled) {
@@ -1104,7 +1117,7 @@ export function IsoBoard() {
     return () => {
       cancelled = true;
     };
-  }, [selectedRow?.source_path, detectSerials, serialRegion, drawingRegion]);
+  }, [selectedRow?.source_path, detectSerials, previewSerialRegion, previewDrawingRegion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1280,6 +1293,7 @@ export function IsoBoard() {
       editableRoi={isoView === "engineer" && isoMachine.canTuneRoi}
       error={previewError}
       preview={preview}
+      previewPending={previewRegionPending}
       resetRoi={resetRoi}
       row={selectedRow}
       serialRegion={serialRegion}
@@ -1622,6 +1636,13 @@ function summarizePilotItems(items: IsoPilotItem[]): Partial<Record<IsoPilotItem
 
 function numberFromPilotSummary(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function sameRegion(left: IsoRegion, right: IsoRegion): boolean {
+  return left.left === right.left
+    && left.top === right.top
+    && left.width === right.width
+    && left.height === right.height;
 }
 
 type DraftFreshnessInputs = {

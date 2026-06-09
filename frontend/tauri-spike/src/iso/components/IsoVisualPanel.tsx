@@ -14,6 +14,7 @@ export function IsoVisualPanel({
   error,
   nextProblem,
   preview,
+  previewPending,
   resetRoi,
   row,
   serialRegion,
@@ -34,6 +35,7 @@ export function IsoVisualPanel({
   error: string;
   nextProblem: () => void;
   preview: IsoPreviewPayload | null;
+  previewPending: boolean;
   resetRoi: (region?: "serial" | "drawing") => void;
   row?: IsoPlanRow;
   serialRegion: IsoRegion;
@@ -142,9 +144,11 @@ export function IsoVisualPanel({
       <div className="vision-readout">
         <SearchCheck size={15} />
         <div>
-          <strong>{preview?.vision?.text ? `判讀：${preview.vision.text}` : "判讀：待確認"}</strong>
+          <strong>{previewPending ? "判讀：等待重新判讀" : preview?.vision?.text ? `判讀：${preview.vision.text}` : "判讀：待確認"}</strong>
           <span>
-            {preview?.vision
+            {previewPending
+              ? "ROI 調整中，停止滑動後重新產生裁切與判讀"
+              : preview?.vision
               ? `信心 ${Math.round(preview.vision.confidence * 100)}% · ${preview.vision.message || "無訊息"}`
               : busy
                 ? "產生預覽中"
@@ -153,7 +157,7 @@ export function IsoVisualPanel({
         </div>
       </div>
       <div className="row-review-actions">
-        <button className="action-button" onClick={adoptPreviewVision} disabled={!preview?.vision?.text}>
+        <button className="action-button" onClick={adoptPreviewVision} disabled={previewPending || !preview?.vision?.text}>
           <SearchCheck size={14} />
           <span>採用判讀值</span>
         </button>
