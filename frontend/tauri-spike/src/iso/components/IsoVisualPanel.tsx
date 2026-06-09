@@ -6,7 +6,9 @@ export function IsoVisualPanel({
   activeRoi,
   adoptPreviewVision,
   busy,
+  confidenceThreshold,
   confirmSelectedRow,
+  detectSerials,
   drawingRegion,
   editableRoi,
   error,
@@ -15,14 +17,18 @@ export function IsoVisualPanel({
   resetRoi,
   row,
   serialRegion,
+  setConfidenceThreshold,
   setActiveRoi,
+  setDetectSerials,
   updateActiveRoi,
   updateRoi,
 }: {
   activeRoi: "serial" | "drawing";
   adoptPreviewVision: () => void;
   busy: boolean;
+  confidenceThreshold: number;
   confirmSelectedRow: () => void;
+  detectSerials: boolean;
   drawingRegion: IsoRegion;
   editableRoi: boolean;
   error: string;
@@ -31,17 +37,25 @@ export function IsoVisualPanel({
   resetRoi: (region?: "serial" | "drawing") => void;
   row?: IsoPlanRow;
   serialRegion: IsoRegion;
+  setConfidenceThreshold: (value: number) => void;
   setActiveRoi: (region: "serial" | "drawing") => void;
+  setDetectSerials: (value: boolean) => void;
   updateActiveRoi: (field: keyof IsoRegion, value: number) => void;
   updateRoi: (region: "serial" | "drawing", value: IsoRegion) => void;
 }) {
   const activeRegion = activeRoi === "serial" ? serialRegion : drawingRegion;
+  const roiFieldLabels: Record<keyof IsoRegion, string> = {
+    left: "左距",
+    top: "上距",
+    width: "寬度",
+    height: "高度",
+  };
   return (
     <div className="iso-visual-panel">
       <div className="panel-heading compact">
         <div>
-          <span>PDF visual check</span>
-          <small>{row?.source_name ?? "no page selected"}</small>
+          <span>PDF 視覺檢查</span>
+          <small>{row?.source_name ?? "尚未選擇頁面"}</small>
         </div>
       </div>
 
@@ -76,7 +90,7 @@ export function IsoVisualPanel({
             <div className="roi-controls">
               {(["left", "top", "width", "height"] as Array<keyof IsoRegion>).map((field) => (
                 <label className="roi-slider" key={field}>
-                  <span>{field}</span>
+                  <span>{roiFieldLabels[field]}</span>
                   <input
                     max={field === "left" || field === "top" ? 0.95 : 1}
                     min={field === "width" || field === "height" ? 0.05 : 0}
@@ -93,6 +107,24 @@ export function IsoVisualPanel({
               <RefreshCcw size={14} />
               <span>重設目前 ROI</span>
             </button>
+            <div className="roi-threshold-control">
+              <div>
+                <span>信心門檻</span>
+                <strong>{Math.round(confidenceThreshold * 100)}%</strong>
+              </div>
+              <input
+                max="0.99"
+                min="0.1"
+                onChange={(event) => setConfidenceThreshold(Number(event.target.value))}
+                step="0.01"
+                type="range"
+                value={confidenceThreshold}
+              />
+            </div>
+            <label className="roi-detect-toggle">
+              <input type="checkbox" checked={detectSerials} onChange={(event) => setDetectSerials(event.target.checked)} />
+              <span>影像判讀流水號</span>
+            </label>
           </>
         ) : (
           <div className="roi-readonly-note">
@@ -113,9 +145,9 @@ export function IsoVisualPanel({
           <strong>{preview?.vision?.text ? `判讀：${preview.vision.text}` : "判讀：待確認"}</strong>
           <span>
             {preview?.vision
-              ? `confidence ${Math.round(preview.vision.confidence * 100)}% · ${preview.vision.message || "no message"}`
+              ? `信心 ${Math.round(preview.vision.confidence * 100)}% · ${preview.vision.message || "無訊息"}`
               : busy
-                ? "rendering"
+                ? "產生預覽中"
                 : error || "可用裁切圖人工確認流水號與圖號"}
           </span>
         </div>

@@ -24,12 +24,13 @@ export function IsoDryRunDialog({
   summary: IsoWorkflowPlan["summary"];
 }) {
   const blockedOrWarn = summary.blocked + summary.warn;
+  const statusLabel = (status: IsoPlanRow["status"]) => status === "ready" ? "通過" : status === "warn" ? "待確認" : status === "blocked" ? "需處理" : status;
   return (
     <div className="modal-backdrop" role="presentation">
-      <div className="dry-run-dialog" role="dialog" aria-modal="true" aria-label="更名前 dry-run">
+      <div className="dry-run-dialog" role="dialog" aria-modal="true" aria-label="更名前試算">
         <div className="dry-run-head">
           <div>
-            <div className="eyebrow">Dry-run rename plan</div>
+            <div className="eyebrow">更名前試算</div>
             <h2>更名前確認</h2>
           </div>
           <button className="dock-icon-button" onClick={onClose} title="關閉">
@@ -38,28 +39,28 @@ export function IsoDryRunDialog({
         </div>
 
         <div className="dry-run-metrics">
-          <IsoMetric label="Will rename" value={rows.length} icon={<ClipboardCheck size={17} />} tone="ready" />
-          <IsoMetric label="Warn" value={summary.warn} icon={<CircleAlert size={17} />} tone="warn" />
-          <IsoMetric label="Blocked" value={summary.blocked} icon={<AlertTriangle size={17} />} tone="danger" />
+          <IsoMetric label="將更名" value={rows.length} icon={<ClipboardCheck size={17} />} tone="ready" />
+          <IsoMetric label="待確認" value={summary.warn} icon={<CircleAlert size={17} />} tone="warn" />
+          <IsoMetric label="需處理" value={summary.blocked} icon={<AlertTriangle size={17} />} tone="danger" />
         </div>
 
         <div className={`dry-run-warning ${blockedOrWarn || !canApply ? "warn" : "ready"}`}>
-          {blockedOrWarn ? `${blockedOrWarn} 筆需要注意；blocked 不會套用。` : canApply ? "所有勾選列皆可套用。" : applyBlockReason}
+          {blockedOrWarn ? `${blockedOrWarn} 筆需要注意；需處理的列不會套用。` : canApply ? "所有勾選列皆可套用。" : applyBlockReason}
         </div>
 
         <div className="dry-run-table">
           <div className="dry-run-table-head">
-            <span>Page</span>
-            <span>Old</span>
-            <span>New</span>
-            <span>Status</span>
+            <span>頁</span>
+            <span>原檔名</span>
+            <span>新檔名</span>
+            <span>狀態</span>
           </div>
           {rows.slice(0, 80).map((row) => (
             <div className={`dry-run-row ${row.status}`} key={row.id}>
               <span>{row.page}</span>
               <strong title={row.source_name}>{row.source_name}</strong>
               <code title={row.new_name}>{row.new_name}</code>
-              <span>{row.status}</span>
+              <span>{statusLabel(row.status)}</span>
             </div>
           ))}
         </div>
@@ -103,7 +104,7 @@ export function IsoResultDialog({
       <div className="result-dialog" role="dialog" aria-modal="true" aria-label="ISO 結果">
         <div className="dry-run-head">
           <div>
-            <div className="eyebrow">ISO result</div>
+            <div className="eyebrow">ISO 結果</div>
             <h2>命名草稿結果</h2>
           </div>
           <button className="dock-icon-button" onClick={onClose} title="關閉">
@@ -111,9 +112,9 @@ export function IsoResultDialog({
           </button>
         </div>
         <div className="dry-run-metrics">
-          <IsoMetric label="Total" value={plan.summary.total} icon={<FileText size={17} />} />
-          <IsoMetric label="Ready" value={plan.summary.ready} icon={<CircleCheck size={17} />} tone="ready" />
-          <IsoMetric label="Issues" value={issueRows.length} icon={<CircleAlert size={17} />} tone={issueRows.length ? "warn" : "ready"} />
+          <IsoMetric label="總數" value={plan.summary.total} icon={<FileText size={17} />} />
+          <IsoMetric label="通過" value={plan.summary.ready} icon={<CircleCheck size={17} />} tone="ready" />
+          <IsoMetric label="問題" value={issueRows.length} icon={<CircleAlert size={17} />} tone={issueRows.length ? "warn" : "ready"} />
         </div>
         <div className="result-issue-list">
           {(issueRows.length ? issueRows : plan.rows.slice(0, 5)).map((row) => (
@@ -133,7 +134,7 @@ export function IsoResultDialog({
           </button>
           <button className="launch-button" onClick={onDryRun} disabled={!canOpenDryRun}>
             <ClipboardCheck size={18} />
-            <span>開啟 dry-run</span>
+            <span>開啟試算</span>
           </button>
         </div>
       </div>

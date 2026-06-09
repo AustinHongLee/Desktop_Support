@@ -16,6 +16,7 @@ export function FailureCard({
   onCopy,
   onExport,
   onOpenWorkbench,
+  probableCause,
 }: {
   copied: boolean;
   exportBusy: boolean;
@@ -23,6 +24,7 @@ export function FailureCard({
   onCopy: () => void;
   onExport: () => void;
   onOpenWorkbench: () => void;
+  probableCause?: string;
 }) {
   return (
     <section className="iso-failure-card" aria-label="ISO 一鍵失敗交接">
@@ -31,13 +33,19 @@ export function FailureCard({
       </div>
       <div className="iso-failure-main">
         <div>
-          <div className="eyebrow">handoff required</div>
+          <div className="eyebrow">需要交接</div>
           <h3>{failure.title}</h3>
           <p>{failure.summary}</p>
         </div>
+        {probableCause ? (
+          <div className="iso-failure-cause">
+            <span>最可能原因</span>
+            <strong>{probableCause}</strong>
+          </div>
+        ) : null}
         {failure.run_id ? (
           <div className="iso-failure-run">
-            <span>Run ID</span>
+            <span>流程 ID</span>
             <strong>{failure.run_id}</strong>
           </div>
         ) : null}

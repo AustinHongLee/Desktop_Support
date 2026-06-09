@@ -1,8 +1,9 @@
 import { ChevronRight, CircleCheck, TerminalSquare } from "lucide-react";
 import { Fragment, type ReactNode, type Ref } from "react";
-import type { IsoPlanRow } from "../isoWorkflow";
+import type { IsoPilotItem, IsoPlanRow } from "../isoWorkflow";
 import { FailureCard, type IsoFailureInfo } from "./components/FailureCard";
 import { ChecklistGate } from "./components/IsoControls";
+import { eventLabel, localizeIsoDisplayText } from "./helpers";
 
 export interface PipelineStage {
   key: string;
@@ -43,11 +44,15 @@ export function AutopilotView({
   oneClickStage,
   openFailureWorkbench,
   openWorkbenchRow,
+  pilotItems,
   pipelineStages,
+  probableFailureCause,
   readyCount,
   runOneClick,
   selectedRowId,
+  successSummary,
   terminalRef,
+  activePilotText,
   warnCount,
 }: {
   blockedCount: number;
@@ -66,11 +71,15 @@ export function AutopilotView({
   oneClickStage: "idle" | "running" | "applying" | "review" | "done";
   openFailureWorkbench: () => void;
   openWorkbenchRow: (rowId: string) => void;
+  pilotItems: IsoPilotItem[];
   pipelineStages: PipelineStage[];
+  probableFailureCause: string;
   readyCount: number;
   runOneClick: () => void;
   selectedRowId?: string;
+  successSummary: string;
   terminalRef: Ref<HTMLDivElement>;
+  activePilotText: string;
   warnCount: number;
 }) {
   return (
@@ -79,7 +88,13 @@ export function AutopilotView({
         <div className="one-click-head">
           <div className="eyebrow">一鍵命名</div>
           <h2>選資料夾,其餘交給它</h2>
-          <p>自動拆頁、判讀流水號、對 ISO List、命名、更名。全綠就一路到底;只有出現低自信值才會停下來請你確認。</p>
+          <p>自動拆頁、判讀流水號、對 ISO 清單、命名、更名。全綠就一路到底;只有出現低自信值才會停下來請你確認。</p>
+          {activePilotText ? (
+            <div className="one-click-current">
+              <span>正在：</span>
+              <strong>{activePilotText}</strong>
+            </div>
+          ) : null}
         </div>
 
         <div className="pipeline">
@@ -97,6 +112,13 @@ export function AutopilotView({
             </Fragment>
           ))}
         </div>
+
+        {oneClickStage === "done" && successSummary && pilotItems.length ? (
+          <div className="one-click-success-summary">
+            <CircleCheck size={16} />
+            <span>{successSummary}</span>
+          </div>
+        ) : null}
 
         {oneClickStage === "review" ? (
           <div className="one-click-checklist">
@@ -125,6 +147,7 @@ export function AutopilotView({
             onCopy={copyFailureForEngineer}
             onExport={exportFailureBundle}
             onOpenWorkbench={openFailureWorkbench}
+            probableCause={probableFailureCause}
           />
         ) : null}
 
@@ -138,15 +161,15 @@ export function AutopilotView({
           <div className="terminal-head">
             <TerminalSquare size={14} />
             <span>流程紀錄</span>
-            <em>{oneClickRunning || oneClickApplying ? `${elapsedSec}s` : oneClickStage === "done" ? "done" : "idle"}</em>
+            <em>{oneClickRunning || oneClickApplying ? `${elapsedSec}s` : oneClickStage === "done" ? "完成" : "待命"}</em>
           </div>
           <div className="terminal-body" ref={terminalRef}>
             {echoLines.length ? echoLines.map((line, index) => (
               <div className={`terminal-line ${line.tone || ""}`} key={`${line.code}-${index}`}>
-                <span className="terminal-code">{line.code || "LOG"}</span>
-                <span>{line.title}{line.detail ? ` · ${line.detail}` : ""}</span>
+                <span className="terminal-code">{eventLabel(line.code || "LOG")}</span>
+                <span>{localizeIsoDisplayText(line.title || "")}{line.detail ? ` · ${localizeIsoDisplayText(line.detail)}` : ""}</span>
               </div>
-            )) : <div className="terminal-line idle"><span className="terminal-code">SYS</span><span>等待一鍵命名啟動…</span></div>}
+            )) : <div className="terminal-line idle"><span className="terminal-code">系統</span><span>等待一鍵命名啟動…</span></div>}
             {oneClickRunning || oneClickApplying ? <div className="terminal-cursor">_</div> : null}
           </div>
         </div>

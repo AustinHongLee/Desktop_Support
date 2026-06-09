@@ -72,53 +72,53 @@ const DOCK_OFFSET_STORAGE_KEY = "desktop-support.dock.offset";
 const DOCK_SNAP_DELAY_MS = 620;
 
 const NAV_ITEMS: Array<{ mode: AppMode; label: string }> = [
-  { mode: "command", label: "Command" },
+  { mode: "command", label: "總控" },
   { mode: "iso", label: "ISO PDF" },
-  { mode: "shutdown", label: "Shutdown" },
-  { mode: "cleanup", label: "Cleanup" },
-  { mode: "locks", label: "Locks" },
+  { mode: "shutdown", label: "關機檢查" },
+  { mode: "cleanup", label: "安全清除" },
+  { mode: "locks", label: "檔案鎖定" },
 ];
 
 const MODE_META: Record<AppMode, { eyebrow: string; title: string; line: string }> = {
   command: {
-    eyebrow: "Desktop support command center",
+    eyebrow: "桌面輔助總控",
     title: "桌面輔助系統",
-    line: "tools · runtime · jobs · safety cockpit",
+    line: "工具 · 流程 · 任務 · 安全檢查",
   },
   iso: {
-    eyebrow: "Tauri ISO workbench",
+    eyebrow: "ISO PDF 工作台",
     title: "ISO PDF 拆頁命名",
-    line: "split · plan · review · apply",
+    line: "拆頁 · 草稿 · 校對 · 套用",
   },
   shutdown: {
-    eyebrow: "Tauri shutdown cockpit",
-    title: "Shutdown Safety Inspector",
-    line: "scan · process guard · dependency graph",
+    eyebrow: "關機安全檢查",
+    title: "關機安全檢查",
+    line: "掃描 · 程序防護 · 相依圖",
   },
   cleanup: {
-    eyebrow: "Safe cleanup command deck",
+    eyebrow: "安全清除控制台",
     title: "安全清除工作台",
-    line: "scan · quarantine · restore · verify",
+    line: "掃描 · 隔離 · 還原 · 驗證",
   },
   locks: {
-    eyebrow: "File relationship radar",
+    eyebrow: "檔案關係雷達",
     title: "檔案關係與鎖定雷達",
-    line: "producer · reader · lock · output graph",
+    line: "產出者 · 讀取者 · 鎖定 · 輸出關係",
   },
 };
 
 const COMMAND_TOOLS = [
-  { mode: "iso" as AppMode, title: "ISO PDF 拆頁命名", status: "New", detail: "Tauri workbench · split · plan · apply", tone: "ready" },
-  { mode: "shutdown" as AppMode, title: "Shutdown Safety Inspector", status: "Live", detail: "Process tree · lock files · safe-to-kill policy", tone: "ready" },
-  { mode: "cleanup" as AppMode, title: "安全清除工作台", status: "Bridge", detail: "Opens the existing cleanup workbench", tone: "ready" },
-  { mode: "locks" as AppMode, title: "檔案關係排查", status: "Bridge", detail: "Opens the existing lock checker", tone: "ready" },
+  { mode: "iso" as AppMode, title: "ISO PDF 拆頁命名", status: "新版", detail: "拆頁 · 草稿 · 校對 · 套用", tone: "ready" },
+  { mode: "shutdown" as AppMode, title: "關機安全檢查", status: "即時", detail: "程序樹 · 檔案鎖定 · 關機風險", tone: "ready" },
+  { mode: "cleanup" as AppMode, title: "安全清除工作台", status: "橋接", detail: "開啟既有安全清除工作台", tone: "ready" },
+  { mode: "locks" as AppMode, title: "檔案關係排查", status: "橋接", detail: "開啟既有檔案鎖定檢查", tone: "ready" },
 ];
 
 const COMMAND_FEED = [
-  { code: "SYS", title: "Tauri shell ready", detail: "React cockpit can host multiple workbenches", tone: "ready" },
-  { code: "ISO", title: "New ISO workbench online", detail: "新版已可產生命名草稿並套用勾選更名", tone: "ready" },
-  { code: "PWR", title: "Shutdown backend connected", detail: "Native shell calls Python scanner through Rust command", tone: "ready" },
-  { code: "NEXT", title: "React data panel pending", detail: "下一步才是把 ISO rename plan 搬進新版資料表", tone: "idle" },
+  { code: "SYS", title: "Tauri 外殼待命", detail: "React 控制台可承載多個工作台", tone: "ready" },
+  { code: "ISO", title: "新版 ISO 工作台已上線", detail: "新版已可產生命名草稿並套用勾選更名", tone: "ready" },
+  { code: "PWR", title: "關機後端已連線", detail: "桌面外殼透過 Rust 呼叫 Python 掃描器", tone: "ready" },
+  { code: "NEXT", title: "資料表整合待辦", detail: "下一步才是把 ISO 命名草稿搬進新版資料表", tone: "idle" },
 ];
 
 
@@ -211,9 +211,9 @@ export default function App() {
           setReportLoaded(false);
         }
         if (detail.quitReason === "blocked") {
-          setError("Quit paused: review Shutdown Safety blockers before exiting.");
+          setError("已暫停結束：離開前請先檢查關機安全阻擋項。");
         } else if (detail.quitReason === "scan_failed") {
-          setError("Quit paused: Shutdown Safety scan failed. Review the cockpit before exiting.");
+          setError("已暫停結束：關機安全掃描失敗，離開前請先回工作台檢查。");
         }
         return;
       }
@@ -352,7 +352,7 @@ export default function App() {
           </div>
         </div>
         <div className="toolbar">
-          <div className="mode-switch" aria-label="Workbench mode">
+          <div className="mode-switch" aria-label="工作模式">
             {NAV_ITEMS.map((item) => (
               <button className={mode === item.mode ? "active" : ""} key={item.mode} onClick={() => setMode(item.mode)}>
                 {modeIcon(item.mode, 15)}
@@ -362,20 +362,20 @@ export default function App() {
           </div>
           {mode === "shutdown" ? (
             <>
-              <button className="icon-button" onClick={refresh} disabled={busy} title="Refresh report">
+              <button className="icon-button" onClick={refresh} disabled={busy} title="重新整理報告">
                 <RefreshCcw size={17} />
-                <span>{busy ? "Refreshing" : "Refresh"}</span>
+                <span>{busy ? "更新中" : "重新整理"}</span>
               </button>
-              <div className={`source-pill ${source}`}>{source === "tauri" ? "Live Python report" : "Browser sample"}</div>
+              <div className={`source-pill ${source}`}>{source === "tauri" ? "即時 Python 報告" : "瀏覽器範例"}</div>
             </>
           ) : (
             <div className={`source-pill ${mode === "command" || mode === "iso" ? "tauri" : "bridge"}`}>
-              {mode === "command" ? "Tauri shell" : mode === "iso" ? "New ISO workbench" : "Legacy bridge"}
+              {mode === "command" ? "Tauri 外殼" : mode === "iso" ? "新版 ISO 工作台" : "舊版橋接"}
             </div>
           )}
-          <button className="icon-button" onClick={collapseToDock} title="Collapse to desktop dock">
+          <button className="icon-button" onClick={collapseToDock} title="收合到桌面工具列">
             <Minimize2 size={16} />
-            <span>Dock</span>
+            <span>收合</span>
           </button>
         </div>
       </header>
@@ -435,7 +435,7 @@ function DockShell({
   const blockerCount = report?.blockers.length ?? 0;
   const dangerCount = countLevel(report, "Dangerous");
   const cautionCount = countLevel(report, "Caution");
-  const guardLabel = report ? (guardState === "danger" ? "Hold" : guardState === "caution" ? "Review" : "Clear") : "Idle";
+  const guardLabel = report ? (guardState === "danger" ? "暫停" : guardState === "caution" ? "複查" : "通過") : "待命";
   const contextText = report?.project_root ? compactPath(report.project_root) : "等待目前專案狀態";
 
   if (collapsed) {
@@ -491,7 +491,7 @@ function DockShell({
             <GripVertical size={16} />
           </div>
           <div className="dock-title">
-            <span>Desktop Support</span>
+            <span>桌面輔助</span>
             <strong>{guardLabel}</strong>
           </div>
           <button className="dock-icon-button" onClick={() => setCollapsed(true)} title="收合">
@@ -501,8 +501,8 @@ function DockShell({
 
         <div className={`dock-status ${guardState}`}>
           <div>
-            <span>Runtime guard</span>
-            <strong>{report ? `${blockerCount} blockers` : "not scanned"}</strong>
+            <span>執行防護</span>
+            <strong>{report ? `${blockerCount} 個阻擋` : "尚未掃描"}</strong>
           </div>
           <div className="dock-risk-dots">
             <span className="danger">{dangerCount}</span>
@@ -511,28 +511,28 @@ function DockShell({
           </div>
         </div>
 
-        <div className="dock-action-grid" aria-label="Dock actions">
-          <DockAction icon={<Home size={17} />} label="Command" onClick={() => openCockpit("command")} />
+        <div className="dock-action-grid" aria-label="工具列動作">
+          <DockAction icon={<Home size={17} />} label="總控" onClick={() => openCockpit("command")} />
           <DockAction icon={<FileText size={17} />} label="ISO PDF" onClick={() => openCockpit("iso")} />
-          <DockAction icon={<Power size={17} />} label="Safety" onClick={() => openCockpit("shutdown")} />
-          <DockAction icon={<Trash2 size={17} />} label="Cleanup" onClick={() => openCockpit("cleanup")} />
-          <DockAction icon={<FileSearch size={17} />} label="Locks" onClick={() => openCockpit("locks")} />
-          <DockAction icon={<Maximize2 size={17} />} label="Cockpit" onClick={() => openCockpit("command")} />
+          <DockAction icon={<Power size={17} />} label="安全" onClick={() => openCockpit("shutdown")} />
+          <DockAction icon={<Trash2 size={17} />} label="清除" onClick={() => openCockpit("cleanup")} />
+          <DockAction icon={<FileSearch size={17} />} label="鎖定" onClick={() => openCockpit("locks")} />
+          <DockAction icon={<Maximize2 size={17} />} label="工作台" onClick={() => openCockpit("command")} />
         </div>
 
         <div className="dock-context">
-          <span>{source === "tauri" ? "Live" : "Sample"}</span>
+          <span>{source === "tauri" ? "即時" : "範例"}</span>
           <strong>{contextText}</strong>
         </div>
 
         <footer className="dock-foot">
           <button className="dock-secondary" onClick={refresh} disabled={busy}>
             <RefreshCcw size={14} />
-            <span>{busy ? "Scan" : "Refresh"}</span>
+            <span>{busy ? "掃描中" : "更新"}</span>
           </button>
           <button className="dock-primary" onClick={() => openCockpit("shutdown")}>
             <ShieldCheck size={14} />
-            <span>Inspect</span>
+            <span>檢查</span>
           </button>
         </footer>
       </section>
@@ -664,28 +664,28 @@ function CommandCenter({
     <section className="command-board">
       <div className="command-hero">
         <div>
-          <div className="eyebrow">Mission control</div>
+          <div className="eyebrow">任務總控</div>
           <h2>所有工作流集中到一個桌面控制台</h2>
-          <p>從 PDF 命名、關機防護、安全清除到檔案關係排查，統一用同一套 cockpit 操作。</p>
+          <p>從 PDF 命名、關機防護、安全清除到檔案關係排查，統一用同一套工作台操作。</p>
         </div>
         <div className="command-core">
-          <span>System pulse</span>
-          <strong>{source === "tauri" ? "LIVE" : "SIM"}</strong>
+          <span>系統狀態</span>
+          <strong>{source === "tauri" ? "即時" : "模擬"}</strong>
         </div>
       </div>
 
       <div className="command-metrics">
-        <CommandMetric icon={<Workflow size={18} />} label="Workbenches" value="5" />
-        <CommandMetric icon={<Shield size={18} />} label="Live blockers" value={String(liveBlockers)} />
-        <CommandMetric icon={<Boxes size={18} />} label="Runtime lanes" value="4" />
-        <CommandMetric icon={<Bot size={18} />} label="Automation" value="armed" />
+        <CommandMetric icon={<Workflow size={18} />} label="工作台" value="5" />
+        <CommandMetric icon={<Shield size={18} />} label="阻擋項" value={String(liveBlockers)} />
+        <CommandMetric icon={<Boxes size={18} />} label="執行通道" value="4" />
+        <CommandMetric icon={<Bot size={18} />} label="自動化" value="已啟用" />
       </div>
 
       <div className="command-grid">
         <section className="tool-matrix">
           <div className="section-heading">
             <div>
-              <div className="eyebrow">Tool matrix</div>
+              <div className="eyebrow">工具矩陣</div>
               <h2>工作台入口</h2>
             </div>
           </div>
@@ -705,7 +705,7 @@ function CommandCenter({
         </section>
 
         <aside className="ops-panel">
-          <h3>Operations feed</h3>
+          <h3>操作紀錄</h3>
           {COMMAND_FEED.map((item) => (
             <div className={`ops-feed-item ${item.tone}`} key={`${item.code}-${item.title}`}>
               <span>{item.code}</span>
@@ -755,25 +755,25 @@ function SafeCleanupCockpit() {
         <section className="cleanup-stack">
           <CleanupLane title="低風險暫存" count="128" tone="ready" detail="可隔離，保留 7 天復原" />
           <CleanupLane title="需要確認" count="16" tone="warn" detail="可能關聯快取、模型或輸出資料" />
-          <CleanupLane title="阻擋項目" count="3" tone="danger" detail="檔案鎖定、profile handle 或工作中 job" />
+          <CleanupLane title="阻擋項目" count="3" tone="danger" detail="檔案鎖定、設定檔控制代碼或工作中任務" />
         </section>
         <section className="cleanup-radar">
           <div className="radar-dial">
             <Sparkles size={28} />
             <strong>72</strong>
-            <span>cleanup confidence</span>
+            <span>清除信心</span>
           </div>
           <div className="cleanup-checks">
-            <Gate label="Quarantine manifest" state="ready" />
-            <Gate label="Restore path verified" state="ready" />
-            <Gate label="File locks pending" state="warn" />
-            <Gate label="System folders excluded" state="ready" />
+            <Gate label="隔離清單" state="ready" />
+            <Gate label="復原路徑已驗證" state="ready" />
+            <Gate label="檔案鎖定待確認" state="warn" />
+            <Gate label="已排除系統資料夾" state="ready" />
           </div>
         </section>
         <aside className="cleanup-detail">
-          <h3>Selected suggestion</h3>
-          <KeyValue label="Layer" value="Project runtime temp" />
-          <KeyValue label="Action" value="Move to quarantine" />
+          <h3>目前建議</h3>
+          <KeyValue label="層級" value="專案執行暫存" />
+          <KeyValue label="動作" value="移到隔離區" />
           <KeyValue label="Consequence" value="Job can rebuild cache on next launch" />
           <KeyValue label="Rollback" value="Available through manifest" />
         </aside>
@@ -816,16 +816,16 @@ function FileLockCockpit() {
 
       <div className="lock-grid">
         <aside className="lock-source-list">
-          <StatusTile icon={<HardDrive size={18} />} title="Output" value="exports/isometric/P005.pdf" tone="warn" />
-          <StatusTile icon={<Cpu size={18} />} title="Holder" value="python.exe · PID 3188" tone="warn" />
-          <StatusTile icon={<FolderOpen size={18} />} title="Temp" value=".runtime/temp/iso_pages" tone="ready" />
-          <StatusTile icon={<Settings size={18} />} title="Component" value="iso.naming.autopilot" tone="ready" />
+          <StatusTile icon={<HardDrive size={18} />} title="輸出" value="exports/isometric/P005.pdf" tone="warn" />
+          <StatusTile icon={<Cpu size={18} />} title="佔用程序" value="python.exe · PID 3188" tone="warn" />
+          <StatusTile icon={<FolderOpen size={18} />} title="暫存" value=".runtime/temp/iso_pages" tone="ready" />
+          <StatusTile icon={<Settings size={18} />} title="元件" value="iso.naming.autopilot" tone="ready" />
         </aside>
         <section className="graph-canvas">
-          <div className="graph-node producer">ISO List</div>
-          <div className="graph-node worker">Detector</div>
-          <div className="graph-node temp">Temp pages</div>
-          <div className="graph-node output">Renamed PDF</div>
+          <div className="graph-node producer">ISO 清單</div>
+          <div className="graph-node worker">判讀器</div>
+          <div className="graph-node temp">暫存頁面</div>
+          <div className="graph-node output">更名後 PDF</div>
           <div className="graph-link link-a" />
           <div className="graph-link link-b" />
           <div className="graph-link link-c" />
@@ -898,51 +898,51 @@ function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: 
 
       <div className="info-strip">
         <Info icon={<TerminalSquare size={16} />} label="PID" value={String(blocker.pid)} />
-        <Info icon={<GitBranch size={16} />} label="Parent" value={blocker.parent_process || String(blocker.parent_pid || "")} />
-        <Info icon={<Clock3 size={16} />} label="Started" value={blocker.started_at || "Unknown"} />
-        <Info icon={<FileJson size={16} />} label="Report" value={report?.report_path || "Not written"} />
+        <Info icon={<GitBranch size={16} />} label="父程序" value={blocker.parent_process || String(blocker.parent_pid || "")} />
+        <Info icon={<Clock3 size={16} />} label="啟動時間" value={blocker.started_at || "未知"} />
+        <Info icon={<FileJson size={16} />} label="報告" value={report?.report_path || "尚未寫入"} />
       </div>
 
-      <Section title="Identity">
-        <KeyValue label="Role" value={blocker.process_role} />
-        <KeyValue label="Job" value={blocker.job_id || "No job metadata"} />
-        <KeyValue label="Component" value={blocker.component || "Unknown"} />
-        <KeyValue label="Executable" value={blocker.executable_path || "Unknown"} mono />
+      <Section title="身分資訊">
+        <KeyValue label="角色" value={blocker.process_role} />
+        <KeyValue label="任務" value={blocker.job_id || "無任務資訊"} />
+        <KeyValue label="元件" value={blocker.component || "未知"} />
+        <KeyValue label="執行檔" value={blocker.executable_path || "未知"} mono />
       </Section>
 
-      <Section title="Why it is listed">
+      <Section title="列入原因">
         <PillList values={blocker.reasons} />
       </Section>
 
-      <Section title="Consequence if stopped">
+      <Section title="停止後影響">
         <ul className="plain-list">{blocker.kill_consequence.map((item) => <li key={item}>{item}</li>)}</ul>
       </Section>
 
-      <Section title="Files and runtime">
-        <PathGroup icon={<FolderOpen size={15} />} label="Locks" values={blocker.lock_files} />
-        <PathGroup icon={<FolderOpen size={15} />} label="Temp dirs" values={blocker.temp_dirs} />
-        <PathGroup icon={<FolderOpen size={15} />} label="Inputs" values={blocker.input_files} />
-        <PathGroup icon={<FolderOpen size={15} />} label="Outputs" values={blocker.output_files} />
-        <PathGroup icon={<FolderOpen size={15} />} label="Logs" values={blocker.log_files} />
+      <Section title="檔案與執行環境">
+        <PathGroup icon={<FolderOpen size={15} />} label="鎖定" values={blocker.lock_files} />
+        <PathGroup icon={<FolderOpen size={15} />} label="暫存資料夾" values={blocker.temp_dirs} />
+        <PathGroup icon={<FolderOpen size={15} />} label="輸入" values={blocker.input_files} />
+        <PathGroup icon={<FolderOpen size={15} />} label="輸出" values={blocker.output_files} />
+        <PathGroup icon={<FolderOpen size={15} />} label="紀錄" values={blocker.log_files} />
       </Section>
 
-      <Section title="Dependency graph">
+      <Section title="依賴關係圖">
         {blocker.relationships.length ? (
           <div className="graph-list">
             {blocker.relationships.map((edge, index) => (
               <div className="graph-edge" key={`${edge.source}-${edge.target}-${index}`}>
-                <span>{edge.source || "unknown"}</span>
+                <span>{edge.source || "未知"}</span>
                 <strong><Route size={14} />{edge.relation}</strong>
-                <span>{edge.target || "unknown"}</span>
+                <span>{edge.target || "未知"}</span>
               </div>
             ))}
           </div>
         ) : (
-          <div className="muted">No relationship graph edges in this report.</div>
+          <div className="muted">這份報告沒有依賴關係邊。</div>
         )}
       </Section>
 
-      <Section title="Available actions">
+      <Section title="可用動作">
         <div className="action-grid">
           {blocker.suggested_actions.map((action) => (
             <button className="action-button" key={action}>
@@ -953,7 +953,7 @@ function BlockerDetail({ blocker, report }: { blocker: ShutdownBlocker; report: 
         </div>
       </Section>
 
-      <Section title="Command line">
+      <Section title="命令列">
         <pre className="command-block">{blocker.command_line || blocker.command_summary}</pre>
       </Section>
     </div>

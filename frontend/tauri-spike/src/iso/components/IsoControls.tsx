@@ -8,7 +8,7 @@ export function PathPickerRow({ icon, label, onPick, value }: { icon: ReactNode;
       <div className="path-picker-icon">{icon}</div>
       <div>
         <span>{label}</span>
-        <strong title={value}>{value ? compactPath(value) : "not selected"}</strong>
+        <strong title={value}>{value ? compactPath(value) : "未選擇"}</strong>
       </div>
       <button className="dock-icon-button" onClick={onPick} title={label}>
         <FolderOpen size={15} />
@@ -22,7 +22,7 @@ export function TopSourceButton({ icon, label, onPick, value }: { icon: ReactNod
     <button className={`top-source-button ${value ? "ready" : "idle"}`} onClick={onPick} title={value || label}>
       {icon}
       <span>{label}</span>
-      <strong>{value ? compactPath(value) : "not selected"}</strong>
+      <strong>{value ? compactPath(value) : "未選擇"}</strong>
     </button>
   );
 }
@@ -55,7 +55,7 @@ export function IsoEmptyPlan({ busy, chooseWorkFolder, generatePlan }: { busy: b
     <div className="iso-empty-plan">
       <GitBranch size={30} />
       <strong>等待命名草稿</strong>
-      <span>選工作資料夾可自動找 PDF 與 ISO List；也可手動指定來源。</span>
+      <span>選工作資料夾可自動找 PDF 與 ISO 清單；也可手動指定來源。</span>
       <div className="bridge-actions">
         <button className="action-button" onClick={chooseWorkFolder} disabled={busy}>
           <FolderOpen size={16} />

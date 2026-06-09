@@ -118,8 +118,8 @@ function getApplyBlockReason(
   if (flags.isApplying) return "正在套用更名，完成前不能取消或再次套用。";
   if (flags.inBusyDraft) return "命名草稿仍在產生或批次判讀中，完成後才能套用。";
   if (!flags.hasDraft) return "尚未產生命名草稿，請先選來源並產生草稿。";
-  if (input.blockedCount > 0) return `還有 ${input.blockedCount} 筆 blocked，修正前不能套用。`;
-  if (input.warnCount > 0) return `還有 ${input.warnCount} 筆 warn，請逐列確認後再套用。`;
-  if (input.selectedCount < 1) return "沒有勾選任何 ready 可更名列。";
+  if (input.blockedCount > 0) return `還有 ${input.blockedCount} 筆需處理，修正前不能套用。`;
+  if (input.warnCount > 0) return `還有 ${input.warnCount} 筆待確認，請逐列確認後再套用。`;
+  if (input.selectedCount < 1) return "沒有勾選任何可更名列。";
   return "";
 }

@@ -26,12 +26,12 @@ export function RoiSamplePanel({
         <div>
           <span>多頁採樣</span>
           <small>
-            {loading ? "loading" : data.total ? `${data.total} rows · threshold ${Math.round(data.threshold * 100)}%` : "waiting"}
+            {loading ? "載入中" : data.total ? `${data.total} 筆 · 門檻 ${Math.round(data.threshold * 100)}%` : "等待資料"}
           </small>
         </div>
       </div>
       {error ? <div className="roi-sample-error">{error}</div> : null}
-      <div className="roi-sample-bars" aria-label="ROI confidence distribution">
+      <div className="roi-sample-bars" aria-label="ROI 信心分布">
         <SampleBar label="高信心" count={data.ready} total={data.total} tone="ready" />
         <SampleBar label="低信心" count={data.low} total={data.total} tone="warn" />
         <SampleBar label="未判讀" count={data.missing} total={data.total} tone="idle" />

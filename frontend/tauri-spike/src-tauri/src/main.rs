@@ -69,7 +69,7 @@ fn open_legacy_workbench(workbench: String) -> Result<String, String> {
 #[tauri::command]
 fn pick_iso_combine_pdf() -> Option<String> {
     rfd::FileDialog::new()
-        .set_title("選擇 combine PDF")
+        .set_title("選擇合併 PDF")
         .add_filter("PDF", &["pdf"])
         .pick_file()
         .map(|path| path.to_string_lossy().to_string())
@@ -86,8 +86,8 @@ fn pick_iso_work_folder() -> Option<String> {
 #[tauri::command]
 fn pick_iso_list_file() -> Option<String> {
     rfd::FileDialog::new()
-        .set_title("選擇 ISO List")
-        .add_filter("ISO List", &["xlsx", "xlsm", "csv"])
+        .set_title("選擇 ISO 清單")
+        .add_filter("ISO 清單", &["xlsx", "xlsm", "csv"])
         .pick_file()
         .map(|path| path.to_string_lossy().to_string())
 }
@@ -443,7 +443,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let icon = Image::from_bytes(TRAY_ICON_BYTES)?;
     TrayIconBuilder::with_id("desktop-support-tray")
         .icon(icon)
-        .tooltip("Desktop Support")
+        .tooltip("桌面輔助系統")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -501,9 +501,9 @@ fn maybe_show_hide_to_tray_notice() {
 
     let _ = MessageDialog::new()
         .set_level(MessageLevel::Info)
-        .set_title("Desktop Support")
+        .set_title("桌面輔助系統")
         .set_description(
-            "關閉視窗會隱藏到系統匣，程式仍會常駐。若要結束程式，請從 tray 右鍵選單選「離開」。",
+            "關閉視窗會隱藏到系統匣，程式仍會常駐。若要結束程式，請從系統匣右鍵選單選「離開」。",
         )
         .set_buttons(MessageButtons::Ok)
         .show();

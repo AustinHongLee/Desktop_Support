@@ -5,6 +5,7 @@ import {
   eventLabel,
   failedStageLabel,
   formatRunTime,
+  localizeIsoDisplayText,
   pilotHint,
   pilotLabel,
   pilotStatusLabel,
@@ -66,7 +67,7 @@ export function RunLogDrawer({
             )) : (
               <div className="run-log-empty">
                 <FileSearch size={22} />
-                <span>{busy ? "讀取中" : "尚無 ISO run log"}</span>
+                <span>{busy ? "讀取中" : "尚無 ISO 處理紀錄"}</span>
               </div>
             )}
           </aside>
@@ -85,14 +86,14 @@ export function RunLogDrawer({
                     <AlertTriangle size={18} />
                     <div>
                       <strong>{failedStageLabel(detail.run.failure.failed_stage || "failed")}</strong>
-                      <span>{detail.run.failure.user_summary || detail.run.failure.error_message}</span>
+                      <span>{localizeIsoDisplayText(detail.run.failure.user_summary || detail.run.failure.error_message || "")}</span>
                     </div>
                   </div>
                 ) : null}
 
                 <div className="pilot-mini-list">
                   {(pilotItems.length ? pilotItems : []).map((item) => (
-                    <div className={`pilot-mini-item ${item.status}`} key={item.id} title={`${item.id} ${item.stage}: ${item.engineer_detail}`}>
+                    <div className={`pilot-mini-item ${item.status}`} key={item.id} title={`${item.id} ${localizeIsoDisplayText(item.stage)}: ${localizeIsoDisplayText(item.engineer_detail)}`}>
                       <strong>{pilotLabel(item.id, item.stage)}</strong>
                       <span>{pilotHint(item)}</span>
                       <em>{pilotStatusLabel(item.status)}</em>
@@ -104,8 +105,8 @@ export function RunLogDrawer({
                   {detail.events.slice(-18).reverse().map((event, index) => (
                     <div className={`event-log-item ${event.tone || "ready"}`} key={`${event.code || "event"}-${index}`}>
                       <strong>{eventLabel(event.code || "EVENT")}</strong>
-                      <span>{event.title || formatRunTime(event.ts || "")}</span>
-                      <small>{event.detail || ""}</small>
+                      <span>{localizeIsoDisplayText(event.title || formatRunTime(event.ts || ""))}</span>
+                      <small>{localizeIsoDisplayText(event.detail || "")}</small>
                     </div>
                   ))}
                 </div>
@@ -115,13 +116,13 @@ export function RunLogDrawer({
                     <RefreshCcw size={18} />
                     <span>{busy ? "回放中" : "回放試算"}</span>
                   </button>
-                  <small title={detail.run.run_id}>Run ID: {shortRunId(detail.run.run_id)}</small>
+                  <small title={detail.run.run_id}>流程 ID: {shortRunId(detail.run.run_id)}</small>
                 </div>
               </>
             ) : (
               <div className="run-log-empty large">
                 <FileSearch size={28} />
-                <span>{busy ? "讀取中" : "選擇一筆 run log"}</span>
+                <span>{busy ? "讀取中" : "選擇一筆流程紀錄"}</span>
               </div>
             )}
           </main>

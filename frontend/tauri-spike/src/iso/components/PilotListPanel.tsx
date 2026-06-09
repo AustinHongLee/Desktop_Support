@@ -2,6 +2,7 @@ import { AlertTriangle, Circle, CircleAlert, CircleCheck, PanelRightOpen, ScanLi
 import type { ReactNode } from "react";
 import type { IsoPilotItem } from "../../isoWorkflow";
 import {
+  localizeIsoDisplayText,
   pilotFreshnessLabel,
   pilotLabel,
   pilotLocation,
@@ -24,12 +25,12 @@ function renderMetrics(metrics: Record<string, unknown>): string {
     return "";
   }
   return entries
-    .map(([key, value]) => `${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`)
+    .map(([key, value]) => `${localizeIsoDisplayText(key)}=${localizeIsoDisplayText(typeof value === "object" ? JSON.stringify(value) : String(value))}`)
     .join(" · ");
 }
 
 /**
- * Full Pilot List for the Engineer / 調校 view.
+ * Full check list for the Engineer / 調校 view.
  *
  * Each item is collapsible (engineer_detail + metrics inside). `auto_fix` and the
  * derived jump location become action buttons. `showEngineerDetail` lets the
@@ -50,7 +51,7 @@ export function PilotListPanel({
     <div className="pilot-list-panel">
       <div className="panel-heading compact">
         <div>
-          <span>Pilot List</span>
+          <span>檢查清單</span>
           <small>{items.length ? `${items.length} 項檢查` : "尚無檢查資料"}</small>
         </div>
       </div>
@@ -67,17 +68,17 @@ export function PilotListPanel({
                 <summary>
                   <span className="pilot-list-icon">{toneIcon(tone)}</span>
                   <strong>{pilotLabel(item.id, item.stage)}</strong>
-                  <span className="pilot-list-user">{item.user_text}</span>
+                  <span className="pilot-list-user">{localizeIsoDisplayText(item.user_text)}</span>
                   {badge ? <em className="pilot-node-badge">{badge}</em> : null}
                   <span className={`pilot-list-status ${tone}`}>{pilotStatusLabel(item.status)}</span>
                 </summary>
                 <div className="pilot-list-body">
                   {showEngineerDetail && item.engineer_detail ? (
-                    <code className="pilot-list-detail">{item.engineer_detail}</code>
+                    <code className="pilot-list-detail">{localizeIsoDisplayText(item.engineer_detail)}</code>
                   ) : null}
                   {metricsText ? <span className="pilot-list-metrics">{metricsText}</span> : null}
                   {item.issue_codes.length ? (
-                    <span className="pilot-list-codes">codes: {item.issue_codes.join(", ")}</span>
+                    <span className="pilot-list-codes">代碼：{item.issue_codes.join(", ")}</span>
                   ) : null}
                   <div className="pilot-list-actions">
                     {item.auto_fix && onAutoFix ? (
@@ -93,14 +94,14 @@ export function PilotListPanel({
                       </button>
                     ) : null}
                   </div>
-                  {item.manual_hint ? <span className="pilot-list-hint">{item.manual_hint}</span> : null}
+                  {item.manual_hint ? <span className="pilot-list-hint">{localizeIsoDisplayText(item.manual_hint)}</span> : null}
                 </div>
               </details>
             );
           })}
         </div>
       ) : (
-        <div className="pilot-list-empty">產生草稿或執行一次後顯示完整 Pilot 檢查。</div>
+        <div className="pilot-list-empty">產生草稿或執行一次後顯示完整檢查清單。</div>
       )}
     </div>
   );

@@ -93,14 +93,14 @@ export function isoIssueKind(row: IsoPlanRow): string {
 
 export function isoIssueLabel(row: IsoPlanRow): string {
   const kind = isoIssueKind(row);
-  if (kind === "manual-corrected") return "manual corrected";
+  if (kind === "manual-corrected") return "手動修正";
   if (kind === "missing-serial") return "缺流水號";
   if (kind === "missing-line") return "缺 ISO 對應";
   if (kind === "duplicate") return "重複";
   if (kind === "low-confidence") return "低信心";
-  if (kind === "blocked-issue") return "blocked";
+  if (kind === "blocked-issue") return "需處理";
   if (kind === "review-issue") return "待確認";
-  return row.status;
+  return row.status === "ready" ? "通過" : row.status === "warn" ? "待確認" : row.status === "blocked" ? "需處理" : "未變更";
 }
 
 export function normalizeIsoRows(rows: IsoPlanRow[]): IsoPlanRow[] {
@@ -187,7 +187,7 @@ export function parentPath(path: string): string {
 
 export function formatRunTime(value: string): string {
   if (!value) {
-    return "time unknown";
+    return "時間未知";
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -257,6 +257,12 @@ export function pilotLabel(id: string, stage: string): string {
     P10: "命名格式",
     P11: "命名草稿",
     P12: "可否套用",
+    P13: "ROI 品質",
+    P14: "設定檔一致",
+    P15: "草稿新鮮度",
+    roi_confidence: "ROI 品質",
+    profile_consistency: "設定檔一致",
+    draft_freshness: "草稿新鮮度",
   };
   return labels[id] ? `${id} ${labels[id]}` : stage || id;
 }
@@ -271,7 +277,7 @@ export function pilotHint(item: IsoPilotItem): string {
   if (item.status === "running") {
     return "正在處理";
   }
-  return item.manual_hint || item.user_text || item.stage;
+  return localizeIsoDisplayText(item.manual_hint || item.user_text || item.stage);
 }
 
 export function pilotStatusLabel(status: IsoPilotItem["status"]): string {
@@ -307,7 +313,7 @@ const PILOT_LOCATION_BY_STAGE: Record<string, IsoPilotNextAction> = {
   input: { view: "workbench", anchor: "source", label: "檢查來源" },
   pdf_source: { view: "workbench", anchor: "source", label: "檢查 PDF 來源" },
   split: { view: "workbench", anchor: "source", label: "重新拆頁" },
-  iso_list: { view: "engineer", anchor: "mapping", label: "到調校檢查 ISO List / sheet" },
+  iso_list: { view: "engineer", anchor: "mapping", label: "到調校檢查 ISO 清單 / 工作表" },
   mapping: { view: "engineer", anchor: "mapping", label: "到調校選欄位對應" },
   serial_detection: { view: "engineer", anchor: "roi", label: "到調校調整 ROI / 門檻" },
   roi_confidence: { view: "engineer", anchor: "roi", label: "到調校檢查判讀品質" },
@@ -315,10 +321,10 @@ const PILOT_LOCATION_BY_STAGE: Record<string, IsoPilotNextAction> = {
   duplicates: { view: "workbench", anchor: "row", label: "到工作台處理重複檔名" },
   missing_serial: { view: "workbench", anchor: "row", label: "到工作台補流水號" },
   naming_pattern: { view: "engineer", anchor: "pattern", label: "到調校檢查命名格式" },
-  profile_consistency: { view: "engineer", anchor: "profile", label: "到調校檢查 Profile" },
+  profile_consistency: { view: "engineer", anchor: "profile", label: "到調校檢查設定檔" },
   draft_freshness: { view: "workbench", anchor: "dryrun", label: "重新產生草稿" },
   rename_draft: { view: "workbench", anchor: "dryrun", label: "重新產生草稿" },
-  apply_readiness: { view: "workbench", anchor: "dryrun", label: "到工作台 dry-run / 套用" },
+  apply_readiness: { view: "workbench", anchor: "dryrun", label: "到工作台試算 / 套用" },
   export_log: { view: "engineer", anchor: "runlog", label: "到調校匯出紀錄" },
   apply_safety: { view: "workbench", anchor: "dryrun", label: "到工作台確認套用安全" },
 };
@@ -356,9 +362,49 @@ export function pilotNextStep(
   }
   return {
     item: best,
-    text: best.user_text || best.manual_hint || best.stage,
+    text: localizeIsoDisplayText(best.user_text || best.manual_hint || best.stage),
     action: pilotLocation(best),
   };
+}
+
+export function localizeIsoDisplayText(value: string): string {
+  if (!value) {
+    return "";
+  }
+  const replacements: Array<[RegExp, string]> = [
+    [/\bISO List\b/g, "ISO 清單"],
+    [/\bProfile\b/g, "設定檔"],
+    [/\bPilot List\b/g, "檢查清單"],
+    [/\bPilot\b/g, "檢查"],
+    [/\bRun ID\b/g, "流程 ID"],
+    [/\brun log\b/gi, "流程紀錄"],
+    [/\breplay\b/gi, "回放"],
+    [/\bmanual corrected\b/gi, "手動修正"],
+    [/\bmanual confirmed\b/gi, "手動確認"],
+    [/\bconfidence_threshold\b/g, "信心門檻"],
+    [/\bserial_region\b/g, "流水號 ROI"],
+    [/\bdrawing_region\b/g, "圖號 ROI"],
+    [/\bserial_col\b/g, "流水號欄"],
+    [/\bline_col\b/g, "圖號欄"],
+    [/\bsheet_name\b/g, "工作表"],
+    [/\bpattern\b/g, "命名格式"],
+    [/\bchanged\b/g, "已變更"],
+    [/\blocal\b/g, "本機"],
+    [/\bconfidence\b/gi, "信心"],
+    [/\bthreshold\b/gi, "門檻"],
+    [/\bavailable\b/gi, "可使用"],
+    [/\bwaiting\b/gi, "等待"],
+    [/\bready\b/gi, "通過"],
+    [/\bwarn\b/gi, "待確認"],
+    [/\bblocked\b/gi, "需處理"],
+    [/\bidle\b/gi, "待命"],
+    [/\bmissing\b/gi, "缺少"],
+    [/\bpages\b/gi, "頁"],
+    [/\bpage\b/gi, "頁"],
+    [/\brows\b/gi, "筆"],
+    [/\brow\b/gi, "列"],
+  ];
+  return replacements.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), value);
 }
 
 export function eventLabel(code: string): string {
@@ -372,6 +418,9 @@ export function eventLabel(code: string): string {
     JOB_RUNNING: "批次開始",
     ROW_DONE: "完成一頁",
     CANCELLED: "已取消",
+    IDLE: "待命",
+    SYS: "系統",
+    EVENT: "事件",
   };
   return labels[normalized] || code || "事件";
 }
@@ -397,7 +446,7 @@ export function failedStageLabel(stage: string): string {
     serial_detection: "流水號判讀失敗",
     naming_draft: "命名草稿失敗",
     apply: "套用更名失敗",
-    profile: "Profile 讀寫失敗",
+    profile: "設定檔讀寫失敗",
     failed: "流程失敗",
   };
   return labels[stage] || stage || "流程失敗";

@@ -2,6 +2,7 @@ import { AlertTriangle, ChevronRight, Circle, CircleAlert, CircleCheck, ScanLine
 import type { ReactNode } from "react";
 import type { IsoPilotItem } from "../../isoWorkflow";
 import {
+  localizeIsoDisplayText,
   pilotFreshnessLabel,
   pilotLabel,
   pilotNextStep,
@@ -19,7 +20,7 @@ function toneIcon(tone: IsoPilotTone): ReactNode {
 }
 
 /**
- * Compact Pilot summary / progress strip.
+ * Compact check summary / progress strip.
  *
  * Reads the live `plan.pilot_results` (already attached by the backend on every
  * plan / batch job result). Click a node — or the "下一步" button — to jump to the
@@ -61,7 +62,7 @@ export function PilotStrip({
               role="listitem"
               key={item.id}
               className={`pilot-node ${tone}`}
-              title={`${item.id} ${item.stage} · ${pilotStatusLabel(item.status)}${item.user_text ? ` · ${item.user_text}` : ""}`}
+              title={`${item.id} ${localizeIsoDisplayText(item.stage)} · ${pilotStatusLabel(item.status)}${item.user_text ? ` · ${localizeIsoDisplayText(item.user_text)}` : ""}`}
               onClick={() => onJump?.(item)}
             >
               {toneIcon(tone)}
@@ -75,7 +76,7 @@ export function PilotStrip({
       {next ? (
         <button type="button" className="pilot-next-step" onClick={() => onJump?.(next.item)}>
           <span className="pilot-next-label">下一步</span>
-          <span className="pilot-next-text">{next.text}</span>
+          <span className="pilot-next-text">{localizeIsoDisplayText(next.text)}</span>
           <span className="pilot-next-cta">
             {next.action.label}
             <ChevronRight size={14} />
