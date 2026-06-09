@@ -113,10 +113,21 @@ export interface IsoWorkflowIssue {
   detail: string;
 }
 
+export type IsoPilotStatus = "pending" | "running" | "ready" | "warn" | "blocked" | "skipped";
+export type IsoPilotFreshness = "fresh" | "stale";
+export type IsoPilotView = "autopilot" | "workbench" | "engineer";
+
+export interface IsoPilotNextAction {
+  label: string;
+  view: IsoPilotView;
+  anchor?: string;
+  row_ref?: string;
+}
+
 export interface IsoPilotItem {
   id: string;
   stage: string;
-  status: "pending" | "running" | "ready" | "warn" | "blocked" | "skipped";
+  status: IsoPilotStatus;
   user_text: string;
   engineer_detail: string;
   metrics: Record<string, unknown>;
@@ -124,6 +135,10 @@ export interface IsoPilotItem {
   manual_hint: string;
   blocks_apply: boolean;
   issue_codes: string[];
+  // schema v2 additive fields (optional so v1 run logs still parse)
+  freshness?: IsoPilotFreshness;
+  needs_review?: boolean;
+  next_action?: IsoPilotNextAction | null;
 }
 
 export interface IsoPilotReport {

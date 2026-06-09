@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-PILOT_SCHEMA_VERSION = 1
+PILOT_SCHEMA_VERSION = 2
 PILOT_ITEM_IDS = (
     "P01",
     "P02",
@@ -21,6 +21,9 @@ PILOT_ITEM_IDS = (
     "P12",
 )
 PILOT_STATUSES = {"pending", "running", "ready", "warn", "blocked", "skipped"}
+# Orthogonal, append-only freshness flag (schema v2). Kept separate from the 6
+# primary statuses so the status enum / pilot_summary stay backward compatible.
+PILOT_FRESHNESS = {"fresh", "stale"}
 DEFAULT_PATTERN = "{serial}--{line}.pdf"
 
 
@@ -232,9 +235,14 @@ def _item(
     manual_hint: str = "",
     blocks_apply: bool = False,
     issue_codes: list[str] | None = None,
+    freshness: str = "fresh",
+    needs_review: bool = False,
+    next_action: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if status not in PILOT_STATUSES:
         raise ValueError(f"Unsupported pilot status: {status}")
+    if freshness not in PILOT_FRESHNESS:
+        raise ValueError(f"Unsupported pilot freshness: {freshness}")
     return {
         "id": item_id,
         "stage": stage,
@@ -246,6 +254,10 @@ def _item(
         "manual_hint": manual_hint,
         "blocks_apply": blocks_apply,
         "issue_codes": issue_codes or [],
+        # --- schema v2 additive fields (safe defaults; old readers ignore) ---
+        "freshness": freshness,
+        "needs_review": bool(needs_review),
+        "next_action": next_action,
     }
 
 

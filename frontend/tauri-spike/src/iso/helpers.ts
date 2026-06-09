@@ -1,5 +1,6 @@
 import type {
   IsoPilotItem,
+  IsoPilotNextAction,
   IsoPlanRow,
   IsoRegion,
   IsoRowStatus,
@@ -280,6 +281,84 @@ export function pilotStatusLabel(status: IsoPilotItem["status"]): string {
   if (status === "skipped") return "略過";
   if (status === "running") return "執行中";
   return "等待";
+}
+
+export type IsoPilotTone = "ready" | "warn" | "danger" | "run" | "idle";
+
+// Map a pilot item (status + schema-v2 freshness/needs_review) to a single CSS tone.
+export function pilotTone(item: IsoPilotItem): IsoPilotTone {
+  if (item.status === "blocked") return "danger";
+  if (item.status === "warn" || item.freshness === "stale" || item.needs_review) return "warn";
+  if (item.status === "running") return "run";
+  if (item.status === "ready") return "ready";
+  return "idle"; // pending / skipped
+}
+
+// Extra badge text for the orthogonal freshness / needs_review flags ("" when none).
+export function pilotFreshnessLabel(item: IsoPilotItem): string {
+  if (item.freshness === "stale") return "已過期";
+  if (item.needs_review) return "未確認";
+  return "";
+}
+
+// Stage -> where to take the user. Frozen P01-P12 stages plus forward-looking
+// P13-P17 stages, so this keeps working once those items land on the backend.
+const PILOT_LOCATION_BY_STAGE: Record<string, IsoPilotNextAction> = {
+  input: { view: "workbench", anchor: "source", label: "檢查來源" },
+  pdf_source: { view: "workbench", anchor: "source", label: "檢查 PDF 來源" },
+  split: { view: "workbench", anchor: "source", label: "重新拆頁" },
+  iso_list: { view: "engineer", anchor: "mapping", label: "到調校檢查 ISO List / sheet" },
+  mapping: { view: "engineer", anchor: "mapping", label: "到調校選欄位對應" },
+  serial_detection: { view: "engineer", anchor: "roi", label: "到調校調整 ROI / 門檻" },
+  roi_confidence: { view: "engineer", anchor: "roi", label: "到調校檢查判讀品質" },
+  iso_correction: { view: "workbench", anchor: "row", label: "到工作台修圖號對應" },
+  duplicates: { view: "workbench", anchor: "row", label: "到工作台處理重複檔名" },
+  missing_serial: { view: "workbench", anchor: "row", label: "到工作台補流水號" },
+  naming_pattern: { view: "engineer", anchor: "pattern", label: "到調校檢查命名格式" },
+  profile_consistency: { view: "engineer", anchor: "profile", label: "到調校檢查 Profile" },
+  draft_freshness: { view: "workbench", anchor: "dryrun", label: "重新產生草稿" },
+  rename_draft: { view: "workbench", anchor: "dryrun", label: "重新產生草稿" },
+  apply_readiness: { view: "workbench", anchor: "dryrun", label: "到工作台 dry-run / 套用" },
+  export_log: { view: "engineer", anchor: "runlog", label: "到調校匯出紀錄" },
+  apply_safety: { view: "workbench", anchor: "dryrun", label: "到工作台確認套用安全" },
+};
+
+// Use the backend-provided next_action when present, otherwise derive from stage.
+export function pilotLocation(item: IsoPilotItem): IsoPilotNextAction {
+  if (item.next_action) {
+    return item.next_action;
+  }
+  return PILOT_LOCATION_BY_STAGE[item.stage] ?? { view: "workbench", anchor: "row", label: "到工作台處理" };
+}
+
+function pilotUrgency(item: IsoPilotItem): number {
+  if (item.status === "blocked") return 3;
+  if (item.status === "warn") return 2;
+  if (item.freshness === "stale" || item.needs_review) return 1;
+  return 0;
+}
+
+// The single most urgent actionable pilot item (blocked > warn > stale/needs_review).
+export function pilotNextStep(
+  items: IsoPilotItem[],
+): { item: IsoPilotItem; text: string; action: IsoPilotNextAction } | null {
+  let best: IsoPilotItem | null = null;
+  let bestScore = 0;
+  for (const item of items) {
+    const score = pilotUrgency(item);
+    if (score > bestScore) {
+      best = item;
+      bestScore = score;
+    }
+  }
+  if (!best) {
+    return null;
+  }
+  return {
+    item: best,
+    text: best.user_text || best.manual_hint || best.stage,
+    action: pilotLocation(best),
+  };
 }
 
 export function eventLabel(code: string): string {
