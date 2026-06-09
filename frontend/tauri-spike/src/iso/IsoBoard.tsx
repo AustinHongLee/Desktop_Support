@@ -129,6 +129,8 @@ export function IsoBoard() {
   const [previewError, setPreviewError] = useState("");
   const [profile, setProfile] = useState<IsoProfilePayload | null>(null);
   const [profileBusy, setProfileBusy] = useState(false);
+  const [roiDraftDirty, setRoiDraftDirty] = useState(false);
+  const [roiDraftSaving, setRoiDraftSaving] = useState(false);
   const [serialRegion, setSerialRegion] = useState<IsoRegion>(DEFAULT_SERIAL_REGION);
   const [drawingRegion, setDrawingRegion] = useState<IsoRegion>(DEFAULT_DRAWING_REGION);
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.7);
@@ -769,16 +771,24 @@ export function IsoBoard() {
   }
 
   function resetRoi(region: "serial" | "drawing" = activeRoi) {
+    updateRoi(region, region === "serial" ? DEFAULT_SERIAL_REGION : DEFAULT_DRAWING_REGION);
+  }
+
+  function updateRoi(region: "serial" | "drawing", value: IsoRegion) {
+    const next = normalizeRegion(value);
     if (region === "serial") {
-      setSerialRegion(DEFAULT_SERIAL_REGION);
-      return;
+      setSerialRegion(next);
+    } else {
+      setDrawingRegion(next);
     }
-    setDrawingRegion(DEFAULT_DRAWING_REGION);
+    if (isoView === "engineer") {
+      setRoiDraftDirty(true);
+    }
   }
 
   function updateActiveRoi(field: keyof IsoRegion, value: number) {
-    const setter = activeRoi === "serial" ? setSerialRegion : setDrawingRegion;
-    setter((current) => normalizeRegion({ ...current, [field]: value }));
+    const current = activeRoi === "serial" ? serialRegion : drawingRegion;
+    updateRoi(activeRoi, { ...current, [field]: value });
   }
 
   async function exportRenameCsv() {
@@ -917,6 +927,8 @@ export function IsoBoard() {
   const profileHistoryCount = profile?.history_count ?? 0;
   const profileLabel = profileBusy
     ? "loading"
+    : roiDraftSaving
+      ? "saving draft"
     : profile?.profile_scope === "draft"
       ? "draft saved"
       : hasPublishedProfile
@@ -1086,6 +1098,54 @@ export function IsoBoard() {
   }, [batchJob?.job_id, batchRunning, activeIsoRunId, oneClickRunLog]);
 
   useEffect(() => {
+    if (!roiDraftDirty || isoView !== "engineer" || !isTauri()) {
+      return;
+    }
+    const folder = activeProfileFolder();
+    if (!folder) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setRoiDraftSaving(true);
+      void saveIsoDraftProfile({
+        profile_folder: folder,
+        work_folder: workFolder,
+        combine_pdf: combinePdf,
+        page_folder: pageFolder,
+        iso_list: isoList,
+        sheet_name: sheetName,
+        serial_col: serialCol,
+        line_col: lineCol,
+        pattern,
+        confidence_threshold: confidenceThreshold,
+        serial_region: serialRegion,
+        drawing_region: drawingRegion,
+      })
+        .then((result) => {
+          if (!cancelled) {
+            setProfile(result);
+            setRoiDraftDirty(false);
+          }
+        })
+        .catch((caught) => {
+          if (!cancelled) {
+            setError(caught instanceof Error ? caught.message : String(caught));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setRoiDraftSaving(false);
+          }
+        });
+    }, 650);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [combinePdf, confidenceThreshold, drawingRegion, isoList, isoView, lineCol, pageFolder, pattern, roiDraftDirty, serialCol, serialRegion, sheetName, workFolder]);
+
+  useEffect(() => {
     if (oneClickStage !== "running" && oneClickStage !== "applying") {
       return;
     }
@@ -1104,6 +1164,7 @@ export function IsoBoard() {
       activeRoi={activeRoi}
       busy={previewBusy}
       drawingRegion={drawingRegion}
+      editableRoi={isoView === "engineer" && isoMachine.canTuneRoi}
       error={previewError}
       preview={preview}
       resetRoi={resetRoi}
@@ -1114,6 +1175,7 @@ export function IsoBoard() {
       confirmSelectedRow={confirmSelectedRow}
       nextProblem={chooseProblemRow}
       updateActiveRoi={updateActiveRoi}
+      updateRoi={updateRoi}
     />
   );
 
@@ -1233,6 +1295,7 @@ export function IsoBoard() {
           profileLabel={profileLabel}
           publishProfileToOneClick={publishProfileToOneClick}
           revertPublishedProfile={revertPublishedProfile}
+          rows={rows}
           rowCount={rows.length}
           runLogBusy={runLogBusy}
           selectedCount={selectedCount}

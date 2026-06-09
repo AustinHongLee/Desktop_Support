@@ -2960,6 +2960,20 @@ h3 {
   background: #ffffff;
 }
 
+.roi-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+
+.roi-overlay.readonly {
+  pointer-events: none;
+}
+
+.roi-overlay.editable {
+  pointer-events: auto;
+}
+
 .roi-box {
   position: absolute;
   pointer-events: none;
@@ -2974,6 +2988,36 @@ h3 {
 
 .roi-box.active {
   border-width: 3px;
+}
+
+.roi-box.editable {
+  pointer-events: auto;
+  cursor: grab;
+}
+
+.roi-box.editable:active {
+  cursor: grabbing;
+}
+
+.roi-readonly-note {
+  display: grid;
+  gap: 3px;
+  border: 1px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  padding: 9px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.roi-readonly-note strong {
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.roi-readonly-note span {
+  font-size: 11px;
+  font-weight: 780;
 }
 
 .pdf-preview-empty {
@@ -3120,6 +3164,108 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.roi-sample-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(47, 245, 200, 0.18);
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.roi-sample-bars {
+  display: grid;
+  gap: 8px;
+}
+
+.roi-sample-bar {
+  display: grid;
+  gap: 5px;
+}
+
+.roi-sample-bar > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.roi-sample-bar strong {
+  color: var(--text-strong);
+}
+
+.roi-sample-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.roi-sample-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: rgba(47, 245, 200, 0.86);
+}
+
+.roi-sample-bar.warn .roi-sample-track span {
+  background: rgba(255, 209, 102, 0.9);
+}
+
+.roi-sample-bar.idle .roi-sample-track span {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.roi-sample-list {
+  display: grid;
+  gap: 6px;
+}
+
+.roi-sample-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px 28px minmax(0, 1fr) 44px;
+  gap: 7px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  padding: 7px;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.roi-sample-row svg {
+  color: var(--amber);
+}
+
+.roi-sample-row span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roi-sample-row strong,
+.roi-sample-row code {
+  color: var(--text-strong);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.roi-sample-empty {
+  border: 1px dashed rgba(255, 255, 255, 0.13);
+  border-radius: 9px;
+  padding: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 820;
+  text-align: center;
 }
 
 .modal-backdrop {

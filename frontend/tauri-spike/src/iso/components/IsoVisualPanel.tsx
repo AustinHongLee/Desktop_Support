@@ -1,5 +1,6 @@
 import { CircleAlert, CircleCheck, FileSearch, RefreshCcw, SearchCheck } from "lucide-react";
 import type { IsoPlanRow, IsoPreviewPayload, IsoRegion } from "../../isoWorkflow";
+import { RoiOverlay } from "./RoiOverlay";
 
 export function IsoVisualPanel({
   activeRoi,
@@ -7,6 +8,7 @@ export function IsoVisualPanel({
   busy,
   confirmSelectedRow,
   drawingRegion,
+  editableRoi,
   error,
   nextProblem,
   preview,
@@ -15,12 +17,14 @@ export function IsoVisualPanel({
   serialRegion,
   setActiveRoi,
   updateActiveRoi,
+  updateRoi,
 }: {
   activeRoi: "serial" | "drawing";
   adoptPreviewVision: () => void;
   busy: boolean;
   confirmSelectedRow: () => void;
   drawingRegion: IsoRegion;
+  editableRoi: boolean;
   error: string;
   nextProblem: () => void;
   preview: IsoPreviewPayload | null;
@@ -29,6 +33,7 @@ export function IsoVisualPanel({
   serialRegion: IsoRegion;
   setActiveRoi: (region: "serial" | "drawing") => void;
   updateActiveRoi: (field: keyof IsoRegion, value: number) => void;
+  updateRoi: (region: "serial" | "drawing", value: IsoRegion) => void;
 }) {
   const activeRegion = activeRoi === "serial" ? serialRegion : drawingRegion;
   return (
@@ -44,8 +49,14 @@ export function IsoVisualPanel({
         {preview ? (
           <div className="pdf-page-canvas">
             <img src={preview.page.image} alt={`PDF preview ${preview.source_name}`} />
-            <RoiBox active={activeRoi === "serial"} region={serialRegion} tone="serial" />
-            <RoiBox active={activeRoi === "drawing"} region={drawingRegion} tone="drawing" />
+            <RoiOverlay
+              activeRoi={activeRoi}
+              drawingRegion={drawingRegion}
+              editable={editableRoi}
+              onChange={updateRoi}
+              onSelect={setActiveRoi}
+              serialRegion={serialRegion}
+            />
           </div>
         ) : (
           <div className="pdf-preview-empty">
@@ -60,26 +71,35 @@ export function IsoVisualPanel({
           <button className={activeRoi === "serial" ? "active" : ""} onClick={() => setActiveRoi("serial")}>流水號 ROI</button>
           <button className={activeRoi === "drawing" ? "active" : ""} onClick={() => setActiveRoi("drawing")}>圖號 ROI</button>
         </div>
-        <div className="roi-controls">
-          {(["left", "top", "width", "height"] as Array<keyof IsoRegion>).map((field) => (
-            <label className="roi-slider" key={field}>
-              <span>{field}</span>
-              <input
-                max={field === "left" || field === "top" ? 0.95 : 1}
-                min={field === "width" || field === "height" ? 0.05 : 0}
-                onChange={(event) => updateActiveRoi(field, Number(event.target.value))}
-                step="0.01"
-                type="range"
-                value={activeRegion[field]}
-              />
-              <strong>{activeRegion[field].toFixed(2)}</strong>
-            </label>
-          ))}
-        </div>
-        <button className="action-button" onClick={() => resetRoi()}>
-          <RefreshCcw size={14} />
-          <span>重設目前 ROI</span>
-        </button>
+        {editableRoi ? (
+          <>
+            <div className="roi-controls">
+              {(["left", "top", "width", "height"] as Array<keyof IsoRegion>).map((field) => (
+                <label className="roi-slider" key={field}>
+                  <span>{field}</span>
+                  <input
+                    max={field === "left" || field === "top" ? 0.95 : 1}
+                    min={field === "width" || field === "height" ? 0.05 : 0}
+                    onChange={(event) => updateActiveRoi(field, Number(event.target.value))}
+                    step="0.01"
+                    type="range"
+                    value={activeRegion[field]}
+                  />
+                  <strong>{activeRegion[field].toFixed(2)}</strong>
+                </label>
+              ))}
+            </div>
+            <button className="action-button" onClick={() => resetRoi()}>
+              <RefreshCcw size={14} />
+              <span>重設目前 ROI</span>
+            </button>
+          </>
+        ) : (
+          <div className="roi-readonly-note">
+            <strong>ROI 只讀</strong>
+            <span>調校模式更新草稿框線</span>
+          </div>
+        )}
       </div>
 
       <div className="pdf-crop-grid">
@@ -115,20 +135,6 @@ export function IsoVisualPanel({
         </button>
       </div>
     </div>
-  );
-}
-
-function RoiBox({ active, region, tone }: { active: boolean; region: IsoRegion; tone: "serial" | "drawing" }) {
-  return (
-    <div
-      className={`roi-box ${tone} ${active ? "active" : ""}`}
-      style={{
-        left: `${region.left * 100}%`,
-        top: `${region.top * 100}%`,
-        width: `${region.width * 100}%`,
-        height: `${region.height * 100}%`,
-      }}
-    />
   );
 }
 

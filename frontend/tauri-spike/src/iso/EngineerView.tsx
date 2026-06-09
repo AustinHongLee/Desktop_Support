@@ -3,8 +3,9 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { Gate } from "../components/Gate";
 import { StatusTile } from "../components/StatusTile";
 import type { LegacyBridgeState } from "../hooks/useLegacyBridge";
-import type { IsoJobPayload, IsoWorkflowPlan } from "../isoWorkflow";
+import type { IsoJobPayload, IsoPlanRow, IsoWorkflowPlan } from "../isoWorkflow";
 import { PathPickerRow } from "./components/IsoControls";
+import { RoiSamplePanel } from "./components/RoiSamplePanel";
 
 export function EngineerView({
   activeProfileFolderReady,
@@ -43,6 +44,7 @@ export function EngineerView({
   profileLabel,
   publishProfileToOneClick,
   revertPublishedProfile,
+  rows,
   rowCount,
   runLogBusy,
   selectedCount,
@@ -96,6 +98,7 @@ export function EngineerView({
   profileLabel: string;
   publishProfileToOneClick: () => void;
   revertPublishedProfile: () => void;
+  rows: IsoPlanRow[];
   rowCount: number;
   runLogBusy: boolean;
   selectedCount: number;
@@ -250,6 +253,7 @@ export function EngineerView({
 
       <aside className="iso-engineer-panel">
         {visualPanel}
+        <RoiSamplePanel rows={rows} threshold={confidenceThreshold} />
         <div className="legacy-fallback-card">
           <div>
             <div className="eyebrow">Legacy fallback</div>
