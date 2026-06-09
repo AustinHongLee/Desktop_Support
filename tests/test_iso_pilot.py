@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from launcher.app.tauri_iso_worker import _result_payload
 from launcher.app.tauri_iso_workflow import IsoWorkflowRequest, build_iso_plan, pilot_report, roi_distribution
 from launcher.plugins.iso_tools.pilot import PILOT_ITEM_IDS, build_pilot_report
 from tests.test_tauri_iso_workflow import _write_iso_list, _write_pdf
@@ -150,6 +151,38 @@ class IsoPilotTests(unittest.TestCase):
         self.assertIn("confidence_threshold", by_id["P15"]["metrics"]["changed"])
         self.assertIn("serial_region", by_id["P15"]["metrics"]["changed"])
 
+    def test_roi_confidence_uses_user_threshold_for_p13(self) -> None:
+        plan = {
+            "source": {
+                "kind": "page_folder",
+                "work_folder": "C:/work",
+                "page_folder": "C:/work/pages",
+                "pdf_count": 3,
+                "iso_list": "C:/work/iso.xlsx",
+                "sheet_name": "ISO",
+                "headers": ["流水號", "圖號"],
+                "serial_col": 0,
+                "line_col": 1,
+                "record_count": 3,
+                "pattern": "{serial}--{line}.pdf",
+                "detect_serials": True,
+                "confidence_threshold": 0.70,
+            },
+            "summary": {"total": 3, "ready": 3, "warn": 0, "blocked": 0, "selected": 3},
+            "rows": [
+                {"page": 1, "serial": "1", "line_no": "A", "new_name": "1--A.pdf", "status": "ready", "selected": True, "confidence": 0.79, "vision_message": "OK"},
+                {"page": 2, "serial": "2", "line_no": "B", "new_name": "2--B.pdf", "status": "ready", "selected": True, "confidence": 0.82, "vision_message": "OK"},
+                {"page": 3, "serial": "3", "line_no": "C", "new_name": "3--C.pdf", "status": "ready", "selected": True, "confidence": 0.88, "vision_message": "OK"},
+            ],
+            "issues": [],
+        }
+
+        report = build_pilot_report(request={"work_folder": "C:/work", "detect_serials": True}, plan=plan)
+        by_id = {item["id"]: item for item in report["items"]}
+
+        self.assertEqual(by_id["P13"]["status"], "ready")
+        self.assertEqual(by_id["P13"]["user_text"], "判讀品質良好。")
+
     def test_profile_missing_paths_block_apply_in_p14(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             missing = Path(tmp) / "missing.xlsx"
@@ -175,6 +208,71 @@ class IsoPilotTests(unittest.TestCase):
         self.assertEqual(by_id["P14"]["status"], "blocked")
         self.assertTrue(by_id["P14"]["blocks_apply"])
         self.assertGreaterEqual(report["summary"]["blocked"], 1)
+
+    def test_batch_result_keeps_tuning_fields_fresh_for_p15(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            page_folder = folder / "pages"
+            page_folder.mkdir()
+            iso_list = folder / "iso_list.xlsx"
+            _write_iso_list(iso_list)
+            request = IsoWorkflowRequest(
+                action="start_batch_detect",
+                work_folder=folder,
+                page_folder=page_folder,
+                iso_list=iso_list,
+                sheet_name="ISO",
+                serial_col=0,
+                line_col=1,
+                pattern="{serial}--{line}.pdf",
+                detect_serials=True,
+                confidence_threshold=0.70,
+                serial_region={"left": 0.62, "top": 0.0, "width": 0.38, "height": 0.24},
+                drawing_region={"left": 0.5, "top": 0.66, "width": 0.5, "height": 0.34},
+            )
+            rows = [
+                {
+                    "id": "row-1",
+                    "page": 1,
+                    "source_name": "page_001.pdf",
+                    "source_path": str(page_folder / "page_001.pdf"),
+                    "serial": "1",
+                    "line_no": "PIPE-A",
+                    "new_name": "1--PIPE-A.pdf",
+                    "target_path": str(page_folder / "1--PIPE-A.pdf"),
+                    "status": "ready",
+                    "selected": True,
+                    "confidence": 0.91,
+                    "vision_message": "OK",
+                    "note": "",
+                }
+            ]
+
+            payload = _result_payload(
+                rows,
+                [],
+                "page_folder",
+                page_folder,
+                {
+                    "iso_list": iso_list,
+                    "sheet_name": "ISO",
+                    "sheet_options": ["ISO"],
+                    "headers": ["流水號", "圖號"],
+                    "serial_col": 0,
+                    "line_col": 1,
+                    "record_count": 1,
+                    "issues": [],
+                },
+                {},
+                request,
+            )
+
+        by_id = {item["id"]: item for item in payload["pilot_results"]}
+        self.assertEqual(payload["source"]["confidence_threshold"], 0.70)
+        self.assertEqual(payload["source"]["serial_region"], {"left": 0.62, "top": 0.0, "width": 0.38, "height": 0.24})
+        self.assertEqual(payload["source"]["drawing_region"], {"left": 0.5, "top": 0.66, "width": 0.5, "height": 0.34})
+        self.assertEqual(by_id["P15"]["status"], "ready")
+        self.assertEqual(by_id["P15"]["freshness"], "fresh")
 
     def test_roi_distribution_action_summarizes_confidence_buckets(self) -> None:
         payload = roi_distribution(

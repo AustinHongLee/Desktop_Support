@@ -103,11 +103,17 @@ def _build_items(
     avg_confidence = sum(confidence_values) / len(confidence_values) if confidence_values else 0.0
     low_ratio = (len(low_confidence_rows) / len(rows)) if rows else 0.0
     roi_status = (
-        "ready" if avg_confidence >= 0.85 and low_ratio < 0.10
+        "skipped" if not detect_serials
+        else "pending" if not rows
         else "blocked" if low_ratio > 0.50
-        else "warn" if rows and detect_serials
-        else "skipped" if not detect_serials
-        else "pending"
+        else "warn" if low_confidence_rows
+        else "ready"
+    )
+    roi_text = (
+        "影像判讀未啟用。" if roi_status == "skipped"
+        else "尚未有判讀資料。" if roi_status == "pending"
+        else "判讀品質良好。" if roi_status == "ready"
+        else f"{len(low_confidence_rows)} 頁低於門檻，需確認（平均信心 {avg_confidence:.0%}）。"
     )
     profile = source.get("profile") if isinstance(source.get("profile"), dict) else {}
     missing_profile_paths = [
@@ -262,7 +268,7 @@ def _build_items(
             "P13",
             "roi_confidence",
             roi_status,
-            "判讀品質良好。" if roi_status == "ready" else f"{len(low_confidence_rows)} 頁需確認（平均信心 {avg_confidence:.0%}）。",
+            roi_text,
             engineer_detail=f"avg={avg_confidence:.3f}; low_ratio={low_ratio:.2f}; low={len(low_confidence_rows)}",
             metrics={"avg_confidence": avg_confidence, "low_ratio": low_ratio, "low": len(low_confidence_rows)},
             auto_fix="重新自動校準 ROI 或降低門檻。",
