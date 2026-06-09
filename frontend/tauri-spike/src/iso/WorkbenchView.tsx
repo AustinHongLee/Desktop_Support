@@ -30,15 +30,14 @@ export function WorkbenchView({
   exportRenameCsv,
   generatePlan,
   hasPublishedProfile,
-  headers,
   isoList,
   issueRows,
   legacy,
-  lineCol,
   canCancelBatch,
   canGenerateDraft,
   canOpenDryRun,
   canStartBatch,
+  openEngineerView,
   openDryRun,
   openRunLogDrawer,
   pageFolder,
@@ -52,19 +51,12 @@ export function WorkbenchView({
   searchTerm,
   selectedCount,
   selectedRow,
-  serialCol,
   setAllRowsSelected,
-  setDetectSerials,
-  setLineCol,
-  setPattern,
   setProblemOnly,
   setSearchTerm,
   setSelectedRowId,
-  setSerialCol,
-  setSheetName,
   setSortMode,
   sheetName,
-  sheetOptions,
   sortMode,
   startBatchDetect,
   toggleRow,
@@ -94,15 +86,14 @@ export function WorkbenchView({
   exportRenameCsv: () => void;
   generatePlan: () => void;
   hasPublishedProfile: boolean;
-  headers: string[];
   isoList: string;
   issueRows: IsoPlanRow[];
   legacy: LegacyBridgeState;
-  lineCol: number | "";
   canCancelBatch: boolean;
   canGenerateDraft: boolean;
   canOpenDryRun: boolean;
   canStartBatch: boolean;
+  openEngineerView: () => void;
   openDryRun: () => void;
   openRunLogDrawer: () => void;
   pageFolder: string;
@@ -116,19 +107,12 @@ export function WorkbenchView({
   searchTerm: string;
   selectedCount: number;
   selectedRow?: IsoPlanRow;
-  serialCol: number | "";
   setAllRowsSelected: (select: boolean) => void;
-  setDetectSerials: Dispatch<SetStateAction<boolean>>;
-  setLineCol: Dispatch<SetStateAction<number | "">>;
-  setPattern: Dispatch<SetStateAction<string>>;
   setProblemOnly: Dispatch<SetStateAction<boolean>>;
   setSearchTerm: Dispatch<SetStateAction<string>>;
   setSelectedRowId: Dispatch<SetStateAction<string>>;
-  setSerialCol: Dispatch<SetStateAction<number | "">>;
-  setSheetName: Dispatch<SetStateAction<string>>;
   setSortMode: Dispatch<SetStateAction<IsoSortMode>>;
   sheetName: string;
-  sheetOptions: string[];
   sortMode: IsoSortMode;
   startBatchDetect: () => void;
   toggleRow: (rowId: string) => void;
@@ -161,46 +145,23 @@ export function WorkbenchView({
           <strong>{profileLabel}</strong>
         </div>
 
-        <div className="iso-control-section">
+        <div className="workbench-config-summary">
           <div className="panel-heading compact">
             <div>
-              <span>ISO List</span>
-              <small>{plan?.source.record_count ? `${plan.source.record_count} rows` : "auto columns"}</small>
+              <span>調校摘要</span>
+              <small>只讀 · 到調校修改</small>
             </div>
+            <button className="mini-text-button" onClick={openEngineerView} type="button">
+              <Settings size={13} />
+              <span>調校設定</span>
+            </button>
           </div>
+          <ReadOnlySetting label="ISO List" value={plan?.source.record_count ? `${plan.source.record_count} rows` : compactPath(isoList || "waiting")} />
+          <ReadOnlySetting label="Sheet" value={plan?.source.sheet_name || sheetName || "auto"} />
+          <ReadOnlySetting label="欄位對應" value={columnSummary} />
+          <ReadOnlySetting label="命名格式" value={plan?.source.pattern || pattern} />
+          <ReadOnlySetting label="影像判讀" value={detectSerials ? "預設開啟" : "已關閉"} tone={detectSerials ? "ready" : "warn"} />
         </div>
-        <label className="field-row stacked">
-          <span>Sheet</span>
-          {sheetOptions.length ? (
-            <select value={sheetName} onChange={(event) => { setSheetName(event.target.value); setSerialCol(""); setLineCol(""); }}>
-              {sheetOptions.map((sheet) => <option value={sheet} key={sheet}>{sheet}</option>)}
-            </select>
-          ) : (
-            <input value={sheetName} onChange={(event) => setSheetName(event.target.value)} placeholder="auto" />
-          )}
-        </label>
-        <label className="field-row stacked">
-          <span>流水號欄</span>
-          <select value={serialCol} onChange={(event) => setSerialCol(event.target.value === "" ? "" : Number(event.target.value))}>
-            <option value="">auto</option>
-            {headers.map((header, index) => <option value={index} key={`serial-${header}-${index}`}>{index + 1}. {header}</option>)}
-          </select>
-        </label>
-        <label className="field-row stacked">
-          <span>圖號/檔名欄</span>
-          <select value={lineCol} onChange={(event) => setLineCol(event.target.value === "" ? "" : Number(event.target.value))}>
-            <option value="">auto</option>
-            {headers.map((header, index) => <option value={index} key={`line-${header}-${index}`}>{index + 1}. {header}</option>)}
-          </select>
-        </label>
-        <label className="field-row stacked">
-          <span>Pattern</span>
-          <input value={pattern} onChange={(event) => setPattern(event.target.value)} />
-        </label>
-        <label className="toggle-row">
-          <input type="checkbox" checked={detectSerials} onChange={(event) => setDetectSerials(event.target.checked)} />
-          <span>影像判讀流水號</span>
-        </label>
 
         <div className="iso-side-card checklist">
           <h3>Checklist</h3>
@@ -235,40 +196,57 @@ export function WorkbenchView({
           ))}
         </div>
 
-        <div className="iso-table-toolbar">
+        <div className={`workbench-apply-strip ${canOpenDryRun ? "ready" : "idle"}`}>
           <div>
-            <div className="eyebrow">Rename plan</div>
-            <h2>命名草稿</h2>
+            <strong>{selectedCount} 筆可套用</strong>
+            <span>{blockedCount ? `${blockedCount} blocked` : warnCount ? `${warnCount} warn` : plan ? "可先 dry-run 再更名" : "等待命名草稿"}</span>
           </div>
-          <label className="table-search">
-            <FileSearch size={15} />
-            <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="搜尋 old/new/流水號/圖號/狀態" />
-          </label>
-          <label className="table-sort">
-            <span>排序</span>
-            <select value={sortMode} onChange={(event) => setSortMode(event.target.value as IsoSortMode)}>
-              <option value="page">頁序</option>
-              <option value="status">狀態</option>
-              <option value="confidence">信心</option>
-              <option value="filename">檔名</option>
-            </select>
-          </label>
-          <label className="toggle-row table-toggle">
-            <input type="checkbox" checked={problemOnly} onChange={(event) => setProblemOnly(event.target.checked)} />
-            <span>只看問題列</span>
-          </label>
+          <button className="action-button" onClick={openDryRun} disabled={!canOpenDryRun}>
+            <ClipboardCheck size={15} />
+            <span>Dry-run / 套用</span>
+          </button>
+          <button className="action-button" onClick={exportRenameCsv} disabled={!plan || busy || exportBusy}>
+            <FileJson size={15} />
+            <span>匯出 CSV</span>
+          </button>
         </div>
 
-        {plan ? (
-          <IsoPlanTable
-            rows={visibleRows}
-            selectedRowId={selectedRow?.id ?? ""}
-            toggleRow={toggleRow}
-            toggleAll={setAllRowsSelected}
-            updateRow={updateRow}
-            selectRow={setSelectedRowId}
-          />
-        ) : <IsoEmptyPlan generatePlan={generatePlan} chooseWorkFolder={chooseWorkFolder} busy={busy} />}
+        <section className="workbench-table-stack">
+          <div className="iso-table-toolbar">
+            <div>
+              <div className="eyebrow">Rename plan</div>
+              <h2>命名草稿</h2>
+            </div>
+            <label className="table-search">
+              <FileSearch size={15} />
+              <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="搜尋 old/new/流水號/圖號/狀態" />
+            </label>
+            <label className="table-sort">
+              <span>排序</span>
+              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as IsoSortMode)}>
+                <option value="page">頁序</option>
+                <option value="status">狀態</option>
+                <option value="confidence">信心</option>
+                <option value="filename">檔名</option>
+              </select>
+            </label>
+            <label className="toggle-row table-toggle">
+              <input type="checkbox" checked={problemOnly} onChange={(event) => setProblemOnly(event.target.checked)} />
+              <span>只看問題列</span>
+            </label>
+          </div>
+
+          {plan ? (
+            <IsoPlanTable
+              rows={visibleRows}
+              selectedRowId={selectedRow?.id ?? ""}
+              toggleRow={toggleRow}
+              toggleAll={setAllRowsSelected}
+              updateRow={updateRow}
+              selectRow={setSelectedRowId}
+            />
+          ) : <IsoEmptyPlan generatePlan={generatePlan} chooseWorkFolder={chooseWorkFolder} busy={busy} />}
+        </section>
       </main>
 
       <aside className="iso-inspector">
@@ -332,6 +310,15 @@ export function WorkbenchView({
           </button>
         </div>
       </aside>
+    </div>
+  );
+}
+
+function ReadOnlySetting({ label, tone = "idle", value }: { label: string; tone?: "ready" | "warn" | "idle"; value: string }) {
+  return (
+    <div className={`readonly-setting ${tone}`}>
+      <span>{label}</span>
+      <strong title={value}>{value}</strong>
     </div>
   );
 }

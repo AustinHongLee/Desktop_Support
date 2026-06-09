@@ -2129,6 +2129,8 @@ h3 {
 
 .iso-table {
   display: grid;
+  grid-auto-rows: max-content;
+  align-content: start;
   gap: 7px;
   min-width: 0;
 }
@@ -2202,6 +2204,11 @@ h3 {
   place-items: center;
 }
 
+.iso-table.live .row-check input {
+  width: 15px;
+  height: 15px;
+}
+
 .confidence-bar {
   position: relative;
   display: block;
@@ -2252,6 +2259,11 @@ h3 {
 .plan-state.idle {
   color: var(--muted);
   background: rgba(255, 255, 255, 0.045);
+}
+
+.iso-table.live .plan-state {
+  padding: 3px 7px;
+  font-size: 11px;
 }
 
 .iso-workbench {
@@ -2500,6 +2512,14 @@ h3 {
   grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 
+.workbench-table-stack {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+}
+
 .iso-autopilot-main {
   grid-template-rows: auto auto auto auto minmax(0, 1fr);
 }
@@ -2688,6 +2708,82 @@ h3 {
   margin-top: 8px;
 }
 
+.workbench-config-summary {
+  display: grid;
+  gap: 6px;
+  border: 1px solid rgba(47, 245, 200, 0.16);
+  border-radius: 10px;
+  padding: 9px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.workbench-config-summary .panel-heading.compact {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.mini-text-button {
+  min-width: 0;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid rgba(47, 245, 200, 0.2);
+  border-radius: 8px;
+  padding: 0 8px;
+  color: var(--mint);
+  background: rgba(47, 245, 200, 0.07);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.mini-text-button:hover {
+  border-color: rgba(47, 245, 200, 0.42);
+  background: rgba(47, 245, 200, 0.12);
+}
+
+.readonly-setting {
+  min-width: 0;
+  min-height: 26px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  border-radius: 8px;
+  padding: 5px 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.readonly-setting span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.readonly-setting strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 11px;
+  font-weight: 850;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.readonly-setting.ready strong {
+  color: var(--mint);
+}
+
+.readonly-setting.warn strong {
+  color: var(--amber);
+}
+
 .field-row.stacked {
   grid-template-columns: 1fr;
   gap: 5px;
@@ -2724,6 +2820,17 @@ h3 {
   gap: 8px;
 }
 
+.iso-table-panel .iso-metric {
+  min-height: 48px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 3px 6px;
+  padding: 7px 9px;
+}
+
+.iso-table-panel .iso-metric strong {
+  font-size: 18px;
+}
+
 .iso-metric.danger {
   color: var(--danger);
 }
@@ -2734,9 +2841,9 @@ h3 {
 }
 
 .iso-flow.compact .iso-step {
-  min-height: 54px;
-  grid-template-columns: 28px minmax(0, 1fr);
-  padding: 8px;
+  min-height: 42px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  padding: 6px 8px;
 }
 
 .iso-flow.compact .iso-step svg {
@@ -2744,10 +2851,62 @@ h3 {
 }
 
 .iso-flow.compact .step-index {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 8px;
   font-size: 11px;
+}
+
+.iso-flow.compact .iso-step strong {
+  font-size: 12px;
+}
+
+.iso-flow.compact .iso-step span {
+  font-size: 10px;
+}
+
+.workbench-apply-strip {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.085);
+  border-radius: 10px;
+  padding: 8px 9px;
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.workbench-apply-strip.ready {
+  border-color: rgba(47, 245, 200, 0.24);
+  background: rgba(47, 245, 200, 0.055);
+}
+
+.workbench-apply-strip strong,
+.workbench-apply-strip span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-apply-strip strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.workbench-apply-strip span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.workbench-apply-strip .action-button {
+  height: 32px;
+  min-height: 32px;
+  white-space: nowrap;
 }
 
 .iso-table-toolbar {
@@ -2797,11 +2956,16 @@ h3 {
 
 .iso-table.live {
   min-height: 0;
-  max-height: 56vh;
+  max-height: 64vh;
   overflow: auto;
   padding-right: 4px;
   scrollbar-color: rgba(47, 245, 200, 0.48) rgba(255, 255, 255, 0.04);
   scrollbar-width: thin;
+}
+
+.workbench-table-stack .iso-table.live {
+  height: 100%;
+  max-height: none;
 }
 
 .iso-table.live::-webkit-scrollbar {
@@ -2817,19 +2981,22 @@ h3 {
 
 .iso-table-head,
 .iso-table-row {
-  grid-template-columns: 42px 52px minmax(120px, 1.05fr) 76px minmax(130px, 0.95fr) 58px 82px minmax(170px, 1.25fr);
+  grid-template-columns: 34px 46px minmax(120px, 0.95fr) 68px minmax(120px, 0.9fr) 48px 74px minmax(170px, 1.35fr);
+  gap: 7px;
 }
 
 .iso-table-head {
   position: sticky;
   top: 0;
   z-index: 2;
-  min-height: 28px;
-  padding: 0 8px;
+  min-height: 26px;
+  padding: 0 7px;
   background: #0a0f0d;
 }
 
 .iso-table-row {
+  min-height: 46px;
+  padding: 6px 7px;
   cursor: pointer;
 }
 
@@ -2854,6 +3021,9 @@ h3 {
 
 .table-cell-input {
   width: 100%;
+  height: 30px;
+  border-radius: 8px;
+  padding: 0 8px;
 }
 
 .table-cell-input.serial {
@@ -2863,14 +3033,14 @@ h3 {
 
 .table-cell-input.mono {
   font-family: "Cascadia Mono", "Consolas", monospace;
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .confidence-chip {
   display: inline-grid;
   place-items: center;
   min-width: 0;
-  height: 26px;
+  height: 24px;
   border-radius: 8px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.045);
@@ -3721,7 +3891,9 @@ h3 {
 
 .iso-empty-plan {
   display: grid;
-  place-items: center;
+  grid-auto-rows: max-content;
+  place-content: center;
+  justify-items: center;
   gap: 10px;
   min-height: 340px;
   border: 1px dashed rgba(47, 245, 200, 0.22);

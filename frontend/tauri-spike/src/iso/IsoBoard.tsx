@@ -111,7 +111,7 @@ export function IsoBoard() {
   const [serialCol, setSerialCol] = useState<number | "">("");
   const [lineCol, setLineCol] = useState<number | "">("");
   const [pattern, setPattern] = useState("{serial}--{line}.pdf");
-  const [detectSerials, setDetectSerials] = useState(false);
+  const [detectSerials, setDetectSerials] = useState(true);
   const [plan, setPlan] = useState<IsoWorkflowPlan | null>(null);
   const [busy, setBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
@@ -1337,15 +1337,14 @@ export function IsoBoard() {
           exportRenameCsv={exportRenameCsv}
           generatePlan={generatePlan}
           hasPublishedProfile={Boolean(hasPublishedProfile)}
-          headers={headers}
           isoList={isoList}
           issueRows={issueRows}
           legacy={legacy}
-          lineCol={lineCol}
           canCancelBatch={isoMachine.canCancelBatch}
           canGenerateDraft={isoMachine.canGenerateDraft}
           canOpenDryRun={isoMachine.canOpenDryRun}
           canStartBatch={isoMachine.canStartBatch}
+          openEngineerView={() => setIsoView("engineer")}
           openDryRun={openDryRun}
           openRunLogDrawer={openRunLogDrawer}
           pageFolder={pageFolder}
@@ -1359,19 +1358,12 @@ export function IsoBoard() {
           searchTerm={searchTerm}
           selectedCount={selectedCount}
           selectedRow={selectedRow}
-          serialCol={serialCol}
           setAllRowsSelected={setAllRowsSelected}
-          setDetectSerials={setDetectSerials}
-          setLineCol={setLineCol}
-          setPattern={setPattern}
           setProblemOnly={setProblemOnly}
           setSearchTerm={setSearchTerm}
           setSelectedRowId={setSelectedRowId}
-          setSerialCol={setSerialCol}
-          setSheetName={setSheetName}
           setSortMode={setSortMode}
           sheetName={sheetName}
-          sheetOptions={sheetOptions}
           sortMode={sortMode}
           startBatchDetect={startBatchDetect}
           toggleRow={toggleRow}
