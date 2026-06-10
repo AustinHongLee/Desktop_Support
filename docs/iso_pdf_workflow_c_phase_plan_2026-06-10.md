@@ -285,7 +285,7 @@ Pre-flight（不寫碼）：
 | C2 | `20aebe3 feat(iso-workflow): route manual csv exports to runtime exports dir with retention (C2)` | 手動 CSV 匯出預設改到 `.runtime/exports/iso/`、retention 50、Excel lock 中文錯誤。 |
 | C3 | `30cdac8 fix(iso-workflow): lift workflow job state to survive view switches (C3)` | workflow job 狀態提升到 `IsoBoard`，切 tab 不遺失執行中狀態。 |
 | C4 | `d77ee93 feat(iso-workflow): readonly react-flow canvas with guarded lock language (C4)` | `@xyflow/react` 唯讀畫布、guarded lock 視覺語言、靜態防爆契約。 |
-| C5 | `pending feat(iso-workflow): persist parity evidence and define switchover gate (C5)` | parity report 持久化、`parity-history` CLI、唯讀 Tauri history action、Inspector「換軌守門」。 |
+| C5 | `02a6747 feat(iso-workflow): persist parity evidence and define switchover gate (C5)` | parity report 持久化、`parity-history` CLI、唯讀 Tauri history action、Inspector「換軌守門」。 |
 
 ### 11.2 C5 real sample parity
 

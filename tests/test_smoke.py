@@ -133,12 +133,13 @@ class ImportSmokeTests(unittest.TestCase):
         self.assertIn("MessageDialog::new()", text)
 
     def test_iso_one_click_failure_card_is_handoff_only(self) -> None:
-        app_text = (PROJECT_ROOT / "frontend" / "tauri-spike" / "src" / "App.tsx").read_text(encoding="utf-8")
+        autopilot_text = (PROJECT_ROOT / "frontend" / "tauri-spike" / "src" / "iso" / "AutopilotView.tsx").read_text(encoding="utf-8")
+        board_text = (PROJECT_ROOT / "frontend" / "tauri-spike" / "src" / "iso" / "IsoBoard.tsx").read_text(encoding="utf-8")
         card_text = (PROJECT_ROOT / "frontend" / "tauri-spike" / "src" / "iso" / "components" / "FailureCard.tsx").read_text(encoding="utf-8")
         workflow_text = (PROJECT_ROOT / "frontend" / "tauri-spike" / "src" / "isoWorkflow.ts").read_text(encoding="utf-8")
 
-        self.assertIn("FailureCard", app_text)
-        self.assertIn("exportIsoDebugBundle", app_text)
+        self.assertIn("FailureCard", autopilot_text)
+        self.assertIn("exportIsoDebugBundle", board_text)
         self.assertIn('run_id?: string', workflow_text)
         self.assertIn('"export_debug_bundle"', workflow_text)
         self.assertIn("複製給工程師", card_text)
@@ -149,7 +150,7 @@ class ImportSmokeTests(unittest.TestCase):
         self.assertNotIn("legacy", card_text.casefold())
 
     def test_iso_autopilot_keeps_legacy_bridge_outside_one_click(self) -> None:
-        text = (PROJECT_ROOT / "frontend" / "tauri-spike" / "src" / "App.tsx").read_text(encoding="utf-8")
+        text = (PROJECT_ROOT / "frontend" / "tauri-spike" / "src" / "iso" / "IsoBoard.tsx").read_text(encoding="utf-8")
 
         self.assertIn('{isoView !== "autopilot" ? (', text)
         self.assertIn('title="暫時開啟舊版工作台(轉移完成後移除)"', text)
