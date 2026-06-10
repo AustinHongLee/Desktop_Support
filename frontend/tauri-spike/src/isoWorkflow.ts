@@ -25,7 +25,12 @@ export type IsoWorkflowAction =
   | "revert_profile"
   | "workflow_list_nodes"
   | "workflow_load"
-  | "workflow_validate";
+  | "workflow_validate"
+  | "workflow_run"
+  | "workflow_run_status"
+  | "workflow_cancel"
+  | "workflow_list_runs"
+  | "workflow_read_run_log";
 
 export interface IsoRegion {
   left: number;
@@ -55,6 +60,12 @@ export interface IsoWorkflowRequest {
   workflow_path?: string;
   workflow?: IsoNodeWorkflowGraph | Record<string, unknown>;
   graph?: IsoNodeWorkflowGraph | Record<string, unknown>;
+  workflow_inputs?: Record<string, unknown>;
+  workflow_allow?: string[];
+  workflow_confirm?: string[];
+  workflow_mode?: "run" | "dry_run" | "replay";
+  workflow_job_id?: string;
+  workflow_run_id?: string;
   rows?: IsoPlanRow[];
 }
 
@@ -134,6 +145,113 @@ export interface IsoNodeWorkflowValidationPayload {
   issues: IsoNodeWorkflowValidationIssue[];
   edges: IsoNodeWorkflowEdge[];
   topology: string[];
+}
+
+export interface IsoNodeWorkflowSideEffectSummary {
+  executed: Array<{ node_id: string; kind: string; decision: string }>;
+  blocked: Array<{ node_id: string; kind: string; decision: string }>;
+  skipped: Array<{ node_id: string; kind: string; decision: string }>;
+  simulated: Array<{ node_id: string; kind: string; decision: string }>;
+}
+
+export interface IsoNodeWorkflowRunSummary {
+  run_id: string;
+  workflow_id: string;
+  mode: string;
+  status: string;
+  started_at: string;
+  ended_at: string;
+  source_run_id?: string | null;
+  run_dir: string;
+  side_effect_summary: IsoNodeWorkflowSideEffectSummary;
+}
+
+export interface IsoNodeWorkflowRunListPayload {
+  schema_version: number;
+  action: "workflow_list_runs";
+  created_at: string;
+  run_root: string;
+  run_count: number;
+  runs: IsoNodeWorkflowRunSummary[];
+}
+
+export interface IsoNodeWorkflowNodeRunLog {
+  status: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  resolved_inputs_digest?: Record<string, unknown>;
+  outputs: Record<string, unknown>;
+  side_effects: Array<{ node_id: string; kind: string; decision: string; detail?: Record<string, unknown>; at?: string }>;
+  logs: Array<Record<string, unknown>>;
+  error?: { type?: string; message?: string } | null;
+}
+
+export interface IsoNodeWorkflowRunLog {
+  schema_version: number;
+  run_id: string;
+  mode: string;
+  workflow_id: string;
+  run_dir: string;
+  graph_hash: string;
+  status: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  policy: Record<string, unknown>;
+  source_run_id?: string | null;
+  topology: string[];
+  inputs: Record<string, unknown>;
+  workflow: IsoNodeWorkflowGraph;
+  nodes: Record<string, IsoNodeWorkflowNodeRunLog>;
+  side_effect_summary: IsoNodeWorkflowSideEffectSummary;
+  issues: Array<Record<string, unknown>>;
+}
+
+export interface IsoNodeWorkflowJobProgress {
+  total: number;
+  done: number;
+  percent: number;
+  current_node: string;
+}
+
+export interface IsoNodeWorkflowJobNode {
+  node_id: string;
+  node_type?: string;
+  status: string;
+  updated_at?: string;
+}
+
+export interface IsoNodeWorkflowJobResult {
+  schema_version: number;
+  action: "workflow_result";
+  run_id?: string;
+  workflow_id?: string;
+  mode?: string;
+  status: string;
+  run_dir?: string;
+  side_effect_summary?: IsoNodeWorkflowSideEffectSummary;
+  topology?: string[];
+  nodes?: Record<string, IsoNodeWorkflowNodeRunLog | IsoNodeWorkflowJobNode>;
+  error?: { type?: string; message?: string } | null;
+}
+
+export interface IsoNodeWorkflowJobPayload {
+  schema_version: number;
+  action: "workflow_job";
+  workflow_job_id: string;
+  job_id: string;
+  state: "queued" | "running" | "completed" | "completed_with_blocked" | "failed" | "cancelled" | "cancel_requested" | string;
+  created_at: string;
+  updated_at: string;
+  workflow_run_id?: string;
+  run_id?: string;
+  run_dir?: string;
+  progress: IsoNodeWorkflowJobProgress;
+  topology: string[];
+  nodes: Record<string, IsoNodeWorkflowJobNode>;
+  result: IsoNodeWorkflowJobResult | null;
+  error: string;
 }
 
 export interface IsoRunLogRef {
@@ -550,6 +668,31 @@ export async function loadIsoNodeWorkflow(workflowPath: string): Promise<IsoNode
 
 export async function validateIsoNodeWorkflow(request: Pick<IsoWorkflowRequest, "workflow_path" | "workflow" | "graph">): Promise<IsoNodeWorkflowValidationPayload> {
   return invokeJson<IsoNodeWorkflowValidationPayload>("run_iso_workflow", { ...request, action: "workflow_validate" });
+}
+
+export async function listIsoWorkflowRuns(): Promise<IsoNodeWorkflowRunListPayload> {
+  return invokeJson<IsoNodeWorkflowRunListPayload>("run_iso_workflow", { action: "workflow_list_runs" });
+}
+
+export async function readIsoWorkflowRunLog(runId: string): Promise<IsoNodeWorkflowRunLog> {
+  return invokeJson<IsoNodeWorkflowRunLog>("run_iso_workflow", { action: "workflow_read_run_log", workflow_run_id: runId });
+}
+
+export async function runIsoNodeWorkflowSafe(request: { workflow_path: string; workflow_inputs?: Record<string, unknown> }): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", {
+    action: "workflow_run",
+    workflow_path: request.workflow_path,
+    workflow_inputs: request.workflow_inputs ?? {},
+    workflow_mode: "run",
+  });
+}
+
+export async function loadIsoWorkflowJobStatus(workflowJobId: string): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", { action: "workflow_run_status", workflow_job_id: workflowJobId });
+}
+
+export async function cancelIsoWorkflowJob(workflowJobId: string): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", { action: "workflow_cancel", workflow_job_id: workflowJobId });
 }
 
 export async function startIsoBatchDetect(request: Partial<IsoWorkflowRequest>): Promise<IsoJobPayload> {

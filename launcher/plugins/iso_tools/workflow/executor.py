@@ -7,11 +7,11 @@ import uuid
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from launcher.plugins.iso_tools.workflow import WORKFLOW_SCHEMA_VERSION
 from launcher.plugins.iso_tools.workflow.context import ArtifactStore, NodeExecutionContext, WorkflowContext, json_safe
-from launcher.plugins.iso_tools.workflow.errors import GraphValidationError
+from launcher.plugins.iso_tools.workflow.errors import GraphValidationError, WorkflowCancelledError
 from launcher.plugins.iso_tools.workflow.policy import GUARDED, REPLAY_HARD_BLOCKED, SideEffectGate, SideEffectPolicy
 from launcher.plugins.iso_tools.workflow.registry import NodeRegistry, get_registry
 from launcher.plugins.iso_tools.workflow.run_log import WorkflowRunLogWriter
@@ -131,6 +131,8 @@ def run_workflow(
     run_root: Path | None = None,
     policy: SideEffectPolicy | None = None,
     source_run_dir: Path | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_update: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     registry = registry or get_registry()
     policy = policy or SideEffectPolicy()
@@ -152,38 +154,58 @@ def run_workflow(
         source_run_id=source_run_dir.name if source_run_dir else None,
     )
     artifacts = ArtifactStore(run_dir, on_artifact=log.record_artifact)
-    ctx = WorkflowContext(run_id, run_dir, graph, workflow_inputs, policy, log, artifacts)
+    ctx = WorkflowContext(run_id, run_dir, graph, workflow_inputs, policy, log, artifacts, should_cancel=should_cancel)
     source_log = _read_source_log(source_run_dir)
     log.start(inputs=workflow_inputs, topology=topology)
+    _notify(
+        on_update,
+        {
+            "event": "run_started",
+            "run_id": run_id,
+            "run_dir": str(run_dir),
+            "topology": topology,
+            "total": len(topology),
+            "done": 0,
+            "current_node": "",
+        },
+    )
 
     run_status = "completed"
     node_map = graph.node_map()
-    for node_id in topology:
+    for index, node_id in enumerate(topology):
+        if _cancel_requested(should_cancel):
+            run_status = "cancelled"
+            _record_not_run_nodes(log, ctx, node_map, registry, topology[index:], on_update=on_update, done=index, total=len(topology))
+            break
         instance = node_map[node_id]
         spec = registry.get_spec(instance.node_type)
         declared_effects = _declared_effects(instance, spec)
         if not instance.enabled:
+            ended_at = _now()
             records = [_skip_record(log, node_id, kind, "skipped_disabled") for kind in declared_effects]
             log.node_finished(
                 node_id=node_id,
                 status="skipped_disabled",
-                started_at=_now(),
-                ended_at=_now(),
+                started_at=ended_at,
+                ended_at=ended_at,
                 duration_ms=0,
                 outputs={},
                 side_effects=records,
             )
             ctx.node_outputs[node_id] = {}
+            _notify_node_finished(on_update, node_id, "skipped_disabled", index + 1, len(topology))
             continue
         if _should_hydrate_replay(policy, declared_effects):
             records = _record_replay_blocks(log, node_id, declared_effects)
             outputs, output_refs = _hydrate_outputs(source_log, source_run_dir, node_id)
             ctx.node_outputs[node_id] = outputs
+            status = "blocked" if records else "success"
+            ended_at = _now()
             log.node_finished(
                 node_id=node_id,
-                status="blocked" if records else "success",
-                started_at=_now(),
-                ended_at=_now(),
+                status=status,
+                started_at=ended_at,
+                ended_at=ended_at,
                 duration_ms=0,
                 outputs=output_refs,
                 side_effects=records,
@@ -191,11 +213,23 @@ def run_workflow(
             )
             if records:
                 run_status = "completed_with_blocked"
+            _notify_node_finished(on_update, node_id, status, index + 1, len(topology))
             continue
 
         started_at = _now()
         started = time.perf_counter()
         log.node_started(node_id, instance.node_type)
+        _notify(
+            on_update,
+            {
+                "event": "node_started",
+                "node_id": node_id,
+                "node_type": instance.node_type,
+                "done": index,
+                "total": len(topology),
+                "current_node": node_id,
+            },
+        )
         gate = SideEffectGate(
             node_id=node_id,
             declared_effects=declared_effects,
@@ -236,6 +270,23 @@ def run_workflow(
                 error={"message": exec_ctx.blocked_reason} if exec_ctx.blocked_reason else None,
                 resolved_inputs_digest=_digest_inputs(exec_ctx.inputs),
             )
+            _notify_node_finished(on_update, node_id, status, index + 1, len(topology))
+        except WorkflowCancelledError as exc:
+            run_status = "cancelled"
+            log.node_finished(
+                node_id=node_id,
+                status="cancelled",
+                started_at=started_at,
+                ended_at=_now(),
+                duration_ms=int((time.perf_counter() - started) * 1000),
+                outputs={},
+                side_effects=[record.to_payload() for record in gate.records],
+                logs=exec_ctx.logs,
+                error={"type": type(exc).__name__, "message": str(exc)},
+            )
+            _notify_node_finished(on_update, node_id, "cancelled", index + 1, len(topology))
+            _record_not_run_nodes(log, ctx, node_map, registry, topology[index + 1 :], on_update=on_update, done=index + 1, total=len(topology))
+            break
         except Exception as exc:  # noqa: BLE001 - executor records node failure
             run_status = "failed"
             log.node_finished(
@@ -249,9 +300,23 @@ def run_workflow(
                 logs=exec_ctx.logs,
                 error={"type": type(exc).__name__, "message": str(exc)},
             )
+            _notify_node_finished(on_update, node_id, "failed", index + 1, len(topology))
             break
 
-    return log.finish(status=run_status, topology=topology)
+    result = log.finish(status=run_status, topology=topology)
+    _notify(
+        on_update,
+        {
+            "event": "run_finished",
+            "status": run_status,
+            "run_id": run_id,
+            "run_dir": str(run_dir),
+            "done": len(topology),
+            "total": len(topology),
+            "current_node": "",
+        },
+    )
+    return result
 
 
 def replay_workflow(
@@ -260,12 +325,23 @@ def replay_workflow(
     registry: NodeRegistry | None = None,
     run_root: Path | None = None,
     policy: SideEffectPolicy | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_update: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     source = _read_source_log(source_run_dir)
     graph = normalize_graph(source["workflow"])
     inputs = dict(source.get("inputs") or {})
     replay_policy = policy or SideEffectPolicy(mode="replay")
-    return run_workflow(graph, inputs=inputs, registry=registry, run_root=run_root, policy=replay_policy, source_run_dir=source_run_dir)
+    return run_workflow(
+        graph,
+        inputs=inputs,
+        registry=registry,
+        run_root=run_root,
+        policy=replay_policy,
+        source_run_dir=source_run_dir,
+        should_cancel=should_cancel,
+        on_update=on_update,
+    )
 
 
 def run_single_node(
@@ -275,6 +351,8 @@ def run_single_node(
     registry: NodeRegistry | None = None,
     run_root: Path | None = None,
     policy: SideEffectPolicy | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_update: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     source = _read_source_log(source_run_dir)
     graph = normalize_graph(source["workflow"])
@@ -303,7 +381,73 @@ def run_single_node(
         edges=[],
         metadata={},
     )
-    return run_workflow(graph, registry=registry, run_root=run_root, policy=policy or SideEffectPolicy())
+    return run_workflow(
+        graph,
+        registry=registry,
+        run_root=run_root,
+        policy=policy or SideEffectPolicy(),
+        should_cancel=should_cancel,
+        on_update=on_update,
+    )
+
+
+def _record_not_run_nodes(
+    log: WorkflowRunLogWriter,
+    ctx: WorkflowContext,
+    node_map: dict[str, NodeInstance],
+    registry: NodeRegistry,
+    node_ids: list[str],
+    *,
+    on_update: Callable[[dict[str, Any]], None] | None,
+    done: int,
+    total: int,
+) -> None:
+    for offset, node_id in enumerate(node_ids):
+        instance = node_map[node_id]
+        spec = registry.get_spec(instance.node_type)
+        effects = _declared_effects(instance, spec)
+        records = [_skip_record(log, node_id, kind, "not_run") for kind in effects]
+        ended_at = _now()
+        log.node_finished(
+            node_id=node_id,
+            status="not_run",
+            started_at=ended_at,
+            ended_at=ended_at,
+            duration_ms=0,
+            outputs={},
+            side_effects=records,
+        )
+        ctx.node_outputs[node_id] = {}
+        _notify_node_finished(on_update, node_id, "not_run", done + offset + 1, total)
+
+
+def _notify_node_finished(
+    on_update: Callable[[dict[str, Any]], None] | None,
+    node_id: str,
+    status: str,
+    done: int,
+    total: int,
+) -> None:
+    _notify(
+        on_update,
+        {
+            "event": "node_finished",
+            "node_id": node_id,
+            "status": status,
+            "done": done,
+            "total": total,
+            "current_node": "" if done >= total else node_id,
+        },
+    )
+
+
+def _notify(on_update: Callable[[dict[str, Any]], None] | None, payload: dict[str, Any]) -> None:
+    if on_update is not None:
+        on_update(json_safe(payload))
+
+
+def _cancel_requested(should_cancel: Callable[[], bool] | None) -> bool:
+    return bool(should_cancel and should_cancel())
 
 
 def _validate_ref(

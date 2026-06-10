@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from launcher.plugins.iso_tools.workflow.adapters import iso_request
+from launcher.plugins.iso_tools.workflow.errors import WorkflowCancelledError
 from launcher.plugins.iso_tools.workflow.nodes.base import WorkflowNode
 from launcher.plugins.iso_tools.workflow.policy import SPAWNS_WORKER, WRITES_ISO_RUN_LOG, WRITES_JOB_FILES
 from launcher.plugins.iso_tools.workflow.registry import register_node
@@ -95,6 +96,10 @@ def _poll_until_terminal(ctx: Any, job_id: str, *, poll_interval_ms: float, time
     started = time.monotonic()
     interval_s = max(0.001, poll_interval_ms / 1000)
     while True:
+        if ctx.should_stop():
+            cancelled = iso_request.cancel_iso_job(job_id)
+            _emit_job_progress(ctx, cancelled)
+            raise WorkflowCancelledError("workflow cancelled")
         job = iso_request.iso_job_status(job_id)
         _emit_job_progress(ctx, job)
         if str(job.get("state") or "") in TERMINAL_STATES:
