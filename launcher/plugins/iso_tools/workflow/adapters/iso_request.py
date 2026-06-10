@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 
@@ -48,6 +49,37 @@ def build_iso_plan(payload: dict[str, Any], *, as_rename_plan: bool = False) -> 
     action = "build_rename_plan" if as_rename_plan else "plan"
     function_name = "build_rename_plan" if as_rename_plan else "build_iso_plan"
     return _call(action, payload, function_name)
+
+
+def apply_iso_plan(payload: dict[str, Any], *, dry_run: bool = True, only_ready: bool = True) -> dict[str, Any]:
+    backend = _backend()
+    rows = _apply_rows(payload.get("rows") or [], only_ready=only_ready)
+    operations = _rename_operations(backend, rows)
+    if not operations:
+        return {
+            "schema_version": 1,
+            "action": "apply_preview" if dry_run else "apply",
+            "dry_run": dry_run,
+            "renamed_count": 0,
+            "rows": [],
+            "message": "沒有勾選需要更名的 PDF。",
+        }
+    if dry_run:
+        backend._validate_operations(operations)
+        return {
+            "schema_version": 1,
+            "action": "apply_preview",
+            "dry_run": True,
+            "renamed_count": 0,
+            "operation_count": len(operations),
+            "rows": _operation_rows(operations),
+            "message": f"預覽 {len(operations)} 個 PDF 更名操作。",
+        }
+    return backend.apply_iso_plan(build_request({"action": "apply", **payload, "rows": rows}))
+
+
+def save_iso_draft_profile(payload: dict[str, Any]) -> dict[str, Any]:
+    return _call("save_draft_profile", _profile_save_payload(payload), "save_iso_draft_profile")
 
 
 def pilot_report(payload: dict[str, Any]) -> dict[str, Any]:
@@ -148,6 +180,67 @@ def source_candidates_from_response(payload: dict[str, Any]) -> dict[str, Any]:
         "detected_iso_list": payload.get("detected_iso_list"),
         "message": payload.get("message") or "",
     }
+
+
+def _apply_rows(rows: Any, *, only_ready: bool) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    source_rows = rows if isinstance(rows, (list, tuple)) else []
+    for row in source_rows:
+        if not isinstance(row, dict):
+            continue
+        item = dict(row)
+        if only_ready and item.get("status") != "ready":
+            item["selected"] = False
+        filtered.append(item)
+    return filtered
+
+
+def _rename_operations(backend: Any, rows: list[dict[str, Any]]) -> list[Any]:
+    operations = []
+    for row in rows:
+        if not row.get("selected"):
+            continue
+        source = str(row.get("source_path") or "").strip()
+        target = str(row.get("target_path") or "").strip()
+        if not source or not target:
+            raise ValueError("更名列必須包含 source_path 與 target_path。")
+        operations.append(backend.RenameOperation(Path(source), Path(target)))
+    return operations
+
+
+def _operation_rows(operations: list[Any]) -> list[dict[str, str]]:
+    return [
+        {
+            "source_path": str(operation.source),
+            "target_path": str(operation.target),
+            "source_name": operation.source.name,
+            "target_name": operation.target.name,
+        }
+        for operation in operations
+    ]
+
+
+def _profile_save_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    profile = dict(payload.get("profile") or {})
+    data = dict(profile)
+    work_folder = payload.get("work_folder") or profile.get("work_folder") or profile.get("folder")
+    profile_folder = payload.get("profile_folder") or profile.get("profile_folder") or profile.get("folder")
+    data["work_folder"] = work_folder or ""
+    data["profile_folder"] = profile_folder or ""
+    if "iso_list" not in data:
+        data["iso_list"] = profile.get("iso_list_path") or payload.get("iso_list") or ""
+    for key in (
+        "serial_region",
+        "drawing_region",
+        "confidence_threshold",
+        "pattern",
+        "sheet_name",
+        "serial_col",
+        "line_col",
+    ):
+        if key in payload and payload[key] not in (None, ""):
+            data[key] = payload[key]
+    return data
 
 
 def _call(action: str, payload: dict[str, Any], function_name: str) -> dict[str, Any]:
