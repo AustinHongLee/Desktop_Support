@@ -7,6 +7,7 @@
 ## Read This First
 
 - Current completion handoff: `docs/iso_pdf_pilot_uplift_handoff_codex_2026-06-09.md`
+- Current node workflow handoff: `docs/iso_pdf_node_workflow_codex_handoff_2026-06-10.md`
 - Historical design archive: `docs/archive/iso_pdf/`
 - Current source of truth: code plus the verification commands in the completion handoff.
 
@@ -22,6 +23,7 @@ The old design files were useful while deciding the shape of the ISO PDF workben
 | Autopilot page | Done | Shows human-readable progress and failure guidance without exposing engineer-only controls. |
 | ROI slider freeze risk | Fixed | ROI preview/OCR is debounced so dragging sliders does not rerun recognition on every movement. |
 | Verification | Done | Frontend build, targeted Python tests, sample batch, and layout checks are recorded in the handoff. |
+| Node workflow POC | Planned | Active construction spec is `docs/iso_pdf_node_workflow_codex_handoff_2026-06-10.md`; older briefs are archived. |
 
 ## Optional Backlog
 
@@ -46,5 +48,6 @@ These are future enhancements, not blockers for the current uplift:
 | `docs/archive/iso_pdf/iso_pdf_workbench_audit.md` | Historical PyQt audit and UX/OCR pain-point analysis. |
 | `docs/archive/iso_pdf/ISO工作台_舊版轉新版_功能落差與UI重分配_v0.1.md` | Historical PyQt-to-Tauri gap analysis. |
 | `docs/archive/iso_pdf/codex_指令書_ISO一鍵工作台_重做_v0.1.md` | Historical implementation prompt/spec. |
+| `docs/archive/iso_pdf/node_workflow/iso_pdf_node_workflow_pilot_brief_opus_2026-06-09.md` | Historical node workflow pilot brief; superseded by the 2026-06-10 Codex handoff. |
 
 When in doubt, trust this file, the completion handoff, and the current source code over archived planning notes.
