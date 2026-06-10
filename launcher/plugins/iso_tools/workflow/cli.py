@@ -15,6 +15,7 @@ from launcher.plugins.iso_tools.workflow.schema import load_workflow
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     parser = _parser()
     args = parser.parse_args(argv)
     try:
@@ -187,6 +188,14 @@ def _exit_for_status(status: Any) -> int:
     if status == "completed_with_blocked":
         return 4
     return 0
+
+
+def _configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

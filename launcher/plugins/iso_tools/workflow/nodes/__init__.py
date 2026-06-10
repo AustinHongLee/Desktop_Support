@@ -1,4 +1,5 @@
 from __future__ import annotations
 
-# Phase 1-3 intentionally register no ISO adapter nodes. Tests can register
-# FakeNode classes directly with the registry without importing backend code.
+from launcher.plugins.iso_tools.workflow.nodes import iso_list, pilot, plan, profile, sources
+
+__all__ = ["iso_list", "pilot", "plan", "profile", "sources"]
