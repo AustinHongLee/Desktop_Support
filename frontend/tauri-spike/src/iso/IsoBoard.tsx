@@ -113,7 +113,7 @@ const ROI_PREVIEW_DEBOUNCE_MS = 550;
 
 export function IsoBoard() {
   const legacy = useLegacyBridge("iso");
-  const [isoView, setIsoView] = useState<"workbench" | "autopilot" | "engineer">("autopilot");
+  const [isoView, setIsoView] = useState<"workbench" | "autopilot" | "engineer" | "nodes">("autopilot");
   const [workFolder, setWorkFolder] = useState("");
   const [combinePdf, setCombinePdf] = useState("");
   const [pageFolder, setPageFolder] = useState("");
@@ -167,6 +167,7 @@ export function IsoBoard() {
   const [debugBundleBusy, setDebugBundleBusy] = useState(false);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
+  const [pendingWorkflowVerify, setPendingWorkflowVerify] = useState(false);
   const oneClickActiveRef = useRef(false);
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const previewCacheRef = useRef(new Map<string, IsoPreviewPayload>());
@@ -1348,16 +1349,21 @@ export function IsoBoard() {
   }), [combinePdf, confidenceThreshold, detectSerials, drawingRegion, isoList, lineCol, pattern, serialCol, serialRegion, sheetName, workFolder]);
   const overlayDiffs = useMemo(() => diffOverlayAgainstProfile(workflowInspectorInputs, profile), [profile, workflowInspectorInputs]);
   function verifyCurrentTuningWithWorkflow() {
-    workflowSafeRunRef.current?.();
+    setPendingWorkflowVerify(true);
+    setIsoView("nodes");
+  }
+  function openNodesView() {
+    setIsoView("nodes");
   }
   const isEngineerView = isoView === "engineer";
+  const isNodesView = isoView === "nodes";
 
   return (
     <section className={`iso-board iso-workbench iso-view-${isoView}`}>
       <div className="iso-workbench-top">
         <div>
-          <div className="eyebrow">{isEngineerView ? "調校工作台" : "ISO 工作台"}</div>
-          <h2>{isEngineerView ? "PDF / ROI 調校工作台" : "ISO PDF 拆頁命名工作臺"}</h2>
+          <div className="eyebrow">{isEngineerView ? "調校工作台" : isNodesView ? "節點式工作流" : "ISO 工作台"}</div>
+          <h2>{isEngineerView ? "PDF / ROI 調校工作台" : isNodesView ? "節點式 Workflow 檢視" : "ISO PDF 拆頁命名工作臺"}</h2>
           {isoView === "workbench" ? (
             <div className="iso-source-strip">
               <TopSourceButton icon={<FolderOpen size={15} />} label="工作資料夾" value={workFolder} onPick={chooseWorkFolder} />
@@ -1380,6 +1386,10 @@ export function IsoBoard() {
             <button className={isoView === "engineer" ? "active" : ""} onClick={() => setIsoView("engineer")} title="調校:ROI、欄位對應、信心門檻、設定檔">
               <Settings size={15} />
               <span>調校</span>
+            </button>
+            <button className={isoView === "nodes" ? "active" : ""} onClick={() => setIsoView("nodes")} title="節點式：graph / run log / 進階檢視">
+              <GitBranch size={15} />
+              <span>節點式</span>
             </button>
           </div>
           {isoView !== "autopilot" ? (
@@ -1495,14 +1505,20 @@ export function IsoBoard() {
             workflowInputs={workflowInspectorInputs}
             overlayDiffs={overlayDiffs}
             onVerifyWorkflowTuning={verifyCurrentTuningWithWorkflow}
-          />
-          <WorkflowInspector
-            workflowInputs={workflowInspectorInputs}
-            registerSafeRun={(runner) => {
-              workflowSafeRunRef.current = runner;
-            }}
+            onOpenNodesView={openNodesView}
           />
         </>
+      ) : isoView === "nodes" ? (
+        <WorkflowInspector
+          workflowInputs={workflowInspectorInputs}
+          registerSafeRun={(runner) => {
+            workflowSafeRunRef.current = runner;
+            if (pendingWorkflowVerify) {
+              setPendingWorkflowVerify(false);
+              runner();
+            }
+          }}
+        />
       ) : (
         <WorkbenchView
           activeProfileFolderReady={Boolean(activeProfileFolder())}

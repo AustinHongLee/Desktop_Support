@@ -1,4 +1,4 @@
-import { CircleAlert, FileJson, FileSearch, FileText, FolderOpen, Layers3, PanelRightOpen, RefreshCcw, ScanLine, Settings, ShieldCheck, Table2 } from "lucide-react";
+import { CircleAlert, FileJson, FileSearch, FileText, FolderOpen, GitBranch, Layers3, PanelRightOpen, RefreshCcw, ScanLine, Settings, ShieldCheck, Table2 } from "lucide-react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { Gate } from "../components/Gate";
 import { StatusTile } from "../components/StatusTile";
@@ -66,6 +66,7 @@ export function EngineerView({
   onPilotAutoFix,
   onPilotJump,
   onVerifyWorkflowTuning,
+  onOpenNodesView,
 }: {
   activeProfileFolderReady: boolean;
   batchRunning: boolean;
@@ -123,6 +124,7 @@ export function EngineerView({
   onPilotAutoFix?: (item: IsoPilotItem) => void;
   onPilotJump?: (item: IsoPilotItem) => void;
   onVerifyWorkflowTuning: () => void;
+  onOpenNodesView: () => void;
 }) {
   const hasStaleDraft = pilotItems.some((item) => item.freshness === "stale");
   const workflowInputCount = Object.values(workflowInputs).filter((value) => value !== null && value !== undefined && value !== "").length;
@@ -283,6 +285,16 @@ export function EngineerView({
           rows={rows}
           threshold={confidenceThreshold}
         />
+        <div className="legacy-fallback-card nodes-jump-card">
+          <div>
+            <div className="eyebrow">節點式</div>
+            <h3>進階檢視已移至節點式分頁</h3>
+          </div>
+          <button className="action-button" type="button" onClick={onOpenNodesView}>
+            <GitBranch size={15} />
+            <span>前往節點式分頁</span>
+          </button>
+        </div>
         <div className="legacy-fallback-card">
           <div>
             <div className="eyebrow">舊版備援</div>

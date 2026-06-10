@@ -53,6 +53,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
   const [cancelBusy, setCancelBusy] = useState(false);
   const [job, setJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
   const [projectionRunId, setProjectionRunId] = useState("");
+  const [graphCopied, setGraphCopied] = useState(false);
 
   const specByType = useMemo(() => {
     const entries = (nodeCatalog?.nodes ?? []).map((spec) => [spec.node_type, spec] as const);
@@ -70,6 +71,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
   const canRunSafe = safeRunReady && !safeRunBusy && !isWorkflowJobRunning(job);
   const sideEffectPreview = useMemo(() => buildSideEffectPreview(graphNodes, specByType), [graphNodes, specByType]);
   const terminalJob = Boolean(job && !isWorkflowJobRunning(job));
+  const graphJson = useMemo(() => graph?.graph ? JSON.stringify(graph.graph, null, 2) : "", [graph]);
 
   useEffect(() => {
     if (!job?.workflow_job_id || !isWorkflowJobRunning(job)) {
@@ -233,6 +235,19 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
     }
   }
 
+  async function copyGraphJson() {
+    if (!graphJson) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(graphJson);
+      setGraphCopied(true);
+      window.setTimeout(() => setGraphCopied(false), 1500);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
   return (
     <details style={styles.shell} open={expanded} onToggle={handleToggle}>
       <summary style={styles.summary}>
@@ -379,6 +394,18 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
                   <span key={`${issue.code}-${issue.node_id}-${issue.edge}`}>{issue.code} · {issue.node_id || issue.edge || issue.message}</span>
                 ))}
               </div>
+            ) : null}
+            {graphJson ? (
+              <details style={styles.jsonDetails}>
+                <summary style={styles.jsonSummary}>
+                  <span>Graph JSON 原文</span>
+                  <button className="action-button" type="button" onClick={(event) => { event.preventDefault(); void copyGraphJson(); }}>
+                    <Braces size={14} />
+                    <span>{graphCopied ? "已複製" : "複製"}</span>
+                  </button>
+                </summary>
+                <pre style={styles.jsonPre}>{graphJson}</pre>
+              </details>
             ) : null}
           </section>
 
@@ -939,6 +966,31 @@ const styles = {
     flexDirection: "column",
     fontSize: 11,
     gap: 5,
+  },
+  jsonDetails: {
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 10,
+    marginTop: 10,
+    overflow: "hidden",
+  },
+  jsonSummary: {
+    alignItems: "center",
+    cursor: "pointer",
+    display: "flex",
+    gap: 10,
+    justifyContent: "space-between",
+    padding: "8px 10px",
+  },
+  jsonPre: {
+    background: "rgba(0,0,0,0.2)",
+    color: "rgba(220,235,228,0.86)",
+    fontSize: 11,
+    lineHeight: 1.55,
+    margin: 0,
+    maxHeight: 360,
+    overflow: "auto",
+    padding: 10,
+    whiteSpace: "pre-wrap",
   },
   runLayout: {
     display: "grid",
