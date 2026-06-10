@@ -310,3 +310,124 @@ Pre-flight（不寫碼）：
 - 遇到邊界不明：停下寫短報告（現況/選項/建議）。絕不做 E 期內容：不改一鍵執行語意、不做自動 shadow、不做可編輯畫布、不動 normalize 規則版本。
 - D5 完成後：merge --no-ff 回 codex/tauri-react-spike、tag iso-workflow-d-v1、push、停工回報（commit 清單、矩陣輸出、gate JSON 快照、build 體積、殘留與風險）。
 ```
+
+## 11. 2026-06-10 收工暫停點 / 2026-06-11 待辦
+
+### 已完成並推上 GitHub
+
+- 目前分支：`codex/iso-workflow-d`。
+- 目前 tip：`b98a3b4 perf(iso): throttle worker progress writes for large pdfs (D4)`，已 push 到 `origin/codex/iso-workflow-d`。
+- 工作樹：只有 `.qwen/` 未追蹤；依本文件規則永不 stage。
+- D0-D4 已完成：D0 文件與 smoke 修正、D1 shadow parity v2、D2 gate evaluator、D3 影子驗證入口與 gate panel、D4 worker progress 全量寫入節流。
+
+### 今日已跑過的 D5 驗證
+
+```text
+python -m pytest tests -q
+461 passed in 58.51s
+
+python -m pytest tests\test_iso_workflow_shadow.py -q
+3 passed in 0.89s
+
+python -m pytest tests\test_iso_workflow_gate.py -q
+7 passed in 0.22s
+
+python -m pytest tests\test_iso_workflow_parity.py tests\test_iso_workflow_parity_history.py -q
+8 passed in 1.79s
+
+python -m pytest tests\test_iso_workflow_pollution.py tests\test_frontend_safety_contract.py -q
+13 passed in 2.99s
+
+python -m pytest tests\test_tauri_iso_workflow.py tests\test_iso_workflow_job.py -q
+32 passed in 2.83s
+
+python -m pytest tests\test_batch_detect_thread.py tests\test_iso_worker_progress.py -q
+6 passed in 1.10s
+
+cd frontend\tauri-spike
+npx tsc --noEmit
+npm run test:unit
+1 file / 3 tests passed
+npm run build
+main bundle gzip 53.61 kB; vendor-xyflow gzip 101.64 kB; no large chunk warning
+```
+
+### 今日已跑過的 real shadow sample
+
+資料夾：`C:\Users\a0976\Downloads\t`
+
+使用輸入：
+- `page_folder`: `C:\Users\a0976\Downloads\t\testing_pages`
+- `iso_list`: `C:\Users\a0976\Downloads\t\HP6精濾區配管工事-ISO圖號清單-115.04.23.xlsx`
+- `sheet_name`: `DWG NO.ALL`
+- `serial_col`: `11`
+- `line_col`: `2`
+- `detect_serials`: `False`
+
+結果：
+
+```json
+{
+  "iso_job_id": "d5-real-iso-job",
+  "iso_state": "completed",
+  "iso_rows": 4,
+  "workflow_job_id": "shadow-c8089b369a85",
+  "workflow_state": "completed",
+  "parity_summary": {
+    "status": "recorded",
+    "equal": true,
+    "violation_count": 0,
+    "acceptable_diff_count": 25,
+    "report_path": "C:\\Users\\a0976\\Documents\\GitHub\\桌面輔助系統\\.runtime\\runs\\parity\\20260610_175401_ade94f\\report.json"
+  }
+}
+```
+
+### 明日 2026-06-11 待辦
+
+1. 先確認狀態：
+
+   ```powershell
+   git switch codex/iso-workflow-d
+   git status --short --branch
+   git log --oneline -8
+   ```
+
+2. 補跑 D5 的 CLI real parity，使用同一份真樣本，需標 `--sample-kind real`：
+
+   ```powershell
+   python -m launcher.plugins.iso_tools.workflow.cli parity --inputs-json <inputs-json> --sample-kind real --json
+   ```
+
+   可重用今日的 `C:\Users\a0976\Downloads\t` 輸入。若沒有現成 inputs json，就先生成一份臨時檔放 `.runtime\temp\d5_real_inputs.json`。
+
+3. 跑 gate 快照並照實記錄：
+
+   ```powershell
+   python -m launcher.plugins.iso_tools.workflow.cli gate --json
+   ```
+
+   預期多半仍是 `ready=false`；not ready 是正確結果，只要 detail 能指出缺口即可。
+
+4. 把 D5 完工 Postscript 補在本文件：commit 清單、完整矩陣輸出、real shadow report、CLI real parity report、gate JSON 快照、殘留風險。
+
+5. Commit + push D5 文件：
+
+   ```powershell
+   git add docs/iso_pdf_workflow_d_phase_plan_2026-06-10.md
+   git commit -m "docs(iso-workflow): record d phase completion and gate snapshot (D5)"
+   git push origin codex/iso-workflow-d
+   ```
+
+6. 若 D5 全部綠且沒有 violation，才合流：
+
+   ```powershell
+   git switch codex/tauri-react-spike
+   git pull --ff-only
+   git merge --no-ff codex/iso-workflow-d -m "merge(iso-workflow): complete D phase"
+   git tag -a iso-workflow-d-v1 -m "shadow run + switchover gate"
+   git push origin codex/tauri-react-spike
+   git push origin iso-workflow-d-v1
+   ```
+
+7. 回報使用者：D 期已完成/或 gate 尚缺幾筆 real evidence；不要開 E 期內容，除非使用者明確同意。
