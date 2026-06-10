@@ -69,8 +69,11 @@ def main(argv: list[str] | None = None) -> int:
                 inputs=inputs,
                 workflow_path=workflow_path,
                 work_dir=work_dir,
+                sample_kind=args.sample_kind,
             )
             payload["report_path"] = str(report_path)
+            payload["sample_kind"] = args.sample_kind
+            payload["trigger"] = "cli"
             return _print(payload, args.json, exit_code=0 if report.equal else 6)
         if args.command == "parity-history":
             from launcher.plugins.iso_tools.workflow.parity import list_parity_reports
@@ -129,6 +132,7 @@ def _parser() -> argparse.ArgumentParser:
     parity.add_argument("--workflow", default="")
     parity.add_argument("--work-dir", default="")
     parity.add_argument("--report-out", default="")
+    parity.add_argument("--sample-kind", choices=("real", "fixture", "unknown"), default="fixture")
     parity.add_argument("--json", action="store_true")
 
     parity_history = sub.add_parser("parity-history")

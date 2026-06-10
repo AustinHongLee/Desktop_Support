@@ -31,7 +31,7 @@ class ParityReport:
 
     def to_payload(self) -> dict[str, Any]:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "action": "workflow_parity",
             "equal": self.equal,
             "legacy_digest": self.legacy_digest,
@@ -96,6 +96,11 @@ def write_parity_report(
     inputs: dict[str, Any] | None = None,
     workflow_path: Path | None = None,
     work_dir: Path | None = None,
+    trigger: str = "cli",
+    sample_kind: str = "unknown",
+    iso_job_id: str | None = None,
+    workflow_run_id: str | None = None,
+    timing: dict[str, Any] | None = None,
 ) -> Path:
     target = path or default_parity_report_path()
     payload = report.to_payload()
@@ -105,6 +110,11 @@ def write_parity_report(
             "inputs_digest": _digest(json_safe(inputs or {})),
             "workflow_path": str(workflow_path or SAFE_WORKFLOW_PATH),
             "work_dir": str(work_dir or ""),
+            "trigger": trigger if trigger in {"cli", "shadow"} else "cli",
+            "sample_kind": sample_kind if sample_kind in {"real", "fixture", "unknown"} else "unknown",
+            "iso_job_id": iso_job_id or "",
+            "workflow_run_id": workflow_run_id or "",
+            "timing": timing or {},
         }
     )
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -130,6 +140,11 @@ def list_parity_reports(*, root: Path | None = None, limit: int = 20) -> dict[st
                     "inputs_digest": str(payload.get("inputs_digest") or ""),
                     "legacy_digest": str(payload.get("legacy_digest") or ""),
                     "workflow_digest": str(payload.get("workflow_digest") or ""),
+                    "trigger": str(payload.get("trigger") or "cli"),
+                    "sample_kind": str(payload.get("sample_kind") or "unknown"),
+                    "iso_job_id": str(payload.get("iso_job_id") or ""),
+                    "workflow_run_id": str(payload.get("workflow_run_id") or ""),
+                    "timing": dict(payload.get("timing") or {}),
                     "report_path": str(path),
                 }
             )
