@@ -79,6 +79,11 @@ def main(argv: list[str] | None = None) -> int:
             from launcher.plugins.iso_tools.workflow.parity import list_parity_reports
 
             return _print(list_parity_reports(root=Path(args.root) if args.root else None, limit=args.limit), args.json)
+        if args.command == "gate":
+            from launcher.plugins.iso_tools.workflow.gate import evaluate_switchover_gate
+
+            payload = evaluate_switchover_gate()
+            return _print(payload, args.json, exit_code=0 if payload.get("ready") else 7)
         parser.error("missing command")
         return 2
     except GraphValidationError as exc:
@@ -139,6 +144,9 @@ def _parser() -> argparse.ArgumentParser:
     parity_history.add_argument("--root", default="")
     parity_history.add_argument("--limit", type=int, default=20)
     parity_history.add_argument("--json", action="store_true")
+
+    gate = sub.add_parser("gate")
+    gate.add_argument("--json", action="store_true")
 
     return parser
 

@@ -189,6 +189,8 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return workflow_set_shadow_flag_action(request)
     if request.action == "workflow_shadow_run":
         return workflow_shadow_run_action(request)
+    if request.action == "workflow_switchover_gate":
+        return workflow_switchover_gate_action(request)
     raise ValueError(f"unknown action: {request.action}")
 
 
@@ -702,6 +704,14 @@ def workflow_shadow_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
     _write_json(shadow_path, {"workflow_job_id": workflow_job_id, "created_at": _now()})
     _spawn_workflow_job(workflow_job_dir)
     return _read_json(workflow_job_dir / "job.json")
+
+
+def workflow_switchover_gate_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
+    from launcher.plugins.iso_tools.workflow.gate import evaluate_switchover_gate
+
+    payload = evaluate_switchover_gate()
+    payload["shadow_flag_enabled"] = _shadow_flag_enabled()
+    return payload
 
 
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
