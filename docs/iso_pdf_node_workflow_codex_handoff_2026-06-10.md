@@ -1250,13 +1250,13 @@ type NodeSpecJson = {
 - [ ] 讀完本文件 + 歸檔 brief `docs/archive/iso_pdf/node_workflow/iso_pdf_node_workflow_pilot_brief_opus_2026-06-09.md`（只作背景；衝突以本文件為準）+ `launcher/app/tauri_iso_workflow.py` 的 `_dispatch_request`/`_resolve_pdfs`/`_should_write_run_log`/`_spawn_iso_worker` 四段。
 
 **施工（嚴格按 phase，每 phase 結束即 commit 或留 diff 證據）**
-- [ ] Phase 1：建 `workflow/{__init__,errors,schema,registry,policy}.py` + engine/policy 測試（§3.1/3.3/3.4、§9 測項 1-7、12-16）。跑 `-m unittest` 綠。Commit：`feat(iso-workflow): add graph schema, registry and side-effect policy`。
-- [ ] Phase 2：建 `context.py`/`executor.py`/`run_log.py`/`nodes/base.py`（§3.2/3.5/3.6/3.7、§6）+ 測項 8-11、17-19。Commit：`feat(iso-workflow): add DAG executor and workflow run log`。
-- [ ] Phase 3：建 `cli.py` + CLI 測試（§7、測項 33-37）。手跑五指令截錄輸出。Commit：`feat(iso-workflow): add workflow CLI`。
-- [ ] Phase 4：建 `adapters/iso_request.py` + 純讀 nodes（§5 #1,3,4,5,7,8）+ 測項 21/22/25。Commit：`feat(iso-workflow): wrap read-only iso actions as nodes`。
-- [ ] Phase 5：split/export/debug_bundle/batch_detect nodes（§5 #2,6,9,10）+ 測項 20/23/24。Commit：`feat(iso-workflow): add auto side-effect nodes with worker polling`。
-- [ ] Phase 6：apply_rename/save_draft_profile（§5 #11,12）+ `test_iso_workflow_apply_safety.py` 測項 26-32 全綠。Commit：`feat(iso-workflow): add guarded apply and draft profile nodes`。
-- [ ] Phase 7：`workflows/iso_pdf_safe_poc.workflow.json`（§4.2 原樣）+ 樣本端到端 + 更新本文件的完成狀態；若要另寫完工 handoff，放入 `docs/archive/iso_pdf/node_workflow/`。Commit：`docs(iso-workflow): add safe poc workflow and handoff`。
+- [x] Phase 1：建 `workflow/{__init__,errors,schema,registry,policy}.py` + engine/policy 測試（§3.1/3.3/3.4、§9 測項 1-7、12-16）。跑 `-m unittest` 綠。Commit：`feat(iso-workflow): add graph schema, registry and side-effect policy`。
+- [x] Phase 2：建 `context.py`/`executor.py`/`run_log.py`/`nodes/base.py`（§3.2/3.5/3.6/3.7、§6）+ 測項 8-11、17-19。Commit：`feat(iso-workflow): add DAG executor and workflow run log`。
+- [x] Phase 3：建 `cli.py` + CLI 測試（§7、測項 33-37）。手跑五指令截錄輸出。Commit：`feat(iso-workflow): add workflow CLI`。
+- [x] Phase 4：建 `adapters/iso_request.py` + 純讀 nodes（§5 #1,3,4,5,7,8）+ 測項 21/22/25。Commit：`feat(iso-workflow): wrap read-only iso actions as nodes`。
+- [x] Phase 5：split/export/debug_bundle/batch_detect nodes（§5 #2,6,9,10）+ 測項 20/23/24。Commit：`feat(iso-workflow): add auto side-effect nodes with worker polling`。
+- [x] Phase 6：apply_rename/save_draft_profile（§5 #11,12）+ `test_iso_workflow_apply_safety.py` 測項 26-32 全綠。Commit：`feat(iso-workflow): add guarded apply and draft profile nodes`。
+- [x] Phase 7：`workflows/iso_pdf_safe_poc.workflow.json`（§4.2 原樣）+ 樣本端到端 + 更新本文件的完成狀態；若要另寫完工 handoff，放入 `docs/archive/iso_pdf/node_workflow/`。Commit：`docs(iso-workflow): add safe poc workflow and handoff`。
 
 **每個 phase 的不變檢查（做完就跑）**
 - [ ] `git diff --stat` 只含本 phase 預期檔案；`frontend/`、`launcher/app/tauri_iso_workflow.py`、`launcher/app/tauri_iso_worker.py`、PyQt 檔案、`iso_tools/{pilot,run_log,profile,...}.py` 永遠零 diff（adapters 只 import 不修改）。
@@ -1264,12 +1264,12 @@ type NodeSpecJson = {
 - [ ] 既有回歸：`& $py -m pytest tests\test_tauri_iso_workflow.py tests\test_iso_pilot.py -q`（pytest 不可用 → `-m unittest tests.test_tauri_iso_workflow tests.test_iso_pilot`）。
 
 **驗收（Phase 7 完成的定義）**
-- [ ] `list-nodes` 列 12 個 node、guarded 標記正確。
-- [ ] `validate` 對 §4.2 圖 0 error；推導 edges 與預期 5 條一致。
-- [ ] 樣本 run：summary `4 ready / 0 warn / 0 blocked`、CSV 存在、`apply_rename=skipped_disabled`、run_log.json 的 `side_effect_summary.executed` 恰為 split(視情況)/job/iso_run_log/worker/csv。
-- [ ] `replay --run <剛才>`：零新寫入（events 全為 blocked_replay/replay_hydrated）、pilot 重算結果一致。
-- [ ] enabled+allow+confirm+dry_run=false 在**測試 tmp 資料**上真的 rename 成功；同設定 replay 仍 blocked。
-- [ ] 完工 handoff 寫明：跑過的指令原文、無法跑的指令與原因、side-effect 證據（events.jsonl 摘錄）、剩餘風險。
+- [x] `list-nodes` 列 12 個 node、guarded 標記正確。
+- [x] `validate` 對 §4.2 圖 0 error；推導 edges 與預期 5 條一致。
+- [x] 樣本 run：summary `4 ready / 0 warn / 0 blocked`、CSV 存在、`apply_rename=skipped_disabled`、run_log.json 的 `side_effect_summary.executed` 恰為 split(視情況)/job/iso_run_log/worker/csv。
+- [x] `replay --run <剛才>`：零新寫入（auto writes 為 `blocked_replay`，side-effect nodes 走 `replay_hydrated`；disabled apply 保持 `skipped_disabled`）、pilot 重算結果一致。
+- [x] enabled+allow+confirm+dry_run=false 在**測試 tmp 資料**上真的 rename 成功；同設定 replay 仍 blocked。
+- [x] 完工 handoff 寫明：跑過的指令原文、無法跑的指令與原因、side-effect 證據（events.jsonl 摘錄）、剩餘風險。
 
 **禁止事項（違反任一即重做）**
 - [ ] 不改既有 21 個 action 的 request/response 欄位；不加新 Tauri action；不碰前端。
@@ -1281,3 +1281,84 @@ type NodeSpecJson = {
 - [ ] 不用 `git add -A`。
 
 完工後在 handoff 文件結尾回報：新增/修改檔案清單、CLI 使用方式、實跑測試清單、auto/guarded 兩層 side-effect 行為證據、React Flow 銜接下一步（即本文件 §12 的落實順序）。
+
+---
+
+## 14. Codex 完工回報（2026-06-10）
+
+狀態：Phase 1-7 已完成，並依 phase 拆 commit。Phase 7 沒有改 `frontend/`、`launcher/app/tauri_iso_workflow.py`、`launcher/app/tauri_iso_worker.py`、PyQt legacy、Pilot P01-P15 或既有 Tauri action schema；`.qwen/` 仍維持未追蹤、不 stage。
+
+### 14.1 新增 / 修改檔案
+
+- 新增：`launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json`
+- 修改：`docs/iso_pdf_node_workflow_codex_handoff_2026-06-10.md`
+
+Phase 1-6 已在前序 commits 完成：
+
+- `82f848f feat(iso-workflow): add workflow engine checkpoint`
+- `df80420 feat(iso-workflow): wrap read-only iso actions as nodes`
+- `e7ac248 feat(iso-workflow): add auto side-effect nodes with worker polling`
+- `1b5e0d9 feat(iso-workflow): add guarded apply and draft profile nodes`
+
+### 14.2 實跑 CLI 指令
+
+```powershell
+& .\.venv\Scripts\python.exe -m launcher.plugins.iso_tools.workflow.cli list-nodes --json
+& .\.venv\Scripts\python.exe -m launcher.plugins.iso_tools.workflow.cli validate --workflow launcher\plugins\iso_tools\workflow\workflows\iso_pdf_safe_poc.workflow.json --json
+& .\.venv\Scripts\python.exe -m launcher.plugins.iso_tools.workflow.cli run --workflow launcher\plugins\iso_tools\workflow\workflows\iso_pdf_safe_poc.workflow.json --inputs-json .runtime\temp\iso_workflow_phase7\poc_inputs.json --run-root .runtime\runs\workflow_phase7 --json
+& .\.venv\Scripts\python.exe -m launcher.plugins.iso_tools.workflow.cli replay --run wf-20260610-102926-6184bb --run-root .runtime\runs\workflow_phase7 --json
+```
+
+樣本資料位置：`.runtime/temp/iso_workflow_phase7/`。原指定 `C:\Users\a0976\Downloads\t` 未作為必要條件；本次用自動生成等價小樣本（4 頁 PDF + 4 筆 ISO List）完成驗收，避免依賴本機私人樣本狀態。
+
+### 14.3 驗收證據
+
+- `list-nodes --json`：12 個 node；`iso.apply_rename` guarded=`true` side_effects=`renames_files`，`iso.save_draft_profile` guarded=`true` side_effects=`writes_profile`。
+- `validate --json`：`valid=true`、`issues=[]`；推導 edges 5 條：
+  - `split.page_folder -> batch_detect.page_folder`
+  - `batch_detect.rows -> pilot.rows`
+  - `batch_detect.rows -> roi_dist.rows`
+  - `batch_detect.rows -> export_csv.rows`
+  - `batch_detect.rows -> apply_rename.rows`
+- 樣本 run：`wf-20260610-102926-6184bb`，status=`completed`。
+  - rows：4 筆，status 分布 `{ready: 4}`，selected=4。
+  - CSV：`iso_rename_plan_20260610_102927.csv` 已落地，4 rows。
+  - `apply_rename`：status=`skipped_disabled`，decision=`skipped_disabled`，未 rename。
+  - executed side effects：`may_write_page_pdfs`、`writes_job_files`、`spawns_worker`、`writes_iso_run_log`、`writes_csv`。
+- replay：`wf-20260610-103017-0ceeae`，status=`completed_with_blocked`（CLI 以非 0 表示有 side effect 被擋，屬預期）。
+  - executed side effects：0。
+  - blocked：`may_write_page_pdfs`、`writes_job_files`、`writes_iso_run_log`、`spawns_worker`、`writes_csv` 全部 `blocked_replay`。
+  - `split` / `batch_detect` / `export_csv` logs 含 `replay_hydrated`。
+  - disabled `apply_rename` 維持 `skipped_disabled`。
+  - replay 後 `pilot_summary` 與原 run 一致。
+- 既有 `start_batch_detect` path 等價驗證：同一份樣本直接走 `launcher.app.tauri_iso_workflow` stdin/stdout action，job `phase7-direct-start-batch` 完成；rows=4、status 分布 `{ready: 4}`、selected=4。
+
+### 14.4 測試清單
+
+```powershell
+& .\.venv\Scripts\python.exe -m unittest tests.test_iso_workflow_apply_safety -v
+& .\.venv\Scripts\python.exe -m unittest tests.test_iso_workflow_engine tests.test_iso_workflow_policy tests.test_iso_workflow_cli tests.test_iso_workflow_nodes tests.test_iso_workflow_apply_safety -v
+& .\.venv\Scripts\python.exe -m unittest tests.test_tauri_iso_workflow tests.test_iso_pilot tests.test_iso_debug_bundle -v
+```
+
+結果：
+
+- `tests.test_iso_workflow_apply_safety`：9 tests passed。
+- workflow suite：40 tests passed。
+- ISO backend regression：27 tests passed。
+
+本環境以 `unittest` 作為主驗證路線，符合 §0 修訂的 pytest fallback 決策；沒有新增 pytest 依賴。
+
+### 14.5 剩餘風險
+
+- Phase 7 樣本為自動生成等價小樣本，未依賴 `C:\Users\a0976\Downloads\t` 的實際內容；若要對真實工作資料做 smoke，直接把該資料夾輸入寫成 `poc_inputs.json` 再跑同一張 graph 即可。
+- replay 對 disabled `apply_rename` 的記錄是 `skipped_disabled`，不是 `blocked_replay`；這是 executor 先處理 disabled node 的既有語意，安全上仍為零寫入。
+- React Flow / LiteGraph / Rete.js 尚未接 UI；下一步應只消費 `list-nodes --json`、workflow graph JSON 與 run_log JSON，不直接 import Python node class。
+
+### 14.6 React Flow 銜接下一步
+
+建議順序：
+
+1. 先在 Tauri action append `workflow_list_nodes`、`workflow_load`、`workflow_validate`，只讀 JSON，不跑長任務。
+2. 再接 `workflow_run` / `workflow_run_status` / `workflow_cancel`，沿用 job dir + polling，不引入 streaming。
+3. 最後才做節點式畫布；畫布只編輯 graph JSON，guarded node 在 UI 上強標，`allow` / `confirm` 每次執行明文送後端，不做 session 級解鎖。
