@@ -1,4 +1,4 @@
-import { CircleAlert, FileJson, FileSearch, FileText, FolderOpen, Layers3, PanelRightOpen, RefreshCcw, ScanLine, Settings, ShieldCheck, Table2 } from "lucide-react";
+import { CircleAlert, FileJson, FileSearch, FileText, FolderOpen, GitBranch, Layers3, PanelRightOpen, RefreshCcw, ScanLine, Settings, ShieldCheck, Table2 } from "lucide-react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { Gate } from "../components/Gate";
 import { StatusTile } from "../components/StatusTile";
@@ -7,6 +7,7 @@ import type { IsoPilotItem, IsoPlanRow, IsoRoiDistribution, IsoWorkflowPlan } fr
 import { PathPickerRow } from "./components/IsoControls";
 import { PilotListPanel } from "./components/PilotListPanel";
 import { RoiSamplePanel } from "./components/RoiSamplePanel";
+import type { OverlayDiffEntry } from "./helpers";
 
 export function EngineerView({
   activeProfileFolderReady,
@@ -58,10 +59,14 @@ export function EngineerView({
   startBatchDetect,
   serialCol,
   visualPanel,
+  workflowInputs,
+  overlayDiffs,
   issueCount,
   workFolder,
   onPilotAutoFix,
   onPilotJump,
+  onVerifyWorkflowTuning,
+  onOpenNodesView,
 }: {
   activeProfileFolderReady: boolean;
   batchRunning: boolean;
@@ -112,12 +117,17 @@ export function EngineerView({
   startBatchDetect: () => void;
   serialCol: number | "";
   visualPanel: ReactNode;
+  workflowInputs: Record<string, unknown>;
+  overlayDiffs: OverlayDiffEntry[];
   issueCount: number;
   workFolder: string;
   onPilotAutoFix?: (item: IsoPilotItem) => void;
   onPilotJump?: (item: IsoPilotItem) => void;
+  onVerifyWorkflowTuning: () => void;
+  onOpenNodesView: () => void;
 }) {
   const hasStaleDraft = pilotItems.some((item) => item.freshness === "stale");
+  const workflowInputCount = Object.values(workflowInputs).filter((value) => value !== null && value !== undefined && value !== "").length;
 
   return (
     <div className="iso-engineer-grid">
@@ -232,6 +242,33 @@ export function EngineerView({
             <span className="engineer-meta-chip">已選 <strong>{selectedCount} / {rowCount}</strong></span>
             <span className={`engineer-meta-chip ${issueCount ? "warn" : "ready"}`}>問題 <strong>{issueCount}</strong></span>
           </div>
+          <div className="engineer-workflow-overlay-card">
+            <div className="engineer-overlay-head">
+              <div>
+                <div className="eyebrow">節點流程驗證</div>
+                <strong>目前調校 overlay</strong>
+                <span>{workflowInputCount} 個 workflow inputs · node params 維持圖內預設</span>
+              </div>
+              <button className="action-button" type="button" onClick={onVerifyWorkflowTuning}>
+                <ShieldCheck size={15} />
+                <span>以節點流程驗證目前調校</span>
+              </button>
+            </div>
+            <div className="engineer-overlay-diff-list">
+              {overlayDiffs.length ? overlayDiffs.map((diff) => (
+                <div className="engineer-overlay-diff" key={diff.field}>
+                  <span>{diff.label}</span>
+                  <code title={diff.profileValue}>設定檔：{diff.profileValue}</code>
+                  <strong title={diff.currentValue}>目前：{diff.currentValue}</strong>
+                </div>
+              )) : (
+                <div className="engineer-overlay-diff ready">
+                  <span>設定檔一致</span>
+                  <strong>目前調校與已載入設定檔一致</strong>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         <div className="engineer-preview-stage">
@@ -248,6 +285,16 @@ export function EngineerView({
           rows={rows}
           threshold={confidenceThreshold}
         />
+        <div className="legacy-fallback-card nodes-jump-card">
+          <div>
+            <div className="eyebrow">節點式</div>
+            <h3>進階檢視已移至節點式分頁</h3>
+          </div>
+          <button className="action-button" type="button" onClick={onOpenNodesView}>
+            <GitBranch size={15} />
+            <span>前往節點式分頁</span>
+          </button>
+        </div>
         <div className="legacy-fallback-card">
           <div>
             <div className="eyebrow">舊版備援</div>

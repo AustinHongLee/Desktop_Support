@@ -23,6 +23,8 @@ class PilotReportNode(WorkflowNode):
         description="Build the Pilot P01-P15 report from existing rows. Fallback plan building is forbidden.",
         inputs=(
             PortSpec("rows", "rows"),
+            PortSpec("plan", "plan", required=False),
+            PortSpec("job", "json", required=False),
             PortSpec("work_folder", "path", required=False),
             PortSpec("confidence_threshold", "number", required=False),
         ),

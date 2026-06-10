@@ -83,6 +83,17 @@ def save_iso_draft_profile(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def pilot_report(payload: dict[str, Any]) -> dict[str, Any]:
+    plan = payload.get("plan")
+    job = payload.get("job")
+    if isinstance(plan, dict) or isinstance(job, dict):
+        backend = _backend()
+        request_payload = {key: value for key, value in payload.items() if key not in {"plan", "job"}}
+        request = build_request({"action": "pilot_report", **request_payload})
+        return backend.build_pilot_report(
+            request=backend._request_payload(request),
+            plan=plan if isinstance(plan, dict) else None,
+            job=job if isinstance(job, dict) else None,
+        )
     return _call("pilot_report", payload, "pilot_report")
 
 

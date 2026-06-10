@@ -8,6 +8,7 @@ import { compactPath } from "./helpers";
 import { IsoEmptyPlan, IsoMetric, PathPickerRow } from "./components/IsoControls";
 import { IsoPlanTable } from "./components/NamingTable";
 import { PilotStrip } from "./components/PilotStrip";
+import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
 
 export function WorkbenchView({
   activeProfileFolderReady,
@@ -40,6 +41,7 @@ export function WorkbenchView({
   openEngineerView,
   openDryRun,
   openRunLogDrawer,
+  onAdoptWorkflowSource,
   onPilotJump,
   pageFolder,
   pattern,
@@ -97,7 +99,8 @@ export function WorkbenchView({
   canStartBatch: boolean;
   openEngineerView: () => void;
   openDryRun: () => void;
-  openRunLogDrawer: () => void;
+  openRunLogDrawer: (runId?: string) => void;
+  onAdoptWorkflowSource?: (source: IsoWorkflowPlan["source"]) => void;
   pageFolder: string;
   pattern: string;
   pilotItems: IsoPilotItem[];
@@ -243,6 +246,11 @@ export function WorkbenchView({
             />
           ) : <IsoEmptyPlan generatePlan={generatePlan} chooseWorkFolder={chooseWorkFolder} busy={busy} />}
         </section>
+
+        <WorkflowRunPlanPanel
+          onAdoptParams={onAdoptWorkflowSource}
+          openRunLogDrawer={openRunLogDrawer}
+        />
       </main>
 
       <aside className="iso-inspector">

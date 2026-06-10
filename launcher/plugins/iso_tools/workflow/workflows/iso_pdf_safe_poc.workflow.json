@@ -87,6 +87,8 @@
       "display_name": "Pilot 檢查",
       "inputs": {
         "rows": "$nodes.batch_detect.outputs.rows",
+        "plan": "$nodes.batch_detect.outputs.result",
+        "job": "$nodes.batch_detect.outputs.job",
         "work_folder": "$workflow.inputs.work_folder",
         "confidence_threshold": "$workflow.inputs.confidence_threshold"
       }

@@ -23,7 +23,7 @@ export interface IsoMachineInput {
   exportBusy: boolean;
   hasFailure: boolean;
   hasSource: boolean;
-  isoView: "workbench" | "autopilot" | "engineer";
+  isoView: "workbench" | "autopilot" | "engineer" | "nodes";
   oneClickStage: "idle" | "running" | "applying" | "review" | "done";
   plan: IsoWorkflowPlan | null;
   replaying: boolean;
