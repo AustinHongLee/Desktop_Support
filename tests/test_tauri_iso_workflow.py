@@ -29,6 +29,8 @@ from launcher.app.tauri_iso_workflow import (
     split_iso_pdf,
     workflow_list_nodes_action,
     workflow_load_action,
+    workflow_plan_from_run_action,
+    workflow_read_artifact_action,
     workflow_validate_action,
 )
 from launcher.app.tauri_iso_worker import run_job
@@ -146,6 +148,48 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(validated["topology"][0], "discover")
         self.assertFalse(bad["valid"])
         self.assertIn("WF003", {issue["code"] for issue in bad["issues"]})
+
+    def test_workflow_projection_actions_read_plan_and_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_root = root / "workflow_runs"
+            run_dir = run_root / "wf-action"
+            rows = [
+                {
+                    "id": "row-1",
+                    "page": 1,
+                    "source_path": str(root / "page_001.pdf"),
+                    "source_name": "page_001.pdf",
+                    "serial": "1",
+                    "line_no": "PIPE-A",
+                    "new_name": "1--PIPE-A.pdf",
+                    "target_path": str(root / "1--PIPE-A.pdf"),
+                    "status": "ready",
+                    "selected": True,
+                    "confidence": 1.0,
+                    "vision_message": "",
+                    "note": "",
+                }
+            ]
+            _write_projection_run(run_dir, rows)
+
+            with patch.dict(os.environ, {"DESKTOP_SUPPORT_WORKFLOW_RUN_ROOT": str(run_root)}):
+                plan = workflow_plan_from_run_action(
+                    IsoWorkflowRequest(action="workflow_plan_from_run", workflow_run_id="wf-action")
+                )
+                artifact = workflow_read_artifact_action(
+                    IsoWorkflowRequest(
+                        action="workflow_read_artifact",
+                        workflow_run_id="wf-action",
+                        workflow_node_id="batch",
+                        workflow_port="rows",
+                    )
+                )
+
+        self.assertEqual(plan["action"], "workflow_plan_from_run")
+        self.assertEqual(plan["summary"]["selected"], 1)
+        self.assertEqual(plan["provenance"]["workflow_run_id"], "wf-action")
+        self.assertEqual(artifact["payload"][0]["new_name"], "1--PIPE-A.pdf")
 
     def test_work_folder_autodetects_combine_pdf_and_iso_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -610,6 +654,59 @@ def _job_payload(job_id: str) -> dict[str, object]:
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def _write_projection_run(run_dir: Path, rows: list[dict[str, object]]) -> None:
+    run_dir.mkdir(parents=True)
+    artifact_dir = run_dir / "artifacts"
+    artifact_dir.mkdir()
+    plan = {
+        "schema_version": 1,
+        "action": "batch_detect_result",
+        "source": {"pdf_count": len(rows)},
+        "summary": {},
+        "rows": rows,
+        "issues": [],
+    }
+    result_ref = _write_projection_artifact(run_dir, "batch", "result", plan)
+    rows_ref = _write_projection_artifact(run_dir, "batch", "rows", rows)
+    run_log = {
+        "schema_version": 1,
+        "run_id": run_dir.name,
+        "mode": "run",
+        "workflow_id": "projection_action",
+        "run_dir": str(run_dir),
+        "graph_hash": "sha256:test",
+        "status": "completed",
+        "topology": ["batch"],
+        "inputs": {},
+        "workflow": {"nodes": [{"node_id": "batch", "node_type": "iso.batch_detect_serials"}]},
+        "nodes": {
+            "batch": {
+                "status": "success",
+                "outputs": {"result": result_ref, "rows": rows_ref},
+                "side_effects": [],
+                "logs": [],
+            }
+        },
+        "side_effect_summary": {"executed": [], "blocked": [], "skipped": [], "simulated": []},
+        "issues": [],
+    }
+    _write_json(run_dir / "run_log.json", run_log)
+
+
+def _write_projection_artifact(run_dir: Path, node_id: str, port: str, payload: object) -> dict[str, object]:
+    import hashlib
+
+    path = run_dir / "artifacts" / f"{node_id}.{port}.json"
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    path.write_text(text, encoding="utf-8")
+    data = path.read_bytes()
+    return {
+        "artifact_ref": str(path.relative_to(run_dir)).replace("\\", "/"),
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+    }
 
 
 if __name__ == "__main__":

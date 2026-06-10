@@ -85,6 +85,8 @@ class IsoWorkflowRequest:
     workflow_mode: str | None = None
     workflow_job_id: str | None = None
     workflow_run_id: str | None = None
+    workflow_node_id: str | None = None
+    workflow_port: str | None = None
     rows: tuple[dict[str, Any], ...] = ()
 
 
@@ -175,6 +177,10 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return workflow_list_runs_action(request)
     if request.action == "workflow_read_run_log":
         return workflow_read_run_log_action(request)
+    if request.action == "workflow_plan_from_run":
+        return workflow_plan_from_run_action(request)
+    if request.action == "workflow_read_artifact":
+        return workflow_read_artifact_action(request)
     raise ValueError(f"unknown action: {request.action}")
 
 
@@ -586,6 +592,33 @@ def workflow_list_runs_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
 
 def workflow_read_run_log_action(request: IsoWorkflowRequest) -> dict[str, Any]:
     return _read_json(_workflow_run_dir_required(request) / "run_log.json")
+
+
+def workflow_plan_from_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    from launcher.plugins.iso_tools.workflow.projection import plan_from_run
+
+    return plan_from_run(_workflow_run_dir_required(request))
+
+
+def workflow_read_artifact_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    from launcher.plugins.iso_tools.workflow.projection import read_artifact
+
+    node_id = (request.workflow_node_id or "").strip()
+    port = (request.workflow_port or "").strip()
+    if not node_id or not port:
+        raise ValueError("workflow_read_artifact 需要 workflow_node_id 與 workflow_port。")
+    run_dir = _workflow_run_dir_required(request)
+    ref, payload = read_artifact(run_dir, node_id, port)
+    return {
+        "schema_version": 1,
+        "action": "workflow_read_artifact",
+        "created_at": _now(),
+        "run_id": request.workflow_run_id or request.run_id or "",
+        "node_id": node_id,
+        "port": port,
+        "ref": ref,
+        "payload": payload,
+    }
 
 
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -1028,6 +1061,8 @@ def _normalize_request(payload: dict[str, Any]) -> dict[str, Any]:
         "workflow_mode": str(payload.get("workflow_mode") or payload.get("mode") or "").strip() or None,
         "workflow_job_id": str(payload.get("workflow_job_id") or "").strip() or None,
         "workflow_run_id": str(payload.get("workflow_run_id") or payload.get("source_run_id") or "").strip() or None,
+        "workflow_node_id": str(payload.get("workflow_node_id") or "").strip() or None,
+        "workflow_port": str(payload.get("workflow_port") or "").strip() or None,
         "rows": tuple(payload.get("rows") or ()),
     }
 
@@ -1273,6 +1308,9 @@ def _request_payload(request: IsoWorkflowRequest) -> dict[str, Any]:
         "export_path": str(request.export_path or ""),
         "job_id": request.job_id,
         "run_id": request.run_id,
+        "workflow_run_id": request.workflow_run_id,
+        "workflow_node_id": request.workflow_node_id,
+        "workflow_port": request.workflow_port,
         "rows": list(request.rows),
     }
 
