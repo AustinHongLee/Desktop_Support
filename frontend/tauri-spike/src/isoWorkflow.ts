@@ -552,6 +552,7 @@ export interface IsoExportResult {
   action: "export_plan_csv";
   created_at: string;
   export_path: string;
+  export_dir?: string;
   row_count: number;
   selected_count: number;
   message: string;

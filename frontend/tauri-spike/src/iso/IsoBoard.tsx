@@ -859,7 +859,7 @@ export function IsoBoard() {
         line_col: plan.source.line_col ?? lineCol,
         pattern: plan.source.pattern || pattern,
       });
-      setMessage(result.message);
+      setMessage(result.export_path ? `已匯出命名草稿 CSV：${result.export_path}` : result.message);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {

@@ -35,6 +35,7 @@ from launcher.app.tauri_iso_workflow import (
     workflow_validate_action,
 )
 from launcher.app.tauri_iso_worker import run_job
+from launcher.core.paths import PROJECT_ROOT_ENV
 from launcher.core.state_store import AppStateStore
 from launcher.plugins.iso_tools.profile import IsoNamingProfile, save_iso_naming_profile
 from launcher.plugins.iso_tools.serial_vision import SerialVisionResult
@@ -284,6 +285,87 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(export["row_count"], 2)
         self.assertEqual(exported_rows[0]["new_name"], "1--PIPE-A.pdf")
         self.assertTrue(exported_rows[0]["created_at"])
+
+    def test_default_export_plan_csv_uses_runtime_exports_dir_and_keeps_work_folder_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_root = root / "project"
+            folder = root / "work"
+            folder.mkdir()
+            source = folder / "page_001.pdf"
+            target = folder / "1--PIPE-A.pdf"
+            _write_pdf(source, pages=1)
+
+            with patch.dict(os.environ, {PROJECT_ROOT_ENV: str(project_root)}):
+                export = export_plan_csv(
+                    IsoWorkflowRequest(
+                        action="export_plan_csv",
+                        work_folder=folder,
+                        rows=(_export_row(source, target),),
+                    )
+                )
+
+            export_path = Path(export["export_path"])
+            export_dir = project_root / ".runtime" / "exports" / "iso"
+            export_exists = export_path.exists()
+            export_is_under_runtime = export_path.is_relative_to(export_dir)
+            polluted = list(folder.glob("iso_rename_plan_*.csv"))
+
+        self.assertTrue(export_exists)
+        self.assertTrue(export_is_under_runtime)
+        self.assertEqual(export["export_dir"], str(export_dir))
+        self.assertEqual(polluted, [])
+
+    def test_default_export_prunes_runtime_exports_to_recent_50(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project_root = root / "project"
+            export_dir = project_root / ".runtime" / "exports" / "iso"
+            export_dir.mkdir(parents=True)
+            folder = root / "work"
+            folder.mkdir()
+            source = folder / "page_001.pdf"
+            target = folder / "1--PIPE-A.pdf"
+            _write_pdf(source, pages=1)
+            for index in range(55):
+                old = export_dir / f"iso_rename_plan_20240101_0000{index:02d}.csv"
+                old.write_text("old\n", encoding="utf-8")
+                os.utime(old, (index, index))
+
+            with patch.dict(os.environ, {PROJECT_ROOT_ENV: str(project_root)}):
+                export = export_plan_csv(
+                    IsoWorkflowRequest(
+                        action="export_plan_csv",
+                        work_folder=folder,
+                        rows=(_export_row(source, target),),
+                    )
+                )
+
+            files = sorted(export_dir.glob("iso_rename_plan_*.csv"))
+            exported_exists = Path(export["export_path"]).exists()
+            oldest_exists = (export_dir / "iso_rename_plan_20240101_000000.csv").exists()
+
+        self.assertEqual(len(files), 50)
+        self.assertTrue(exported_exists)
+        self.assertFalse(oldest_exists)
+
+    def test_export_plan_csv_lock_error_is_actionable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            source = folder / "page_001.pdf"
+            target = folder / "1--PIPE-A.pdf"
+            export_path = folder / "locked.csv"
+            _write_pdf(source, pages=1)
+
+            with patch("launcher.app.tauri_iso_workflow.os.replace", side_effect=PermissionError(13, "locked")):
+                with self.assertRaisesRegex(ValueError, "CSV 正被其他程式"):
+                    export_plan_csv(
+                        IsoWorkflowRequest(
+                            action="export_plan_csv",
+                            export_path=export_path,
+                            rows=(_export_row(source, target),),
+                        )
+                    )
 
     def test_apply_records_csv_in_run_artifacts_without_polluting_work_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -710,6 +792,24 @@ def _write_iso_list(path: Path) -> None:
     sheet.append(["1", "PIPE-A"])
     sheet.append(["2", "PIPE-B"])
     workbook.save(path)
+
+
+def _export_row(source: Path, target: Path) -> dict[str, object]:
+    return {
+        "id": "row-1",
+        "page": 1,
+        "source_path": str(source),
+        "source_name": source.name,
+        "serial": "1",
+        "line_no": "PIPE-A",
+        "new_name": target.name,
+        "target_path": str(target),
+        "status": "ready",
+        "selected": True,
+        "confidence": 1.0,
+        "note": "",
+        "vision_message": "",
+    }
 
 
 class _FakeDetector:
