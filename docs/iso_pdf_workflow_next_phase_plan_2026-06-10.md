@@ -439,3 +439,23 @@ Pre-flight（不寫碼）：
 - 不要做 B9 以後的內容：不裝 @xyflow/react、不畫 canvas、不動一鍵執行路徑、不給前端 allow/confirm 路徑、不在 useEffect/onChange 呼叫 workflow_run 或 OCR。
 - B9 完成後：merge --no-ff 回 codex/tauri-react-spike、打 tag iso-workflow-consume-v1、push、停工回報（新增/修改檔案、跑過的命令、parity 結果原文、限制與風險）。
 ```
+
+---
+
+# H. Postscript：壓力測試與防爆修訂（B10-B11）
+
+> 這段是 B5-B9 完成後的追加事實，供 Fable 5 / 下一份 C 期施工書讀取。不要再依本文件前文的舊 CSV 行為規劃。
+
+Deepseek V4 Pro 針對 ISO workflow 做防爆/壓力測試，重點觀察到 `iso_rename_plan_*.csv` 會在 `.runtime` 或工作資料夾累積。追蹤結果確認：safe POC 內的 `export_csv` 節點會被安全模式執行、`writes_csv` 原本是 auto-allowed、React apply / one-click apply 原本會在真正更名前先呼叫 `exportIsoPlanCsv()`。
+
+已完成：
+
+- **B10**：`writes_csv` 改為 guarded；safe POC 的 `export_csv` 預設 disabled；節點式 UI 把 CSV 寫出標成 guarded；測試確認 safe run 不再產生 `iso_rename_plan_*.csv`。
+- **B11**：apply / one-click apply 不再自動呼叫使用者匯出 CSV；後端 apply 只在 ISO run log 內寫 `.runtime/runs/iso/<run_id>/artifacts/apply_rename_record.csv`，並回傳 `record_path`。手動匯出 CSV 仍保留為明確使用者動作。
+
+下一份 Fable 5 施工書應把以下列為已知事實：
+
+- safe mode / Inspector safe run 不應污染工作資料夾。
+- `writes_csv` / `renames_files` / `writes_profile` 都是 guarded 類別；前端不得提供隱性授權路徑。
+- apply 的更名記錄是 runtime artifact，不是使用者工作資料夾的 `iso_rename_plan_*.csv`。
+- 下一步若處理 CSV，應聚焦「手動匯出」的預設路徑、檔名策略、retention policy、Excel file lock 訊息，而不是回頭恢復 apply 前自動 export。

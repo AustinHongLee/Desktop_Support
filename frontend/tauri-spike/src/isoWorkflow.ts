@@ -618,6 +618,8 @@ export interface IsoApplyResult {
     source_name: string;
     target_name: string;
   }>;
+  record_path?: string;
+  record_row_count?: number;
   run_log?: IsoRunLogRef;
 }
 

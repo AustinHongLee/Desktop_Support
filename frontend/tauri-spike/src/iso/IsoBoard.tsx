@@ -695,32 +695,16 @@ export function IsoBoard() {
     setError("");
     setMessage("");
     try {
-      let recPath = "";
-      let recordWarning = "";
-      try {
-        const rec = await exportIsoPlanCsv({
-          ...requestPayload(plan.rows),
-          work_folder: plan.source.work_folder || workFolder,
-          combine_pdf: plan.source.combine_pdf || combinePdf,
-          page_folder: plan.source.page_folder || pageFolder,
-          iso_list: plan.source.iso_list || isoList,
-          sheet_name: plan.source.sheet_name || sheetName,
-          serial_col: plan.source.serial_col ?? serialCol,
-          line_col: plan.source.line_col ?? lineCol,
-          pattern: plan.source.pattern || pattern,
-        });
-        recPath = rec.export_path;
-        setRecordPath(recPath);
-      } catch (recordError) {
-        recordWarning = `更名記錄寫入失敗:${recordError instanceof Error ? recordError.message : String(recordError)} `;
-      }
       const result = await applyIsoPlan(requestPayload(selected));
+      registerRunLog(result.run_log);
+      const recPath = result.record_path || result.run_log?.run_json || "";
+      setRecordPath(recPath);
       const renamedIds = new Set(selected.map((row) => row.id));
       updatePlanRows((rows) => rows.filter((row) => !renamedIds.has(row.id)));
       setSelectedRowId(plan.rows.find((row) => !renamedIds.has(row.id))?.id ?? "");
       setDryRunOpen(false);
       setResultOpen(false);
-      setMessage(`${recordWarning}${result.message}${recPath ? ` 記錄已存:${recPath}` : ""} 已從清單移除 ${selected.length} 列;要重新掃描可按「重新產生」。`);
+      setMessage(`${result.message}${recPath ? ` 更名記錄已存於執行紀錄:${compactPath(recPath)}` : ""} 已從清單移除 ${selected.length} 列;要重新掃描可按「重新產生」。`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -815,33 +799,16 @@ export function IsoBoard() {
     setOneClickStage("applying");
     setError("");
     setOneClickSummaryText(oneClickSuccessSummary(currentPlan, currentPlan.pilot_results ?? []));
-    let recPath = "";
-    let recordWarning = "";
     try {
-      try {
-        const rec = await exportIsoPlanCsv({
-          ...requestPayload(currentPlan.rows),
-          work_folder: currentPlan.source.work_folder || workFolder,
-          combine_pdf: currentPlan.source.combine_pdf || combinePdf,
-          page_folder: currentPlan.source.page_folder || pageFolder,
-          iso_list: currentPlan.source.iso_list || isoList,
-          sheet_name: currentPlan.source.sheet_name || sheetName,
-          serial_col: currentPlan.source.serial_col ?? serialCol,
-          line_col: currentPlan.source.line_col ?? lineCol,
-          pattern: currentPlan.source.pattern || pattern,
-        });
-        recPath = rec.export_path;
-        setRecordPath(recPath);
-      } catch (recErr) {
-        recordWarning = `更名記錄寫入失敗:${recErr instanceof Error ? recErr.message : String(recErr)} `;
-      }
       const result = await applyIsoPlan(requestPayload(applyRows));
       registerRunLog(result.run_log);
+      const recPath = result.record_path || result.run_log?.run_json || "";
+      setRecordPath(recPath);
       const renamedIds = new Set(applyRows.map((row) => row.id));
       updatePlanRows((rows) => rows.filter((row) => !renamedIds.has(row.id)));
       setSelectedRowId(currentPlan.rows.find((row) => !renamedIds.has(row.id))?.id ?? "");
       setOneClickStage("done");
-      setMessage(`${recordWarning}${result.message}${recPath ? ` 記錄已存:${recPath}` : ""}`);
+      setMessage(`${result.message}${recPath ? ` 更名記錄已存於執行紀錄:${compactPath(recPath)}` : ""}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setOneClickFailure("套用更名失敗", caught);

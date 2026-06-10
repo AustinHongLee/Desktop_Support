@@ -23,7 +23,7 @@ from launcher.plugins.iso_tools.workflow.nodes.pilot import PilotReportNode, Roi
 from launcher.plugins.iso_tools.workflow.nodes.plan import BuildPlanNode
 from launcher.plugins.iso_tools.workflow.nodes.profile import LoadProfileNode
 from launcher.plugins.iso_tools.workflow.nodes.sources import DiscoverSourcesNode, SplitPdfNode
-from launcher.plugins.iso_tools.workflow.policy import SideEffectPolicy
+from launcher.plugins.iso_tools.workflow.policy import WRITES_CSV, SideEffectPolicy
 from launcher.plugins.iso_tools.workflow.registry import NodeRegistry
 from launcher.plugins.iso_tools.workflow.schema import normalize_graph
 from tests.test_tauri_iso_workflow import _write_iso_list, _write_pdf
@@ -220,6 +220,7 @@ class IsoWorkflowNodeTests(unittest.TestCase):
                     {
                         "node_id": "export",
                         "node_type": "iso.export_plan_csv",
+                        "requires_confirm": True,
                         "inputs": {"rows": "$nodes.plan.outputs.rows", "work_folder": "$workflow.inputs.work_folder"},
                         "params": {"export_path": str(export_path)},
                     },
@@ -236,6 +237,7 @@ class IsoWorkflowNodeTests(unittest.TestCase):
                     {
                         "node_id": "export",
                         "node_type": "iso.export_plan_csv",
+                        "requires_confirm": True,
                         "inputs": {"rows": "$nodes.plan.outputs.rows", "work_folder": "$workflow.inputs.work_folder"},
                         "params": {"export_path": str(dry_path)},
                     },
@@ -243,7 +245,15 @@ class IsoWorkflowNodeTests(unittest.TestCase):
                 inputs={"work_folder": str(folder), "page_folder": str(page_folder), "iso_list": str(iso_list)},
             )
 
-            result = run_workflow(graph, registry=self.registry, run_root=folder / "runs")
+            result = run_workflow(
+                graph,
+                registry=self.registry,
+                run_root=folder / "runs",
+                policy=SideEffectPolicy(
+                    allowed_guarded=frozenset({WRITES_CSV}),
+                    confirmed_nodes=frozenset({"export"}),
+                ),
+            )
             dry = run_workflow(dry_graph, registry=self.registry, run_root=folder / "runs", policy=SideEffectPolicy(mode="dry_run"))
             with export_path.open("r", newline="", encoding="utf-8-sig") as handle:
                 rows = list(csv.DictReader(handle))

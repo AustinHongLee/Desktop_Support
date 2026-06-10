@@ -247,6 +247,60 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(exported_rows[0]["new_name"], "1--PIPE-A.pdf")
         self.assertTrue(exported_rows[0]["created_at"])
 
+    def test_apply_records_csv_in_run_artifacts_without_polluting_work_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            run_root = folder / "iso_runs"
+            source = folder / "page_001.pdf"
+            target = folder / "1--PIPE-A.pdf"
+            _write_pdf(source, pages=1)
+            request = {
+                "action": "apply",
+                "rows": [
+                    {
+                        "id": "row-1",
+                        "page": 1,
+                        "source_path": str(source),
+                        "source_name": source.name,
+                        "serial": "1",
+                        "line_no": "PIPE-A",
+                        "new_name": target.name,
+                        "target_path": str(target),
+                        "status": "ready",
+                        "selected": True,
+                        "confidence": 1.0,
+                    }
+                ],
+            }
+            result = subprocess.run(
+                [sys.executable, "-m", "launcher.app.tauri_iso_workflow"],
+                input=json.dumps(request, ensure_ascii=False).encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                cwd=Path(__file__).resolve().parents[1],
+                env={**os.environ, "DESKTOP_SUPPORT_ISO_RUN_ROOT": str(run_root)},
+            )
+
+            payload = json.loads(result.stdout.decode("utf-8"))
+            record_path = Path(payload["record_path"])
+            with record_path.open("r", newline="", encoding="utf-8-sig") as handle:
+                record_rows = list(csv.DictReader(handle))
+            polluted = list(folder.glob("iso_rename_plan_*.csv"))
+            source_exists = source.exists()
+            target_exists = target.exists()
+            record_is_under_run_root = record_path.is_relative_to(run_root)
+
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", errors="replace"))
+        self.assertFalse(source_exists)
+        self.assertTrue(target_exists)
+        self.assertEqual(payload["renamed_count"], 1)
+        self.assertEqual(payload["record_row_count"], 1)
+        self.assertTrue(record_is_under_run_root)
+        self.assertEqual(record_rows[0]["source_name"], "page_001.pdf")
+        self.assertEqual(record_rows[0]["target_name"], "1--PIPE-A.pdf")
+        self.assertEqual(polluted, [])
+
     def test_phase_0c_worker_writes_progress_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)

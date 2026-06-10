@@ -44,6 +44,7 @@ from launcher.plugins.iso_tools.run_log import (
     ensure_iso_run,
     finish_iso_run_failure,
     finish_iso_run_success,
+    iso_run_root,
     list_iso_run_logs,
     mark_iso_run_started,
     public_run_ref,
@@ -622,11 +623,8 @@ def workflow_read_artifact_action(request: IsoWorkflowRequest) -> dict[str, Any]
 
 
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
-    operations = [
-        RenameOperation(Path(row["source_path"]), Path(row["target_path"]))
-        for row in request.rows
-        if row.get("selected")
-    ]
+    selected_rows = [row for row in request.rows if row.get("selected")]
+    operations = [RenameOperation(Path(row["source_path"]), Path(row["target_path"])) for row in selected_rows]
     if not operations:
         return {
             "schema_version": 1,
@@ -637,8 +635,9 @@ def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
             "message": "沒有勾選需要更名的 PDF。",
         }
     _validate_operations(operations)
+    record = _record_apply_csv(request, selected_rows, operations)
     _apply_operations(operations)
-    return {
+    payload = {
         "schema_version": 1,
         "action": "apply",
         "created_at": _now(),
@@ -654,6 +653,54 @@ def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
         ],
         "message": f"已更名 {len(operations)} 個 PDF。",
     }
+    if record is not None:
+        payload["record_path"] = record["path"]
+        payload["record_row_count"] = record["row_count"]
+    return payload
+
+
+def _record_apply_csv(
+    request: IsoWorkflowRequest,
+    rows: list[dict[str, Any]],
+    operations: list[RenameOperation],
+) -> dict[str, Any] | None:
+    if not request.run_id:
+        return None
+    created_at = _now()
+    record_path = iso_run_root() / request.run_id / "artifacts" / "apply_rename_record.csv"
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    operation_by_source = {str(operation.source): operation for operation in operations}
+    columns = [
+        "selected",
+        "page",
+        "source_name",
+        "serial",
+        "line_no",
+        "new_name",
+        "status",
+        "confidence",
+        "note",
+        "vision_message",
+        "source_path",
+        "target_path",
+        "target_name",
+        "created_at",
+    ]
+    with record_path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            operation = operation_by_source.get(str(row.get("source_path") or ""))
+            source = operation.source if operation is not None else Path(str(row.get("source_path") or ""))
+            target = operation.target if operation is not None else Path(str(row.get("target_path") or ""))
+            exported_row = {column: row.get(column, "") for column in columns}
+            exported_row["selected"] = True
+            exported_row["source_path"] = str(source)
+            exported_row["target_path"] = str(target)
+            exported_row["target_name"] = target.name
+            exported_row["created_at"] = created_at
+            writer.writerow(exported_row)
+    return {"path": str(record_path), "row_count": len(rows)}
 
 
 def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:

@@ -386,9 +386,9 @@ RENAMES_FILES       = "renames_files"
 WRITES_PROFILE      = "writes_profile"
 
 AUTO_ALLOWED = frozenset({MAY_WRITE_PAGE_PDFS, WRITES_JOB_FILES, WRITES_ISO_RUN_LOG,
-                          WRITES_CSV, WRITES_DEBUG_BUNDLE, SPAWNS_WORKER})
-GUARDED      = frozenset({RENAMES_FILES, WRITES_PROFILE})
-REPLAY_HARD_BLOCKED = frozenset({RENAMES_FILES, WRITES_PROFILE})   # replay 無任何旗標可解
+                          WRITES_DEBUG_BUNDLE, SPAWNS_WORKER})
+GUARDED      = frozenset({RENAMES_FILES, WRITES_PROFILE, WRITES_CSV})
+REPLAY_HARD_BLOCKED = frozenset({RENAMES_FILES, WRITES_PROFILE, WRITES_CSV})   # replay 無任何旗標可解
 
 @dataclass(frozen=True)
 class SideEffectPolicy:
@@ -653,6 +653,8 @@ $nodes.<node_id>.outputs.<port>
       "node_id": "export_csv",
       "node_type": "iso.export_plan_csv",
       "display_name": "匯出命名草稿 CSV",
+      "enabled": false,
+      "requires_confirm": true,
       "inputs": {
         "rows": "$nodes.batch_detect.outputs.rows",
         "work_folder": "$workflow.inputs.work_folder"
@@ -694,7 +696,7 @@ $nodes.<node_id>.outputs.<port>
 | 6 | `iso.batch_detect_serials` | `start_batch_detect()` + `iso_job_status()` 輪詢 + 逾時 `cancel_iso_job()` | `page_folder: path`（**required**）、`iso_list`、`sheet_name`、`serial_col?`、`line_col?`、`pattern`、`detect_serials: bool`、`confidence_threshold`、`serial_region: json?`、`drawing_region: json?`、`work_folder` | `rows: rows`、`result: plan`、`job: json`、`iso_run_log: json`（public_run_ref） | `wait_for_completion: bool=true`、`poll_interval_ms: number=500`、`timeout_s: number=900` | `writes_job_files`、`writes_iso_run_log`、`spawns_worker`（皆 auto） |
 | 7 | `iso.pilot_report` | `pilot_report()` | `rows: rows`（**required**）、`work_folder`、`confidence_threshold` | `pilot_results: json`、`pilot_summary: json` | — | 無（rows 餵入即純；validate 強制 rows 已接線） |
 | 8 | `iso.roi_distribution` | `roi_distribution()` | `rows: rows`（**required**）、`confidence_threshold: number` | `distribution: json` | — | 無（同上，rows 必接） |
-| 9 | `iso.export_plan_csv` | `export_plan_csv()` | `rows: rows`（**required**）、`work_folder: path` | `export_path: path`、`row_count: number`、`selected_count: number` | `export_path: text=""`（空 = 用 `_default_export_path`） | `writes_csv`（auto） |
+| 9 | `iso.export_plan_csv` | `export_plan_csv()` | `rows: rows`（**required**）、`work_folder: path` | `export_path: path`、`row_count: number`、`selected_count: number` | `export_path: text=""`（空 = 用 `_default_export_path`） | `writes_csv`（**guarded**；B10 壓力測試後修訂） |
 | 10 | `iso.export_debug_bundle` | `export_debug_bundle()` | `run_id: text`（required，**指既有 ISO run id**，通常接 `$nodes.batch_detect.outputs.iso_run_log` 的 run_id 欄位） | `bundle_path: path` | `export_path: text=""` | `writes_debug_bundle`（auto） |
 | 11 | `iso.save_draft_profile` | `save_iso_draft_profile()` | `profile: profile`（required）、`work_folder: path` | `profile: profile`、`saved: bool` | — | `writes_profile`（**guarded**）；spec `guarded=True`、`requires_confirm_default=True` |
 | 12 | `iso.apply_rename` | `_validate_operations()` + `_apply_operations()`（即 `apply_iso_plan()` 的核心；dry_run 走 validate-only） | `rows: rows`（required） | `renamed: json`（操作清單）、`renamed_count: number`、`dry_run: bool` | `only_ready: bool=true`、`dry_run: bool=true` | `renames_files`（**guarded**）；`requires_confirm_default=True` |
@@ -939,7 +941,7 @@ $py = ".venv\Scripts\python.exe"
   "mode": "run",
   "workflow_id": "iso_pdf_safe_poc",
   "graph_hash": "sha256:...",
-  "status": "completed_with_blocked",
+  "status": "completed",
   "started_at": "2026-06-10T14:30:00", "ended_at": "...", "duration_ms": 84211,
   "policy": {
     "mode": "run",
@@ -974,6 +976,13 @@ $py = ".venv\Scripts\python.exe"
       "iso_run_log_written": true,
       "error": null
     },
+    "export_csv": {
+      "status": "skipped_disabled",
+      "side_effects": [
+        {"kind": "writes_csv", "decision": "skipped_disabled", "at": "…", "detail": {}}
+      ],
+      "outputs": {}, "error": null
+    },
     "apply_rename": {
       "status": "skipped_disabled",
       "side_effects": [
@@ -983,9 +992,9 @@ $py = ".venv\Scripts\python.exe"
     }
   },
   "side_effect_summary": {
-    "executed":        [{"node_id": "split", "kind": "may_write_page_pdfs"}, {"node_id": "export_csv", "kind": "writes_csv"}, "…"],
+    "executed":        [{"node_id": "split", "kind": "may_write_page_pdfs"}, {"node_id": "batch_detect", "kind": "writes_job_files"}, "…"],
     "blocked":         [],
-    "skipped":         [{"node_id": "apply_rename", "kind": "renames_files", "reason": "skipped_disabled"}],
+    "skipped":         [{"node_id": "export_csv", "kind": "writes_csv", "reason": "skipped_disabled"}, {"node_id": "apply_rename", "kind": "renames_files", "reason": "skipped_disabled"}],
     "simulated":       []
   },
   "issues": []
@@ -1071,7 +1080,7 @@ repo 慣例就是 unittest 類（`tests/test_tauri_iso_workflow.py` 等 60+ 檔�
 20. split_pdf：combine → executed + `<stem>_pages` 出現；再跑一次 → skipped_not_needed（既有頁資料夾）
 21. build_plan：接 split 的 page_folder → rows/summary 與直呼 `build_iso_plan(page_folder=...)` 等價（欄位逐一比對）；validate 拒絕缺 page_folder 的接線（WF015）
 22. pilot_report/roi_distribution：餵 rows → 輸出含 P01-P15 id 集合不變（**凍結契約斷言**：`{r["id"] for r in pilot_results} ⊇ {"P01",...,"P12"}` 且順序不重排）；validate 拒絕 rows 未接線
-23. export_plan_csv：executed → CSV 存在、行數正確、utf-8-sig；dry_run → 檔案不存在 + simulated/skipped 記錄
+23. export_plan_csv：run + `--allow writes_csv` + `--confirm export_csv` → CSV 存在、行數正確、utf-8-sig；未授權 → `blocked_policy` 且檔案不存在；dry_run → 檔案不存在 + skipped 記錄
 24. batch_detect adapter：monkeypatch `launcher.app.tauri_iso_workflow._spawn_iso_worker` 為同步呼叫 `tauri_iso_worker.run_job(job_dir)`（既有測試同款手法），detect_serials=False → 輪詢完成、rows 正確、job files 存在、`iso_run_log_written=true` 且 ISO run dir 有 run.json；timeout 路徑：worker 不跑 → 假時鐘逾時 → cancel.json 出現 + node failed
 25. load_iso_table/load_profile/discover_sources：純讀煙霧測試
 
@@ -1209,7 +1218,7 @@ repo 慣例就是 unittest 類（`tests/test_tauri_iso_workflow.py` 等 60+ 檔�
 | 模式 | 讀什麼 | 寫什麼 | 鎖 |
 |---|---|---|---|
 | 一鍵 | `workflows/iso_pdf_default.workflow.json`（`metadata.locked: true` + 釘 `graph_hash`） | 只給 workflow_inputs（資料夾/檔案路徑） | 圖結構/params 全鎖；hash 不符即拒跑 |
-| 工作台 | run log 的 per-node outputs（rows/issues/pilot_results 餵現有 PilotStrip/NamingTable） | 重跑安全 node（run-node 白名單：pilot/roi_dist/export_csv） | 不可改圖、不可改 params |
+| 工作台 | run log 的 per-node outputs（rows/issues/pilot_results 餵現有 PilotStrip/NamingTable） | 重跑安全 node（run-node 白名單：pilot/roi_dist）；CSV 只允許使用者明確匯出 | 不可改圖、不可改 params |
 | 調校 | 同上 + NodeSpec.params_schema 自動生表單 | 白名單 node 的 params overlay（`{node_id: {param: value}}` 蓋在鎖定圖上，不落盤原圖） | 可改 params；不可增刪 node/edge |
 | 節點式 | 全部 | nodes/edges/params/enabled/policy；另存新 workflow JSON | 進階模式入口藏在調校頁；guarded node 視覺強標 |
 
@@ -1266,7 +1275,7 @@ type NodeSpecJson = {
 **驗收（Phase 7 完成的定義）**
 - [x] `list-nodes` 列 12 個 node、guarded 標記正確。
 - [x] `validate` 對 §4.2 圖 0 error；推導 edges 與預期 5 條一致。
-- [x] 樣本 run：summary `4 ready / 0 warn / 0 blocked`、CSV 存在、`apply_rename=skipped_disabled`、run_log.json 的 `side_effect_summary.executed` 恰為 split(視情況)/job/iso_run_log/worker/csv。
+- [x] 樣本 run：summary `4 ready / 0 warn / 0 blocked`、CSV 存在、`apply_rename=skipped_disabled`、run_log.json 的 `side_effect_summary.executed` 恰為 split(視情況)/job/iso_run_log/worker/csv。**歷史驗收；B10 壓力測試後已修訂為 safe run 不產生 CSV，見 §15.7。**
 - [x] `replay --run <剛才>`：零新寫入（auto writes 為 `blocked_replay`，side-effect nodes 走 `replay_hydrated`；disabled apply 保持 `skipped_disabled`）、pilot 重算結果一致。
 - [x] enabled+allow+confirm+dry_run=false 在**測試 tmp 資料**上真的 rename 成功；同設定 replay 仍 blocked。
 - [x] 完工 handoff 寫明：跑過的指令原文、無法跑的指令與原因、side-effect 證據（events.jsonl 摘錄）、剩餘風險。
@@ -1322,9 +1331,9 @@ Phase 1-6 已在前序 commits 完成：
   - `batch_detect.rows -> apply_rename.rows`
 - 樣本 run：`wf-20260610-102926-6184bb`，status=`completed`。
   - rows：4 筆，status 分布 `{ready: 4}`，selected=4。
-  - CSV：`iso_rename_plan_20260610_102927.csv` 已落地，4 rows。
+  - CSV：`iso_rename_plan_20260610_102927.csv` 已落地，4 rows。**歷史驗收；B10 後 safe POC 的 `export_csv` 預設 disabled。**
   - `apply_rename`：status=`skipped_disabled`，decision=`skipped_disabled`，未 rename。
-  - executed side effects：`may_write_page_pdfs`、`writes_job_files`、`spawns_worker`、`writes_iso_run_log`、`writes_csv`。
+  - executed side effects：`may_write_page_pdfs`、`writes_job_files`、`spawns_worker`、`writes_iso_run_log`、`writes_csv`。**歷史驗收；現行 safe run 不應包含 `writes_csv executed`。**
 - replay：`wf-20260610-103017-0ceeae`，status=`completed_with_blocked`（CLI 以非 0 表示有 side effect 被擋，屬預期）。
   - executed side effects：0。
   - blocked：`may_write_page_pdfs`、`writes_job_files`、`writes_iso_run_log`、`spawns_worker`、`writes_csv` 全部 `blocked_replay`。
@@ -1401,3 +1410,30 @@ Phase 1-6 已在前序 commits 完成：
 ### 15.6 下一個 Codex 指令
 
 讀 `docs/iso_pdf_workflow_bridge_phase_plan_2026-06-10.md`，從 Phase B1 開始照做：驗 HEAD 與 git status → tag `iso-workflow-poc-v1` @ `858a7fe` → `--no-ff` merge `codex/iso-node-workflow-poc` → `codex/tauri-react-spike` → 開 `codex/iso-workflow-bridge` → commit 文件 → 依序 B2（runner backend）、B3（唯讀 inspector）、B4（safe-run）。每 phase 一 commit，B2/B4 為可停靠 checkpoint，B4 完成即停工待命。
+
+### 15.7 壓力測試後修訂（2026-06-10，B10-B11）
+
+Deepseek V4 Pro 以 QA/防爆角色針對 `C:\Users\a0976\Downloads\t` 與 `.runtime` 殘留檔做壓力測試/靜態追蹤，確認 `iso_rename_plan_*.csv` 污染主因有三層：
+
+1. Safe POC graph 內含 `export_csv` 節點，且安全模式會執行。
+2. `writes_csv` 被列為 `AUTO_ALLOWED`，所以 workflow run 不需授權即可寫 CSV。
+3. React/Tauri apply 流程在真正更名前會先呼叫 `exportIsoPlanCsv()`，把「更名記錄」與「使用者匯出」混在同一條路徑，預設寫到工作資料夾並使用時間戳檔名。
+
+已完成修訂：
+
+- **B10 `4373b05`**：`writes_csv` 自 `AUTO_ALLOWED` 移到 `GUARDED`；`REPLAY_HARD_BLOCKED` 納入 `writes_csv`；`iso.export_plan_csv` spec 標為 guarded；safe POC graph 的 `export_csv` 預設 `enabled=false` 且 `requires_confirm=true`；前端節點式檢視把 CSV 寫出顯示為 guarded。新增測試確認 safe POC 不再在工作資料夾產生 `iso_rename_plan_*.csv`。
+- **B11**：apply / one-click apply 不再先呼叫 `exportIsoPlanCsv()`；後端 `apply` 在 ISO run log 目錄下寫固定 artifact：`.runtime/runs/iso/<run_id>/artifacts/apply_rename_record.csv`，並於 response 回傳 `record_path` / `record_row_count`。手動「匯出 CSV」仍保留為使用者明確動作。
+
+現行契約：
+
+- `workflow_run` safe mode / Inspector safe run **不應產生** `iso_rename_plan_*.csv`。
+- `writes_csv` 必須有 explicit allow + confirm；前端沒有提供這條授權路徑。
+- `apply` 的更名記錄屬 runtime artifact，不屬使用者工作資料夾輸出。
+- 只有使用者點「匯出 CSV」才應在工作資料夾或指定路徑產生命名草稿 CSV。
+
+仍留給下一份 Fable 5 施工書裁決：
+
+- P4/P5：手動匯出 CSV 的預設檔名是否從 `iso_rename_plan_<timestamp>.csv` 改為固定檔名或 `.runtime/exports/`；若保留時間戳，需 retention policy。
+- P8/P9：CSV 被 Excel 鎖定時的錯誤訊息與 preflight 檢查。
+- 自動化壓力測試：把「重複 safe run 10 次不污染工作資料夾」「apply 只寫 run artifact」「slider 不觸發 workflow_run」納入可重複測試。
+- 下一階段若要做 React Flow / 節點畫布，CSV / rename / profile 三類 guarded side effect 必須在 UI 上有同等強度的鎖定語言，不得因畫布互動變成快捷執行。
