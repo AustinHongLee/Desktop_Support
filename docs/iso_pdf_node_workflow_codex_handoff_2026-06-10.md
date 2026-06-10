@@ -1362,3 +1362,42 @@ Phase 1-6 已在前序 commits 完成：
 1. 先在 Tauri action append `workflow_list_nodes`、`workflow_load`、`workflow_validate`，只讀 JSON，不跑長任務。
 2. 再接 `workflow_run` / `workflow_run_status` / `workflow_cancel`，沿用 job dir + polling，不引入 streaming。
 3. 最後才做節點式畫布；畫布只編輯 graph JSON，guarded node 在 UI 上強標，`allow` / `confirm` 每次執行明文送後端，不做 session 級解鎖。
+---
+
+## 15. POC 收尾裁決與 Bridge Phase 銜接（2026-06-10 架構審查）
+
+> 本節為 append-only 附錄。§13 的禁止事項自此「對 POC 期封存生效」：它們約束的是 POC（Phase 0-7）期間的施工，後續階段的邊界以各階段施工書為準。§0-§14 原文不改。
+
+### 15.1 POC 完成點
+
+- POC 正式完成點 = commit `858a7fe`（docs(iso-workflow): add safe poc workflow and handoff），以 annotated tag `iso-workflow-poc-v1` 釘住。
+- 交付：workflow engine（schema/registry/policy/executor/run log/replay/CLI 五指令）+ 12 個 ISO nodes + 兩層 side-effect policy + `iso_pdf_safe_poc.workflow.json`。
+
+### 15.2 6f9dbdc 的定位（裁決：保留）
+
+- `6f9dbdc feat(iso-workflow): expose readonly workflow bridge` 超出 §10/§13 的 Phase 7 bound（docs-only、不加 Tauri action、不碰前端），屬**文件邊界違規**；但其內容恰為 §12.2 表格前三列（`workflow_list_nodes` / `workflow_load` / `workflow_validate`）的正確實作：append-only request 欄位、純讀、lazy import、既有 21 action schema 零變動，且已通過 npm build + workflow 40 tests + 回歸 28 tests。
+- 裁決：**保留原地，追認為下一階段（Post-POC Bridge Phase）的 B0 commit**。不 revert、不 cherry-pick、不 reset。
+- 矛盾消解：§13 禁止事項對 POC 期封存；Bridge 期的禁止事項見 `docs/iso_pdf_workflow_bridge_phase_plan_2026-06-10.md`（6f9dbdc 已逐條對照通過）。
+
+### 15.3 防再犯規則（自本節起生效）
+
+1. 任何超出當期施工書 bound 的變更，必須先在對應施工書 append 修訂節、再動工。
+2. commit message 必須帶當期 phase 代號（Bridge 期為 B0-B4）。
+3. 每期結束以 annotated tag 收口；「完成點」只認 tag，不認記憶。
+
+### 15.4 下一階段（指針）
+
+- 下一階段唯一 active 施工入口：`docs/iso_pdf_workflow_bridge_phase_plan_2026-06-10.md`。
+- 優先序裁決：合流整理 → workflow_run/status/cancel job runner（job dir + polling，沿用 `start_batch_detect` 同構模式）→ 唯讀 Workflow Inspector（調校 > 進階）→ Inspector safe-run；畫布與一鍵換軌不在本期。
+- 安全鐵則延續：前端不存在傳遞 `workflow_allow`/`workflow_confirm` 的程式路徑；replay 對 `renames_files`/`writes_profile` 硬封鎖（action 層 + 引擎層雙重）；`workflow_run` 只能由使用者點擊觸發，任何 onChange/useEffect 不得執行；真 rename 僅 CLI 三重門檻。
+
+### 15.5 已知風險（移交時點）
+
+1. `origin/codex/tauri-react-spike` 仍停在 `ff03fb2`，POC 六 commit 未合回主線（Bridge B1 處理）。
+2. Linux 沙箱掛載視圖對最近寫入的檔案可能呈現尾端截斷（含 `.git/HEAD` 視圖）；Windows 端以 `git status`/`git symbolic-ref HEAD` 為準，沙箱端讀真內容用 `git show <ref>:<path>`。
+3. 工作樹有 `frontend/tauri-spike/src/App.tsx` 一行空白殘留（B1 `git restore` 清掉）。
+4. `workflow_load`/`workflow_validate` 的 `_resolve_workflow_path` 接受任意絕對路徑（信任操作者本機輸入）；Bridge B2 的 `workflow_run` 維持同信任模型，但 allow/confirm 白名單與 replay 拒 allow 在 action 層強制。
+
+### 15.6 下一個 Codex 指令
+
+讀 `docs/iso_pdf_workflow_bridge_phase_plan_2026-06-10.md`，從 Phase B1 開始照做：驗 HEAD 與 git status → tag `iso-workflow-poc-v1` @ `858a7fe` → `--no-ff` merge `codex/iso-node-workflow-poc` → `codex/tauri-react-spike` → 開 `codex/iso-workflow-bridge` → commit 文件 → 依序 B2（runner backend）、B3（唯讀 inspector）、B4（safe-run）。每 phase 一 commit，B2/B4 為可停靠 checkpoint，B4 完成即停工待命。
