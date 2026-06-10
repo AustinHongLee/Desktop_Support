@@ -74,9 +74,11 @@ import { IsoPlanTable } from "./components/NamingTable";
 import { RunLogDrawer } from "./components/RunLogDrawer";
 import {
   compactPath,
+  buildWorkflowInputsOverlay,
   createIsoRunId,
   DEFAULT_DRAWING_REGION,
   DEFAULT_SERIAL_REGION,
+  diffOverlayAgainstProfile,
   filterIsoRows,
   formatIsoFilename,
   localizeIsoDisplayText,
@@ -168,6 +170,7 @@ export function IsoBoard() {
   const oneClickActiveRef = useRef(false);
   const terminalRef = useRef<HTMLDivElement | null>(null);
   const previewCacheRef = useRef(new Map<string, IsoPreviewPayload>());
+  const workflowSafeRunRef = useRef<(() => void) | null>(null);
 
   function requestPayload(rows?: IsoPlanRow[], overrides: Partial<IsoWorkflowRequest> = {}) {
     return {
@@ -1330,19 +1333,23 @@ export function IsoBoard() {
       updateRoi={updateRoi}
     />
   );
-  const workflowInspectorInputs = useMemo(() => ({
-    work_folder: workFolder || null,
-    combine_pdf: combinePdf || null,
-    iso_list: isoList || null,
-    sheet_name: sheetName || "",
-    serial_col: serialCol === "" ? null : serialCol,
-    line_col: lineCol === "" ? null : lineCol,
+  const workflowInspectorInputs = useMemo(() => buildWorkflowInputsOverlay({
+    workFolder,
+    combinePdf,
+    isoList,
+    sheetName,
+    serialCol,
+    lineCol,
     pattern,
-    detect_serials: detectSerials,
-    confidence_threshold: confidenceThreshold,
-    serial_region: serialRegion,
-    drawing_region: drawingRegion,
+    detectSerials,
+    confidenceThreshold,
+    serialRegion,
+    drawingRegion,
   }), [combinePdf, confidenceThreshold, detectSerials, drawingRegion, isoList, lineCol, pattern, serialCol, serialRegion, sheetName, workFolder]);
+  const overlayDiffs = useMemo(() => diffOverlayAgainstProfile(workflowInspectorInputs, profile), [profile, workflowInspectorInputs]);
+  function verifyCurrentTuningWithWorkflow() {
+    workflowSafeRunRef.current?.();
+  }
   const isEngineerView = isoView === "engineer";
 
   return (
@@ -1485,8 +1492,16 @@ export function IsoBoard() {
             workFolder={workFolder}
             onPilotAutoFix={() => void generatePlan()}
             onPilotJump={handlePilotJump}
+            workflowInputs={workflowInspectorInputs}
+            overlayDiffs={overlayDiffs}
+            onVerifyWorkflowTuning={verifyCurrentTuningWithWorkflow}
           />
-          <WorkflowInspector workflowInputs={workflowInspectorInputs} />
+          <WorkflowInspector
+            workflowInputs={workflowInspectorInputs}
+            registerSafeRun={(runner) => {
+              workflowSafeRunRef.current = runner;
+            }}
+          />
         </>
       ) : (
         <WorkbenchView

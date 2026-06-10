@@ -7,6 +7,7 @@ import type { IsoPilotItem, IsoPlanRow, IsoRoiDistribution, IsoWorkflowPlan } fr
 import { PathPickerRow } from "./components/IsoControls";
 import { PilotListPanel } from "./components/PilotListPanel";
 import { RoiSamplePanel } from "./components/RoiSamplePanel";
+import type { OverlayDiffEntry } from "./helpers";
 
 export function EngineerView({
   activeProfileFolderReady,
@@ -58,10 +59,13 @@ export function EngineerView({
   startBatchDetect,
   serialCol,
   visualPanel,
+  workflowInputs,
+  overlayDiffs,
   issueCount,
   workFolder,
   onPilotAutoFix,
   onPilotJump,
+  onVerifyWorkflowTuning,
 }: {
   activeProfileFolderReady: boolean;
   batchRunning: boolean;
@@ -112,12 +116,16 @@ export function EngineerView({
   startBatchDetect: () => void;
   serialCol: number | "";
   visualPanel: ReactNode;
+  workflowInputs: Record<string, unknown>;
+  overlayDiffs: OverlayDiffEntry[];
   issueCount: number;
   workFolder: string;
   onPilotAutoFix?: (item: IsoPilotItem) => void;
   onPilotJump?: (item: IsoPilotItem) => void;
+  onVerifyWorkflowTuning: () => void;
 }) {
   const hasStaleDraft = pilotItems.some((item) => item.freshness === "stale");
+  const workflowInputCount = Object.values(workflowInputs).filter((value) => value !== null && value !== undefined && value !== "").length;
 
   return (
     <div className="iso-engineer-grid">
@@ -231,6 +239,33 @@ export function EngineerView({
             <span className="engineer-meta-chip">設定檔 <strong>{hasPublishedProfile ? "已發布" : hasDraftProfile ? "草稿" : "未發布"}</strong></span>
             <span className="engineer-meta-chip">已選 <strong>{selectedCount} / {rowCount}</strong></span>
             <span className={`engineer-meta-chip ${issueCount ? "warn" : "ready"}`}>問題 <strong>{issueCount}</strong></span>
+          </div>
+          <div className="engineer-workflow-overlay-card">
+            <div className="engineer-overlay-head">
+              <div>
+                <div className="eyebrow">節點流程驗證</div>
+                <strong>目前調校 overlay</strong>
+                <span>{workflowInputCount} 個 workflow inputs · node params 維持圖內預設</span>
+              </div>
+              <button className="action-button" type="button" onClick={onVerifyWorkflowTuning}>
+                <ShieldCheck size={15} />
+                <span>以節點流程驗證目前調校</span>
+              </button>
+            </div>
+            <div className="engineer-overlay-diff-list">
+              {overlayDiffs.length ? overlayDiffs.map((diff) => (
+                <div className="engineer-overlay-diff" key={diff.field}>
+                  <span>{diff.label}</span>
+                  <code title={diff.profileValue}>設定檔：{diff.profileValue}</code>
+                  <strong title={diff.currentValue}>目前：{diff.currentValue}</strong>
+                </div>
+              )) : (
+                <div className="engineer-overlay-diff ready">
+                  <span>設定檔一致</span>
+                  <strong>目前調校與已載入設定檔一致</strong>
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

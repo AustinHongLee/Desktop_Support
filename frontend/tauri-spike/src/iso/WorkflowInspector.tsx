@@ -28,14 +28,17 @@ import {
   type IsoNodeWorkflowValidationPayload,
 } from "../isoWorkflow";
 import { compactPath } from "./helpers";
+import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
 
 type WorkflowInspectorProps = {
   workflowInputs?: Record<string, unknown>;
+  registerSafeRun?: (runner: () => void) => void;
 };
 
-export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProps) {
+export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: WorkflowInspectorProps) {
+  const [expanded, setExpanded] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -49,6 +52,7 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
   const [safeRunBusy, setSafeRunBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [job, setJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
+  const [projectionRunId, setProjectionRunId] = useState("");
 
   const specByType = useMemo(() => {
     const entries = (nodeCatalog?.nodes ?? []).map((spec) => [spec.node_type, spec] as const);
@@ -82,6 +86,7 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
         setRunError(next.error || "");
         if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
           await refreshRuns(next.workflow_run_id);
+          setProjectionRunId(next.workflow_run_id);
         }
       } catch (caught) {
         if (!cancelled) {
@@ -97,16 +102,24 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
     };
   }, [job?.workflow_job_id, job?.state]);
 
+  useEffect(() => {
+    registerSafeRun?.(() => {
+      void openAndRequestSafeRun();
+    });
+    return () => registerSafeRun?.(() => {});
+  }, [registerSafeRun, loaded, graph, workflowInputs, safeRunReady, safeRunBusy, job?.state]);
+
   function handleToggle(event: SyntheticEvent<HTMLDetailsElement>) {
+    setExpanded(event.currentTarget.open);
     if (event.currentTarget.open && !loaded && !loading) {
       void refresh();
     }
   }
 
-  async function refresh() {
+  async function refresh(): Promise<IsoNodeWorkflowValidationPayload | null> {
     if (!isTauri()) {
       setError("請用 Tauri 桌面版讀取節點工作流。");
-      return;
+      return null;
     }
     setLoading(true);
     setError("");
@@ -126,8 +139,10 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
       } else {
         setRunLog(null);
       }
+      return graphPayload;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+      return null;
     } finally {
       setLoading(false);
     }
@@ -157,13 +172,20 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
     }
   }
 
-  function requestSafeRun() {
+  async function openAndRequestSafeRun() {
+    setExpanded(true);
+    const nextGraph = loaded ? graph : await refresh();
+    requestSafeRun(nextGraph ?? graph);
+  }
+
+  function requestSafeRun(nextGraph: IsoNodeWorkflowValidationPayload | null = graph) {
     if (!isTauri()) {
       setRunError("請用 Tauri 桌面版執行節點工作流。");
       return;
     }
-    if (!safeRunReady) {
-      setRunError(safeRunBlockReason(graph?.valid === true, hasPdfSource, hasIsoSource));
+    const graphValid = nextGraph?.valid === true;
+    if (!graphValid || !hasPdfSource || !hasIsoSource) {
+      setRunError(safeRunBlockReason(graphValid, hasPdfSource, hasIsoSource));
       return;
     }
     setRunError("");
@@ -186,6 +208,7 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
       setSafeRunConfirmOpen(false);
       if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
         await refreshRuns(next.workflow_run_id);
+        setProjectionRunId(next.workflow_run_id);
       }
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
@@ -211,7 +234,7 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
   }
 
   return (
-    <details style={styles.shell} onToggle={handleToggle}>
+    <details style={styles.shell} open={expanded} onToggle={handleToggle}>
       <summary style={styles.summary}>
         <span style={styles.title}>
           <GitBranch size={16} />
@@ -237,7 +260,7 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
               <RefreshCcw size={15} />
               <span>{loading ? "讀取中" : "重新整理"}</span>
             </button>
-            <button className="action-button" type="button" onClick={requestSafeRun} disabled={!canRunSafe}>
+            <button className="action-button" type="button" onClick={() => requestSafeRun()} disabled={!canRunSafe}>
               <ShieldCheck size={15} />
               <span>{safeRunBusy || isWorkflowJobRunning(job) ? "執行中" : "執行安全模式"}</span>
             </button>
@@ -396,12 +419,19 @@ export function WorkflowInspector({ workflowInputs = {} }: WorkflowInspectorProp
                       ))}
                       {runLog && !Object.keys(runLog.nodes).length ? <EmptyLine text="此紀錄沒有節點狀態。" /> : null}
                     </div>
+                    <button className="action-button" type="button" onClick={() => setProjectionRunId(selectedRun.run_id)}>
+                      <FileSearch size={14} />
+                      <span>以投影檢視</span>
+                    </button>
                   </>
                 ) : (
                   <EmptyLine text="沒有可讀取的紀錄。" />
                 )}
               </div>
             </div>
+            {projectionRunId ? (
+              <WorkflowRunPlanPanel fixedRunId={projectionRunId} />
+            ) : null}
           </section>
         </div>
         {safeRunConfirmOpen ? (

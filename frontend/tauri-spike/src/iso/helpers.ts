@@ -2,6 +2,7 @@ import type {
   IsoPilotItem,
   IsoPilotNextAction,
   IsoPlanRow,
+  IsoProfilePayload,
   IsoRegion,
   IsoRowStatus,
   IsoRunLogSummary,
@@ -9,6 +10,27 @@ import type {
 } from "../isoWorkflow";
 
 export type IsoSortMode = "page" | "status" | "confidence" | "filename";
+
+export type WorkflowInputsOverlayState = {
+  workFolder: string;
+  combinePdf: string;
+  isoList: string;
+  sheetName: string;
+  serialCol: number | "";
+  lineCol: number | "";
+  pattern: string;
+  detectSerials: boolean;
+  confidenceThreshold: number;
+  serialRegion: IsoRegion;
+  drawingRegion: IsoRegion;
+};
+
+export type OverlayDiffEntry = {
+  field: string;
+  label: string;
+  profileValue: string;
+  currentValue: string;
+};
 
 export const DEFAULT_SERIAL_REGION: IsoRegion = { left: 0.62, top: 0, width: 0.38, height: 0.24 };
 export const DEFAULT_DRAWING_REGION: IsoRegion = { left: 0.5, top: 0.66, width: 0.5, height: 0.34 };
@@ -19,6 +41,77 @@ const ISO_STATUS_ORDER: Record<IsoRowStatus, number> = {
   ready: 2,
   idle: 3,
 };
+
+// Tuning overlay contract: only workflow_inputs live here. Node params such as
+// wait_for_completion, timeout_s, only_ready, dry_run stay owned by the graph.
+export function buildWorkflowInputsOverlay(state: WorkflowInputsOverlayState): Record<string, unknown> {
+  return {
+    work_folder: state.workFolder || null,
+    combine_pdf: state.combinePdf || null,
+    iso_list: state.isoList || null,
+    sheet_name: state.sheetName || "",
+    serial_col: state.serialCol === "" ? null : state.serialCol,
+    line_col: state.lineCol === "" ? null : state.lineCol,
+    pattern: state.pattern,
+    detect_serials: state.detectSerials,
+    confidence_threshold: state.confidenceThreshold,
+    serial_region: state.serialRegion,
+    drawing_region: state.drawingRegion,
+  };
+}
+
+export function diffOverlayAgainstProfile(overlay: Record<string, unknown>, profile: IsoProfilePayload | null): OverlayDiffEntry[] {
+  if (!profile || !(profile.exists || profile.published_exists || profile.draft_exists)) {
+    return [];
+  }
+  const checks: Array<[string, string, unknown, unknown]> = [
+    ["iso_list", "ISO 清單", overlay.iso_list, profile.iso_list_path],
+    ["sheet_name", "工作表", overlay.sheet_name, profile.sheet_name],
+    ["serial_col", "流水號欄", overlay.serial_col, profile.serial_col],
+    ["line_col", "圖號欄", overlay.line_col, profile.line_col],
+    ["pattern", "命名格式", overlay.pattern, profile.pattern],
+    ["confidence_threshold", "信心門檻", overlay.confidence_threshold, profile.confidence_threshold],
+    ["serial_region", "流水號 ROI", overlay.serial_region, profile.serial_region],
+    ["drawing_region", "圖號 ROI", overlay.drawing_region, profile.drawing_region],
+  ];
+  return checks
+    .filter(([, , currentValue, profileValue]) => stableValue(currentValue) !== stableValue(profileValue))
+    .map(([field, label, currentValue, profileValue]) => ({
+      field,
+      label,
+      currentValue: formatOverlayValue(currentValue),
+      profileValue: formatOverlayValue(profileValue),
+    }));
+}
+
+export function formatOverlayValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") {
+    return "自動";
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : "自動";
+  }
+  if (typeof value === "boolean") {
+    return value ? "開啟" : "關閉";
+  }
+  if (typeof value === "string") {
+    return compactPath(value);
+  }
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function stableValue(value: unknown): string {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value.toFixed(6) : String(value);
+  }
+  if (typeof value === "object" && value !== null) {
+    return JSON.stringify(value, Object.keys(value).sort());
+  }
+  return String(value ?? "");
+}
 
 export function compactPath(path: string): string {
   const parts = path.replace(/\//g, "\\").split("\\").filter(Boolean);

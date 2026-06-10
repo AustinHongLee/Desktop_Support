@@ -2787,6 +2787,92 @@ h3 {
   background: rgba(255, 209, 102, 0.052);
 }
 
+.engineer-workflow-overlay-card {
+  min-width: 0;
+  display: grid;
+  gap: 9px;
+  border: 1px solid rgba(47, 245, 200, 0.18);
+  border-radius: 10px;
+  padding: 10px;
+  background: rgba(47, 245, 200, 0.04);
+}
+
+.engineer-overlay-head {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.engineer-overlay-head > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.engineer-overlay-head strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.engineer-overlay-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.engineer-overlay-diff-list {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.engineer-overlay-diff {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(88px, 0.42fr) minmax(120px, 1fr) minmax(120px, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(255, 209, 102, 0.16);
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: rgba(0, 0, 0, 0.13);
+}
+
+.engineer-overlay-diff.ready {
+  grid-template-columns: minmax(88px, 0.42fr) minmax(0, 1fr);
+  border-color: rgba(47, 245, 200, 0.2);
+}
+
+.engineer-overlay-diff span {
+  color: rgba(47, 245, 200, 0.86);
+  font-size: 11px;
+  font-weight: 920;
+}
+
+.engineer-overlay-diff code,
+.engineer-overlay-diff strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engineer-overlay-diff code {
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.engineer-overlay-diff strong {
+  color: var(--text-strong);
+  font-size: 11px;
+  font-weight: 900;
+}
+
 .engineer-preview-stage {
   min-width: 0;
   display: grid;
