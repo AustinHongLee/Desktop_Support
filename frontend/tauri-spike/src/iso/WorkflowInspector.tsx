@@ -28,6 +28,7 @@ import {
   type IsoNodeWorkflowValidationPayload,
 } from "../isoWorkflow";
 import { compactPath } from "./helpers";
+import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
@@ -56,6 +57,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
   const [localJob, setLocalJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
   const [projectionRunId, setProjectionRunId] = useState("");
   const [graphCopied, setGraphCopied] = useState(false);
+  const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState("");
   const job = workflowJob === undefined ? localJob : workflowJob;
   const updateJob = setWorkflowJob ?? setLocalJob;
 
@@ -64,6 +66,9 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
     return new Map(entries);
   }, [nodeCatalog]);
   const graphNodes = graph?.graph?.nodes ?? [];
+  const selectedCanvasNode = graphNodes.find((node) => node.node_id === selectedCanvasNodeId) ?? null;
+  const selectedCanvasSpec = selectedCanvasNode ? specByType.get(selectedCanvasNode.node_type) : undefined;
+  const selectedCanvasLog = selectedCanvasNode ? runLog?.nodes?.[selectedCanvasNode.node_id] : undefined;
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
   const summary = job?.result?.side_effect_summary ?? selectedRun?.side_effect_summary ?? runLog?.side_effect_summary;
   const blockedCount = summary?.blocked?.length ?? 0;
@@ -372,6 +377,38 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
 
           <section style={styles.sectionWide}>
             <SectionHead icon={<Route size={16} />} title="Safe POC Graph" meta={graph?.workflow_id || graph?.graph?.workflow_id || "等待"} />
+            <WorkflowCanvas payload={graph} runLog={runLog} selectedNodeId={selectedCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />
+            {selectedCanvasNode ? (
+              <div style={styles.canvasDetail}>
+                <div style={styles.canvasDetailHead}>
+                  <strong>{selectedCanvasNode.display_name || selectedCanvasSpec?.display_name || selectedCanvasNode.node_id}</strong>
+                  <code style={styles.code}>{selectedCanvasNode.node_type}</code>
+                  <span>{selectedCanvasLog?.status ? statusLabel(selectedCanvasLog.status) : selectedCanvasNode.enabled === false ? "停用" : "尚無紀錄"}</span>
+                </div>
+                <div style={styles.canvasDetailGrid}>
+                  <div>
+                    <small>參數</small>
+                    <pre style={styles.compactPre}>{JSON.stringify(selectedCanvasNode.params ?? {}, null, 2)}</pre>
+                  </div>
+                  <div>
+                    <small>副作用</small>
+                    <div style={styles.previewList}>
+                      {(selectedCanvasLog?.side_effects ?? []).length ? (selectedCanvasLog?.side_effects ?? []).map((record) => (
+                        <span style={styles.previewRow} key={`${record.kind}-${record.decision}`}>
+                          <em>{sideEffectLabel(record.kind)}</em>
+                          <code style={styles.code}>{record.decision}</code>
+                        </span>
+                      )) : (
+                        <span style={styles.previewRow}>
+                          <em>宣告</em>
+                          <code style={styles.code}>{(selectedCanvasNode.side_effects?.length ? selectedCanvasNode.side_effects : selectedCanvasSpec?.side_effects ?? []).map(sideEffectLabel).join(" / ") || "純讀"}</code>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div style={styles.topology}>
               {(graph?.topology ?? []).map((nodeId) => (
                 <span style={styles.topologyStep} key={nodeId}>{nodeId}</span>
@@ -943,6 +980,41 @@ const styles = {
     fontSize: 11,
     gap: 4,
     padding: "2px 7px",
+  },
+  canvasDetail: {
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(47,245,200,0.18)",
+    borderRadius: 8,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    padding: 10,
+  },
+  canvasDetailGrid: {
+    display: "grid",
+    gap: 10,
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    minWidth: 0,
+  },
+  canvasDetailHead: {
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
+    minWidth: 0,
+  },
+  compactPre: {
+    background: "rgba(0,0,0,0.22)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 7,
+    color: "rgba(220,235,228,0.78)",
+    fontSize: 11,
+    lineHeight: 1.45,
+    margin: "5px 0 0",
+    maxHeight: 120,
+    overflow: "auto",
+    padding: 8,
+    whiteSpace: "pre-wrap",
   },
   topology: {
     display: "flex",

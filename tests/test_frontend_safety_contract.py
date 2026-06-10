@@ -48,6 +48,17 @@ def test_safe_poc_keeps_csv_export_and_apply_disabled() -> None:
     assert nodes["apply_rename"]["requires_confirm"] is True
 
 
+def test_workflow_canvas_is_readonly_display_only() -> None:
+    text = (FRONTEND_SRC / "iso" / "WorkflowCanvas.tsx").read_text(encoding="utf-8")
+    for token in ("runIsoNodeWorkflowSafe", "workflow_run", "applyIsoPlan", "exportIsoPlanCsv"):
+        assert token not in text
+    assert "nodesConnectable={false}" in text
+    assert "deleteKeyCode={null}" in text
+    assert "onConnect" not in text
+    assert "onNodesDelete" not in text
+    assert "guarded：需 CLI 三因子授權" in text
+
+
 def test_policy_keeps_guarded_side_effects_out_of_auto_and_replay() -> None:
     guarded = {RENAMES_FILES, WRITES_PROFILE, WRITES_CSV}
     assert GUARDED == guarded
