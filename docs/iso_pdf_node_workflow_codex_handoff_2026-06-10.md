@@ -1084,7 +1084,7 @@ repo 慣例就是 unittest 類（`tests/test_tauri_iso_workflow.py` 等 60+ 檔�
 - 驗證：`& $py -m pytest tests\test_iso_workflow_apply_safety.py -q`。
 
 ### Phase 7 — 示範圖 + 樣本驗證 + docs
-- 新增：`workflows/iso_pdf_safe_poc.workflow.json`；修改：`docs/iso_pdf_current_status.md`（加一節 Node Workflow POC 狀態）、新增 `docs/iso_pdf_node_workflow_handoff_<date>.md`（完工報告：跑過的指令、樣本結果、side-effect 證據、限制）。
+- 新增：`workflows/iso_pdf_safe_poc.workflow.json`；修改本文件的完成狀態 / 驗證段落。若需要另存完工報告，放到 `docs/archive/iso_pdf/node_workflow/iso_pdf_node_workflow_handoff_<date>.md`，不要再把新的 root-level docs 留在 `docs/`。
 - 完成標準：樣本資料（`C:\Users\a0976\Downloads\t`）端到端 run：summary 4 ready/0 warn/0 blocked、CSV 落地、apply skipped_disabled、replay 零寫入。與一鍵（start_batch_detect 路徑）對同輸入的 rows 數/狀態分布等價。
 - 沒有樣本資料的環境：用測試 fixtures 自動生成等價小樣本跑通即可，並在 handoff 註明。
 
@@ -1188,7 +1188,7 @@ type NodeSpecJson = {
 - [ ] Phase 4：建 `adapters/iso_request.py` + 純讀 nodes（§5 #1,3,4,5,7,8）+ 測項 21/22/25。Commit：`feat(iso-workflow): wrap read-only iso actions as nodes`。
 - [ ] Phase 5：split/export/debug_bundle/batch_detect nodes（§5 #2,6,9,10）+ 測項 20/23/24。Commit：`feat(iso-workflow): add auto side-effect nodes with worker polling`。
 - [ ] Phase 6：apply_rename/save_draft_profile（§5 #11,12）+ `test_iso_workflow_apply_safety.py` 測項 26-32 全綠。Commit：`feat(iso-workflow): add guarded apply and draft profile nodes`。
-- [ ] Phase 7：`workflows/iso_pdf_safe_poc.workflow.json`（§4.2 原樣）+ 樣本端到端 + 更新 `docs/iso_pdf_current_status.md` + 寫完工 handoff md。Commit：`docs(iso-workflow): add safe poc workflow and handoff`。
+- [ ] Phase 7：`workflows/iso_pdf_safe_poc.workflow.json`（§4.2 原樣）+ 樣本端到端 + 更新本文件的完成狀態；若要另寫完工 handoff，放入 `docs/archive/iso_pdf/node_workflow/`。Commit：`docs(iso-workflow): add safe poc workflow and handoff`。
 
 **每個 phase 的不變檢查（做完就跑）**
 - [ ] `git diff --stat` 只含本 phase 預期檔案；`frontend/`、`launcher/app/tauri_iso_workflow.py`、`launcher/app/tauri_iso_worker.py`、PyQt 檔案、`iso_tools/{pilot,run_log,profile,...}.py` 永遠零 diff（adapters 只 import 不修改）。
