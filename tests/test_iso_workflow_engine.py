@@ -7,7 +7,7 @@ from pathlib import Path
 
 from launcher.plugins.iso_tools.workflow.executor import replay_workflow, run_workflow, topological_order, validate_graph
 from launcher.plugins.iso_tools.workflow.nodes.base import WorkflowNode
-from launcher.plugins.iso_tools.workflow.policy import RENAMES_FILES, WRITES_CSV, SideEffectPolicy
+from launcher.plugins.iso_tools.workflow.policy import RENAMES_FILES, WRITES_JOB_FILES, SideEffectPolicy
 from launcher.plugins.iso_tools.workflow.registry import NodeRegistry
 from launcher.plugins.iso_tools.workflow.schema import NodeSpec, PortSpec, normalize_graph
 
@@ -33,11 +33,11 @@ class EffectNode(WorkflowNode):
         description="Auto side-effect fake node.",
         inputs=(PortSpec("value", "json"),),
         outputs=(PortSpec("value", "json"),),
-        side_effects=(WRITES_CSV,),
+        side_effects=(WRITES_JOB_FILES,),
     )
 
     def run(self, ctx):
-        decision = ctx.request_side_effect(WRITES_CSV, {"path": "fake.csv"})
+        decision = ctx.request_side_effect(WRITES_JOB_FILES, {"path": "fake.json"})
         if decision != "executed":
             ctx.mark_blocked(decision)
         return {"value": decision}
@@ -69,7 +69,7 @@ class MissingDecisionNode(WorkflowNode):
         description="Declares an effect but does not request it.",
         inputs=(PortSpec("value", "json"),),
         outputs=(PortSpec("value", "json"),),
-        side_effects=(WRITES_CSV,),
+        side_effects=(WRITES_JOB_FILES,),
     )
 
     def run(self, ctx):
@@ -173,7 +173,7 @@ class IsoWorkflowEngineTests(unittest.TestCase):
                         "node_type": "test.effect",
                         "enabled": False,
                         "inputs": {"value": "x"},
-                        "side_effects": [WRITES_CSV],
+                        "side_effects": [WRITES_JOB_FILES],
                     }
                 ],
                 inputs={},
@@ -188,7 +188,7 @@ class IsoWorkflowEngineTests(unittest.TestCase):
     def test_missing_side_effect_decision_fails_node(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             graph = _graph(
-                [{"node_id": "effect", "node_type": "test.missing_decision", "inputs": {"value": "x"}, "side_effects": [WRITES_CSV]}],
+                [{"node_id": "effect", "node_type": "test.missing_decision", "inputs": {"value": "x"}, "side_effects": [WRITES_JOB_FILES]}],
                 inputs={},
             )
 
@@ -201,7 +201,7 @@ class IsoWorkflowEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run_root = Path(tmp)
             graph = _graph(
-                [{"node_id": "effect", "node_type": "test.effect", "inputs": {"value": "x"}, "side_effects": [WRITES_CSV]}],
+                [{"node_id": "effect", "node_type": "test.effect", "inputs": {"value": "x"}, "side_effects": [WRITES_JOB_FILES]}],
                 inputs={},
             )
             first = run_workflow(graph, registry=self.registry, run_root=run_root)

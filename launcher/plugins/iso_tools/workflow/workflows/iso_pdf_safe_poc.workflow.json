@@ -2,7 +2,7 @@
   "schema_version": 1,
   "workflow_id": "iso_pdf_safe_poc",
   "display_name": "ISO PDF 安全節點流程 POC",
-  "description": "discover -> split(顯式) -> load table -> batch detect -> pilot/roi -> export csv。apply 預設 disabled。",
+  "description": "discover -> split(顯式) -> load table -> batch detect -> pilot/roi。CSV export / apply 預設 disabled。",
   "inputs": {
     "work_folder": null,
     "combine_pdf": null,
@@ -106,6 +106,8 @@
       "node_id": "export_csv",
       "node_type": "iso.export_plan_csv",
       "display_name": "匯出命名草稿 CSV",
+      "enabled": false,
+      "requires_confirm": true,
       "inputs": {
         "rows": "$nodes.batch_detect.outputs.rows",
         "work_folder": "$workflow.inputs.work_folder"

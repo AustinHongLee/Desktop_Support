@@ -371,7 +371,8 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
             <div style={styles.graphNodes}>
               {graphNodes.map((node) => {
                 const spec = specByType.get(node.node_type);
-                const guarded = Boolean(spec?.guarded || node.requires_confirm);
+                const effects = node.side_effects?.length ? node.side_effects : spec?.side_effects ?? [];
+                const guarded = Boolean(spec?.guarded || node.requires_confirm || effects.some(isGuardedEffect));
                 const disabled = node.enabled === false;
                 const jobNode = job?.nodes?.[node.node_id] ?? job?.result?.nodes?.[node.node_id];
                 const nodeStatus = typeof jobNode?.status === "string" ? jobNode.status : "";
@@ -383,7 +384,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
                     <span>{guarded ? <Lock size={13} /> : <CircleCheck size={13} />}</span>
                     <strong>{node.display_name || spec?.display_name || node.node_id}</strong>
                     <code style={styles.code}>{node.node_id}</code>
-                    <em>{nodeStatus ? statusLabel(nodeStatus) : disabled ? "停用" : statusTextForNode(node.node_type, spec?.side_effects ?? [])}</em>
+                    <em>{nodeStatus ? statusLabel(nodeStatus) : disabled ? "停用" : statusTextForNode(node.node_type, effects)}</em>
                   </div>
                 );
               })}
@@ -540,7 +541,7 @@ function buildSideEffectPreview(
     return effects.map((effect) => ({
       effect,
       enabled: node.enabled !== false,
-      guarded: Boolean(spec?.guarded || node.requires_confirm),
+      guarded: Boolean(spec?.guarded || node.requires_confirm || isGuardedEffect(effect)),
       nodeId: node.node_id,
       nodeLabel: node.display_name || spec?.display_name || node.node_id,
     }));
@@ -641,6 +642,10 @@ function nodeTone(effects: string[], guarded: boolean) {
   if (guarded) return "#ffd166";
   if (effects.length) return "#7fd7ff";
   return "#2ff5c8";
+}
+
+function isGuardedEffect(effect: string) {
+  return ["renames_files", "writes_profile", "writes_csv"].includes(effect);
 }
 
 function statusTextForNode(nodeType: string, effects: string[]) {

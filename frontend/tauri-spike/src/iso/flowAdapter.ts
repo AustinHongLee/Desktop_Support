@@ -43,7 +43,7 @@ export function graphToFlow(payload: IsoNodeWorkflowValidationPayload): { nodes:
         nodeType: node.node_type,
         displayName: node.display_name || node.node_id,
         enabled: node.enabled !== false,
-        guarded: requiresConfirm || sideEffects.includes("renames_files") || sideEffects.includes("writes_profile"),
+        guarded: requiresConfirm || sideEffects.some((effect) => ["renames_files", "writes_profile", "writes_csv"].includes(effect)),
         requiresConfirm,
         sideEffects,
         params: { ...(node.params ?? {}) },

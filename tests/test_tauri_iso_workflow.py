@@ -139,6 +139,7 @@ class TauriIsoWorkflowTests(unittest.TestCase):
 
         self.assertEqual(nodes["node_count"], 12)
         guarded = {item["node_type"]: item for item in nodes["nodes"] if item.get("guarded")}
+        self.assertEqual(guarded["iso.export_plan_csv"]["side_effects"], ["writes_csv"])
         self.assertEqual(guarded["iso.apply_rename"]["side_effects"], ["renames_files"])
         self.assertEqual(guarded["iso.save_draft_profile"]["side_effects"], ["writes_profile"])
         self.assertTrue(loaded["valid"])

@@ -25,7 +25,7 @@ from launcher.plugins.iso_tools.workflow.nodes.pilot import PilotReportNode, Roi
 from launcher.plugins.iso_tools.workflow.nodes.plan import BuildPlanNode
 from launcher.plugins.iso_tools.workflow.nodes.profile import LoadProfileNode, SaveDraftProfileNode
 from launcher.plugins.iso_tools.workflow.nodes.sources import DiscoverSourcesNode, SplitPdfNode
-from launcher.plugins.iso_tools.workflow.policy import RENAMES_FILES, WRITES_CSV
+from launcher.plugins.iso_tools.workflow.policy import RENAMES_FILES, WRITES_JOB_FILES
 from launcher.plugins.iso_tools.workflow.registry import get_registry
 
 
@@ -148,7 +148,7 @@ class IsoWorkflowJobTests(unittest.TestCase):
                         IsoWorkflowRequest(
                             action="workflow_run",
                             workflow=_load_table_graph(),
-                            workflow_allow=(WRITES_CSV,),
+                            workflow_allow=(WRITES_JOB_FILES,),
                         )
                     )
 

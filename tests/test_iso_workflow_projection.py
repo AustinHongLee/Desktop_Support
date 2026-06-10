@@ -151,8 +151,10 @@ class IsoWorkflowProjectionTests(unittest.TestCase):
                     detect_serials=False,
                 )
             )
+            exported_csv = list(sample.glob("iso_rename_plan_*.csv"))
 
         self.assertEqual(result["status"], "completed")
+        self.assertEqual(exported_csv, [])
         self.assertEqual(_row_digest(projected["rows"]), _row_digest(legacy["rows"]))
 
 

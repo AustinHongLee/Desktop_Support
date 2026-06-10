@@ -20,12 +20,17 @@ describe("flowAdapter", () => {
   it("maps guarded and disabled node flags into node data and enabled patches", () => {
     const flow = graphToFlow(safePocPayload);
     const apply = flow.nodes.find((node) => node.id === "apply_rename");
+    const exportCsv = flow.nodes.find((node) => node.id === "export_csv");
     const patch = flowToGraphPatch(flow.nodes);
 
     expect(apply?.data.guarded).toBe(true);
     expect(apply?.data.requiresConfirm).toBe(true);
     expect(apply?.data.enabled).toBe(false);
+    expect(exportCsv?.data.guarded).toBe(true);
+    expect(exportCsv?.data.requiresConfirm).toBe(true);
+    expect(exportCsv?.data.enabled).toBe(false);
     expect(patch.find((item) => item.node_id === "apply_rename")).toEqual({ node_id: "apply_rename", enabled: false });
+    expect(patch.find((item) => item.node_id === "export_csv")).toEqual({ node_id: "export_csv", enabled: false });
   });
 });
 
@@ -43,6 +48,7 @@ const safePocPayload = {
     { from_node: "split", from_output: "page_folder", to_node: "batch_detect", to_input: "page_folder" },
     { from_node: "batch_detect", from_output: "rows", to_node: "pilot", to_input: "rows" },
     { from_node: "batch_detect", from_output: "result", to_node: "pilot", to_input: "plan" },
+    { from_node: "batch_detect", from_output: "rows", to_node: "export_csv", to_input: "rows" },
     { from_node: "batch_detect", from_output: "rows", to_node: "apply_rename", to_input: "rows" },
   ],
   graph: {
@@ -63,6 +69,15 @@ const safePocPayload = {
         side_effects: ["writes_job_files", "writes_iso_run_log", "spawns_worker"],
       },
       { node_id: "pilot", node_type: "iso.pilot_report", display_name: "Pilot 檢查", inputs: {}, enabled: true },
+      {
+        node_id: "export_csv",
+        node_type: "iso.export_plan_csv",
+        display_name: "匯出命名草稿 CSV",
+        inputs: {},
+        enabled: false,
+        requires_confirm: true,
+        side_effects: ["writes_csv"],
+      },
       {
         node_id: "apply_rename",
         node_type: "iso.apply_rename",

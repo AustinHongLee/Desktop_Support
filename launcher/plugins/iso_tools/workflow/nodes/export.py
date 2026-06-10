@@ -33,6 +33,8 @@ class ExportPlanCsvNode(WorkflowNode):
         ),
         params_schema={"export_path": {"type": "text", "default": ""}},
         side_effects=(WRITES_CSV,),
+        guarded=True,
+        requires_confirm_default=True,
     )
 
     def validate(self, instance: NodeInstance, graph: WorkflowGraph) -> list[ValidationIssue]:

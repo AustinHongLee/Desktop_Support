@@ -6,6 +6,7 @@ from launcher.plugins.iso_tools.workflow.errors import UndeclaredSideEffectError
 from launcher.plugins.iso_tools.workflow.policy import (
     RENAMES_FILES,
     WRITES_CSV,
+    WRITES_JOB_FILES,
     SideEffectGate,
     SideEffectPolicy,
 )
@@ -14,10 +15,34 @@ from launcher.plugins.iso_tools.workflow.policy import (
 class IsoWorkflowPolicyTests(unittest.TestCase):
     def test_auto_allowed_runs_without_confirm(self) -> None:
         gate = SideEffectGate(
-            node_id="export",
-            declared_effects=(WRITES_CSV,),
+            node_id="batch",
+            declared_effects=(WRITES_JOB_FILES,),
             requires_confirm=False,
             policy=SideEffectPolicy(mode="run"),
+        )
+
+        self.assertEqual(gate.request(WRITES_JOB_FILES), "executed")
+
+    def test_csv_export_is_guarded_and_blocks_without_allow(self) -> None:
+        gate = SideEffectGate(
+            node_id="export",
+            declared_effects=(WRITES_CSV,),
+            requires_confirm=True,
+            policy=SideEffectPolicy(mode="run"),
+        )
+
+        self.assertEqual(gate.request(WRITES_CSV), "blocked_policy")
+
+    def test_csv_export_executes_with_allow_and_confirm(self) -> None:
+        gate = SideEffectGate(
+            node_id="export",
+            declared_effects=(WRITES_CSV,),
+            requires_confirm=True,
+            policy=SideEffectPolicy(
+                mode="run",
+                allowed_guarded=frozenset({WRITES_CSV}),
+                confirmed_nodes=frozenset({"export"}),
+            ),
         )
 
         self.assertEqual(gate.request(WRITES_CSV), "executed")
@@ -68,20 +93,20 @@ class IsoWorkflowPolicyTests(unittest.TestCase):
 
     def test_replay_auto_side_effect_requires_include_flag(self) -> None:
         blocked = SideEffectGate(
-            node_id="export",
-            declared_effects=(WRITES_CSV,),
+            node_id="batch",
+            declared_effects=(WRITES_JOB_FILES,),
             requires_confirm=False,
             policy=SideEffectPolicy(mode="replay"),
         )
         allowed = SideEffectGate(
-            node_id="export",
-            declared_effects=(WRITES_CSV,),
+            node_id="batch",
+            declared_effects=(WRITES_JOB_FILES,),
             requires_confirm=False,
             policy=SideEffectPolicy(mode="replay", include_auto_in_replay=True),
         )
 
-        self.assertEqual(blocked.request(WRITES_CSV), "blocked_replay")
-        self.assertEqual(allowed.request(WRITES_CSV), "executed")
+        self.assertEqual(blocked.request(WRITES_JOB_FILES), "blocked_replay")
+        self.assertEqual(allowed.request(WRITES_JOB_FILES), "executed")
 
     def test_undeclared_side_effect_raises(self) -> None:
         gate = SideEffectGate(
