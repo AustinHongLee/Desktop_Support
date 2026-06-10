@@ -6,11 +6,14 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
 
 from launcher.app import tauri_iso_workflow
 from launcher.app.tauri_iso_worker import run_job
+from launcher.core.paths import runtime_root
+from launcher.plugins.iso_tools.workflow.context import json_safe
 from launcher.plugins.iso_tools.workflow import nodes as _registered_nodes  # noqa: F401 - registers node classes
 from launcher.plugins.iso_tools.workflow.projection import plan_from_run
 from launcher.plugins.iso_tools.workflow.schema import load_workflow
@@ -74,6 +77,70 @@ def run_parity(inputs: dict[str, Any], *, workflow_path: Path = SAFE_WORKFLOW_PA
         workflow_result = run_workflow(workflow, inputs=inputs, run_root=workflow_root / "runs")
         workflow_plan = plan_from_run(Path(str(workflow_result["run_dir"])))
     return compare_plans(legacy_plan, workflow_plan)
+
+
+def parity_report_root() -> Path:
+    return runtime_root() / ".runtime" / "runs" / "parity"
+
+
+def default_parity_report_path(now: datetime | None = None) -> Path:
+    now = now or datetime.now()
+    stamp = now.strftime("%Y%m%d_%H%M%S")
+    return parity_report_root() / f"{stamp}_{uuid.uuid4().hex[:6]}" / "report.json"
+
+
+def write_parity_report(
+    report: ParityReport,
+    *,
+    path: Path | None = None,
+    inputs: dict[str, Any] | None = None,
+    workflow_path: Path | None = None,
+    work_dir: Path | None = None,
+) -> Path:
+    target = path or default_parity_report_path()
+    payload = report.to_payload()
+    payload.update(
+        {
+            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "inputs_digest": _digest(json_safe(inputs or {})),
+            "workflow_path": str(workflow_path or SAFE_WORKFLOW_PATH),
+            "work_dir": str(work_dir or ""),
+        }
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(json_safe(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return target
+
+
+def list_parity_reports(*, root: Path | None = None, limit: int = 20) -> dict[str, Any]:
+    report_root = root or parity_report_root()
+    reports: list[dict[str, Any]] = []
+    if report_root.exists():
+        for path in report_root.glob("*/report.json"):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            reports.append(
+                {
+                    "created_at": str(payload.get("created_at") or path.parent.name),
+                    "equal": bool(payload.get("equal")),
+                    "violation_count": len(payload.get("violations") or []),
+                    "acceptable_diff_count": len(payload.get("acceptable_diffs") or []),
+                    "inputs_digest": str(payload.get("inputs_digest") or ""),
+                    "legacy_digest": str(payload.get("legacy_digest") or ""),
+                    "workflow_digest": str(payload.get("workflow_digest") or ""),
+                    "report_path": str(path),
+                }
+            )
+    reports.sort(key=lambda item: (item["created_at"], item["report_path"]), reverse=True)
+    return {
+        "schema_version": 1,
+        "action": "workflow_parity_history",
+        "report_root": str(report_root),
+        "report_count": len(reports),
+        "reports": reports[: max(0, limit)],
+    }
 
 
 def _run_legacy_batch(inputs: dict[str, Any], work_dir: Path) -> dict[str, Any]:

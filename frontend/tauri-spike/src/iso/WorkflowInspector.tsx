@@ -15,6 +15,7 @@ import type { CSSProperties, ReactNode, SyntheticEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   cancelIsoWorkflowJob,
+  listIsoParityReports,
   listIsoWorkflowNodes,
   listIsoWorkflowRuns,
   loadIsoWorkflowJobStatus,
@@ -26,6 +27,7 @@ import {
   type IsoNodeWorkflowRunLog,
   type IsoNodeWorkflowRunSummary,
   type IsoNodeWorkflowValidationPayload,
+  type IsoParityReportSummary,
 } from "../isoWorkflow";
 import { compactPath } from "./helpers";
 import { WorkflowCanvas } from "./WorkflowCanvas";
@@ -49,6 +51,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
   const [nodeCatalog, setNodeCatalog] = useState<IsoNodeWorkflowListPayload | null>(null);
   const [graph, setGraph] = useState<IsoNodeWorkflowValidationPayload | null>(null);
   const [runs, setRuns] = useState<IsoNodeWorkflowRunSummary[]>([]);
+  const [parityReports, setParityReports] = useState<IsoParityReportSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runLog, setRunLog] = useState<IsoNodeWorkflowRunLog | null>(null);
   const [safeRunConfirmOpen, setSafeRunConfirmOpen] = useState(false);
@@ -135,14 +138,16 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
     setLoading(true);
     setError("");
     try {
-      const [nodesPayload, graphPayload, runsPayload] = await Promise.all([
+      const [nodesPayload, graphPayload, runsPayload, parityPayload] = await Promise.all([
         listIsoWorkflowNodes(),
         loadIsoNodeWorkflow(SAFE_WORKFLOW_PATH),
         listIsoWorkflowRuns(),
+        listIsoParityReports(),
       ]);
       setNodeCatalog(nodesPayload);
       setGraph(graphPayload);
       setRuns(runsPayload.runs);
+      setParityReports(parityPayload.reports);
       setLoaded(true);
       const runId = selectedRunId || runsPayload.runs[0]?.run_id || "";
       if (runId) {
@@ -507,6 +512,25 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
             {projectionRunId ? (
               <WorkflowRunPlanPanel fixedRunId={projectionRunId} />
             ) : null}
+          </section>
+
+          <section style={styles.sectionFull}>
+            <SectionHead icon={<ShieldCheck size={16} />} title="換軌守門" meta={parityReports.length ? `${parityReports.length} 筆 parity` : "等待證據"} />
+            <div style={styles.gateNote}>
+              <span>D 期開工 gate：最近 5 筆 parity 全 equal，且至少 2 筆來自 real sample；C1 防污染套件維持綠燈；shadow run 設計書就緒。</span>
+              <code style={styles.code}>python -m launcher.plugins.iso_tools.workflow.cli parity-history --json</code>
+            </div>
+            <div style={styles.parityList}>
+              {parityReports.map((report) => (
+                <div style={{ ...styles.parityItem, borderColor: report.equal ? "rgba(47,245,200,0.32)" : "rgba(255,107,107,0.48)" }} key={report.report_path}>
+                  <strong>{report.equal ? "equal" : "violation"}</strong>
+                  <span>{report.created_at}</span>
+                  <em>{report.violation_count} violation · {report.acceptable_diff_count} accepted</em>
+                  <code style={styles.code}>{compactPath(report.report_path)}</code>
+                </div>
+              ))}
+              {loaded && !parityReports.length ? <EmptyLine text="尚無 parity 報告。請用 CLI 產生證據，不在 UI 直接觸發比對。" /> : null}
+            </div>
           </section>
         </div>
         {safeRunConfirmOpen ? (
@@ -1047,6 +1071,15 @@ const styles = {
     minWidth: 0,
     padding: "8px 9px",
   },
+  gateNote: {
+    background: "rgba(255,209,102,0.08)",
+    border: "1px solid rgba(255,209,102,0.22)",
+    borderRadius: 8,
+    color: "rgba(255,244,207,0.9)",
+    display: "grid",
+    gap: 7,
+    padding: 10,
+  },
   issueList: {
     color: "#ffd166",
     display: "flex",
@@ -1078,6 +1111,20 @@ const styles = {
     overflow: "auto",
     padding: 10,
     whiteSpace: "pre-wrap",
+  },
+  parityItem: {
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    display: "grid",
+    gap: 4,
+    minWidth: 0,
+    padding: "8px 10px",
+  },
+  parityList: {
+    display: "grid",
+    gap: 7,
+    minWidth: 0,
   },
   runLayout: {
     display: "grid",

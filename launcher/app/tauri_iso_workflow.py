@@ -182,6 +182,8 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return workflow_plan_from_run_action(request)
     if request.action == "workflow_read_artifact":
         return workflow_read_artifact_action(request)
+    if request.action == "workflow_parity_history":
+        return workflow_parity_history_action(request)
     raise ValueError(f"unknown action: {request.action}")
 
 
@@ -620,6 +622,12 @@ def workflow_read_artifact_action(request: IsoWorkflowRequest) -> dict[str, Any]
         "ref": ref,
         "payload": payload,
     }
+
+
+def workflow_parity_history_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
+    from launcher.plugins.iso_tools.workflow.parity import list_parity_reports
+
+    return list_parity_reports(limit=10)
 
 
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:

@@ -269,3 +269,66 @@ Pre-flight（不寫碼）：
 - 遇到邊界不明：停下，寫短報告（現況/選項/建議），不要自行擴大範圍。絕不做 D 期內容：不改一鍵執行路徑、不做畫布編輯、不做 shadow run。
 - C5 完成後：merge --no-ff 回 codex/tauri-react-spike、打 tag iso-workflow-c-v1、push、停工回報（檔案清單、命令輸出、parity 結果原文、build 體積增幅、限制與風險）。
 ```
+
+---
+
+## 11. Codex C 期完工 Postscript（2026-06-10）
+
+> 本節是實際施工履歷；上方 C0-C5 仍是任務契約。若下一輪規劃 D 期，請以本節作為已完成事實與殘留風險來源。
+
+### 11.1 已完成 commit
+
+| Phase | Commit | 內容 |
+|---|---|---|
+| C0 | `196e9b1 docs(iso-workflow): add c phase plan (C0)` | 新增 C phase active 施工書。 |
+| C1 | `5ab3465 test(iso-workflow): add anti-pollution regression suite and run dir guard (C1)` | 防污染測試、run_dir escape guard、frontend safety static tests。 |
+| C2 | `20aebe3 feat(iso-workflow): route manual csv exports to runtime exports dir with retention (C2)` | 手動 CSV 匯出預設改到 `.runtime/exports/iso/`、retention 50、Excel lock 中文錯誤。 |
+| C3 | `30cdac8 fix(iso-workflow): lift workflow job state to survive view switches (C3)` | workflow job 狀態提升到 `IsoBoard`，切 tab 不遺失執行中狀態。 |
+| C4 | `d77ee93 feat(iso-workflow): readonly react-flow canvas with guarded lock language (C4)` | `@xyflow/react` 唯讀畫布、guarded lock 視覺語言、靜態防爆契約。 |
+| C5 | `pending feat(iso-workflow): persist parity evidence and define switchover gate (C5)` | parity report 持久化、`parity-history` CLI、唯讀 Tauri history action、Inspector「換軌守門」。 |
+
+### 11.2 C5 real sample parity
+
+已用 `C:\Users\a0976\Downloads\t` 跑過一次 real sample parity，作為第一筆換軌證據：
+
+```text
+command:
+python -m launcher.plugins.iso_tools.workflow.cli parity --inputs-json .runtime\temp\poc_inputs.json --json
+
+result:
+equal: true
+violations: []
+acceptable_diff_count: 25
+legacy_digest: sha256:e1b8a6dfb31f03af9397656f19502e768539d42231dae1f1a33930bae55e3841
+workflow_digest: sha256:e1b8a6dfb31f03af9397656f19502e768539d42231dae1f1a33930bae55e3841
+report_path: C:\Users\a0976\Documents\GitHub\桌面輔助系統\.runtime\runs\parity\20260610_163537_10af21\report.json
+```
+
+`parity-history --json` 已可列出該筆：
+
+```text
+report_count: 1
+equal: true
+violation_count: 0
+acceptable_diff_count: 25
+created_at: 2026-06-10T16:35:37
+inputs_digest: sha256:0796c5efa2fc4c0e5d695f554cc0f3f864d273b3f3d6e77f0e97d9f2f02c4ef4
+```
+
+### 11.3 已跑過的驗證
+
+```powershell
+python -m pytest tests\test_iso_workflow_pollution.py tests\test_frontend_safety_contract.py tests\test_tauri_iso_workflow.py -q
+python -m pytest tests\test_iso_workflow_engine.py tests\test_iso_workflow_policy.py tests\test_iso_workflow_job.py tests\test_iso_workflow_projection.py tests\test_iso_workflow_parity.py tests\test_iso_workflow_parity_history.py -q
+cd frontend\tauri-spike
+npx tsc --noEmit
+npm run build
+npm run test:unit
+python -m launcher.plugins.iso_tools.workflow.cli parity-history --json
+```
+
+### 11.4 已知殘留與 D 期 gate
+
+- full `python -m pytest tests -q` 曾跑出 `439 passed, 2 failed`。兩個 failure 都在 `tests/test_smoke.py`，原因是舊 smoke 仍期待 `App.tsx` 中已不存在的 legacy 字串；非 C 期新增 regression，本期未修。
+- `npm run build` 因 React Flow 引入後出現 Vite chunk `>500 kB` warning；C4 已記錄 gzip JS 約 `95.15 kB -> 154.41 kB (+59.26 kB)`，C5 最新 build 約 `154.92 kB`。
+- D 期換軌 gate 不變：最近 5 筆 parity 全 equal、至少 2 筆 real sample、C1 防污染套件連續綠、shadow run 設計書完成。未達成前不得改 `AutopilotView` 一鍵執行路徑。
