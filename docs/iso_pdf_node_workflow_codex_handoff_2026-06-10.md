@@ -44,6 +44,74 @@
 
 ---
 
+## 0.2 Codex 執行流程摘要
+
+本節是 Codex 實際施工時的行動節奏。第 13 節的 checklist 仍是驗收規格；本節負責決定「先做什麼、在哪裡停、什麼不要混在一起做」。
+
+### 0.2.1 施工總原則
+
+- 不另開新 handoff md；本文件就是唯一 active 施工入口。
+- 不直接從 `main` 開工；以 `codex/tauri-react-spike` 為 base，真正施工才開 `codex/iso-node-workflow-poc`。
+- 每個 phase 做完就 commit；若環境不能 commit，就留下該 phase 的 diff 證據與驗證輸出。
+- `frontend/`、`launcher/app/tauri_iso_workflow.py`、`launcher/app/tauri_iso_worker.py`、PyQt legacy、`pilot.py` 先全部視為不可改區。
+- `.qwen/` 永遠不 stage。
+
+### 0.2.2 Phase 節奏
+
+| 節奏 | 範圍 | 目的 | 停靠點 |
+|---|---|---|---|
+| Phase 0 | git / branch / docs 狀態檢查 | 確認不是在髒工作樹或舊基底上施工 | 必做，不 commit |
+| Phase 1 | schema / registry / policy | 先建立靜態圖與 side-effect 規則 | 可 commit |
+| Phase 2 | context / executor / run_log / base node | 讓 FakeNode 圖可執行、可記錄、可 replay | 可 commit |
+| Phase 3 | CLI | 完成 `list-nodes / validate / run / run-node / replay` 骨架 | **Checkpoint A：可停、可推、可交接** |
+| Phase 4 | read-only ISO adapter nodes | 只接 `discover / load table / build plan / pilot / roi / load profile` | 可 commit |
+| Phase 5 | auto side-effect nodes | 接 `split / export csv / debug bundle / batch_detect worker`，不碰 rename | **Checkpoint B：可停、可推、可交接** |
+| Phase 6 | guarded nodes | 接 `apply_rename / save_draft_profile`，測安全閘門 | 必須獨立 commit |
+| Phase 7 | safe workflow JSON + 驗證紀錄 | 做樣本端到端與完成狀態補記 | docs-only commit |
+
+### 0.2.3 兩個停靠點
+
+Checkpoint A（Phase 3 完成）：
+
+- engine / policy / run log / CLI 已可用。
+- 還沒有碰 ISO backend、OCR、PDF 拆頁、CSV、rename。
+- 這是最低風險交接點；如果時間或環境卡住，優先停在這裡。
+
+Checkpoint B（Phase 5 完成）：
+
+- 已接上 ISO 純讀與 auto side-effect nodes。
+- `batch_detect` 已走現有 worker 模式，能記錄 job files / ISO run log / workflow run log。
+- 仍未啟用 guarded rename/profile；真實檔案命名風險還沒進場。
+
+### 0.2.4 絕對不要混做
+
+- Phase 5 和 Phase 6 不同 commit、不同驗證批次。
+- 不把 graph UI、React Flow、LiteGraph、Rete.js 混進 POC。
+- 不把 `ApplyRenameNode` 預設打開。
+- 不在 replay 執行 `renames_files` 或 `writes_profile`，任何 flag 都不例外。
+- 不為了 node workflow 改一鍵畫面；一鍵仍跑現有安全 UI。
+
+### 0.2.5 成功判斷
+
+第一輪先追求「引擎可靠」，不是「ISO 全功能已節點化」。
+
+最小成功線：
+
+1. CLI 能 validate / run / replay 一張 FakeNode workflow。
+2. run log 會落地並能 hydration artifacts。
+3. side-effect gate 能證明 auto / guarded / replay hard-block 三種情境。
+4. Phase 3 完成後可以安全交接，不留下半接線 ISO 狀態。
+
+完整 POC 成功線：
+
+1. `iso_pdf_safe_poc.workflow.json` 可跑。
+2. 樣本資料或 fixture 產生 rows / summary / Pilot P01-P15 / ROI distribution / CSV。
+3. `apply_rename` 預設 skipped/disabled。
+4. replay 零 rename、零 profile 寫入。
+5. 完成狀態寫回本文件；額外報告若需要，一律放 archive。
+
+---
+
 ## 1. 最終架構判斷
 
 ### 1.1 node-based workflow 在四模式中的位置
