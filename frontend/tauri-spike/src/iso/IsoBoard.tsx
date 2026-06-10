@@ -39,6 +39,8 @@ import {
   loadIsoProfile,
   loadIsoPreview,
   loadIsoRoiDistribution,
+  loadIsoSwitchoverGate,
+  loadIsoWorkflowJobStatus,
   listIsoRunLogs,
   pickIsoCombinePdf,
   pickIsoListFile,
@@ -49,6 +51,7 @@ import {
   replayIsoRunLog,
   revertIsoProfile,
   runIsoPlan,
+  runIsoShadowVerify,
   saveIsoDraftProfile,
   startIsoBatchDetect,
   type IsoJobPayload,
@@ -62,6 +65,7 @@ import {
   type IsoRunLogDetail,
   type IsoRunLogRef,
   type IsoRunLogSummary,
+  type IsoSwitchoverGateVerdict,
   type IsoWorkflowRequest,
   type IsoWorkflowPlan,
 } from "../isoWorkflow";
@@ -130,6 +134,11 @@ export function IsoBoard() {
   const [exportBusy, setExportBusy] = useState(false);
   const [batchJob, setBatchJob] = useState<IsoJobPayload | null>(null);
   const [workflowJob, setWorkflowJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
+  const [shadowJob, setShadowJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
+  const [shadowFlagEnabled, setShadowFlagEnabled] = useState(false);
+  const [gateVerdict, setGateVerdict] = useState<IsoSwitchoverGateVerdict | null>(null);
+  const [shadowBusy, setShadowBusy] = useState(false);
+  const [shadowError, setShadowError] = useState("");
   const [batchBusy, setBatchBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -280,6 +289,23 @@ export function IsoBoard() {
 
   function workflowJobRunningLabel(job: IsoNodeWorkflowJobPayload | null) {
     return job && ["queued", "running", "cancel_requested"].includes(job.state) ? "執行中" : "";
+  }
+
+  function workflowJobIsRunning(job: IsoNodeWorkflowJobPayload | null) {
+    return Boolean(workflowJobRunningLabel(job));
+  }
+
+  function shadowVerifyMessage(job: IsoNodeWorkflowJobPayload | null) {
+    const summary = job?.parity_summary;
+    if (!job) return "尚未執行。";
+    if (workflowJobIsRunning(job)) return `執行中 ${job.progress?.percent ?? 0}%`;
+    if (summary?.status === "recorded") {
+      if (summary.equal) return `影子一致 · accepted ${summary.acceptable_diff_count ?? 0}`;
+      return `發現差異 ${summary.violation_count ?? 0} 筆 · 到節點式查看`;
+    }
+    if (summary?.status === "shadow_failed") return `影子執行失敗 · ${summary.error || "請到節點式查看"}`;
+    if (job.error) return `影子執行失敗 · ${job.error}`;
+    return job.state === "completed" ? "影子完成，等待比對摘要。" : localizeIsoDisplayText(job.state || "待命");
   }
 
   function registerRunLog(ref?: IsoRunLogRef | null, fallbackRunId = "") {
@@ -728,6 +754,8 @@ export function IsoBoard() {
       setOneClickRunLog(null);
       setIsoFailure(null);
       setOneClickSummaryText("");
+      setShadowJob(null);
+      setShadowError("");
       setMessage("");
       return;
     }
@@ -768,6 +796,8 @@ export function IsoBoard() {
     setOneClickRunLog(null);
     setIsoFailure(null);
     setFailureCopied(false);
+    setShadowJob(null);
+    setShadowError("");
     oneClickActiveRef.current = true;
     try {
       const job = await startIsoBatchDetect({ ...requestPayload(undefined, { run_id: runId }), detect_serials: true });
@@ -904,6 +934,39 @@ export function IsoBoard() {
     }
   }
 
+  async function refreshGateStatus() {
+    if (!isTauri()) {
+      return;
+    }
+    try {
+      const next = await loadIsoSwitchoverGate();
+      setGateVerdict(next);
+      setShadowFlagEnabled(Boolean(next.shadow_flag_enabled));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function runShadowVerify() {
+    if (!batchJob?.job_id || workflowJobIsRunning(shadowJob)) {
+      return;
+    }
+    setShadowBusy(true);
+    setShadowError("");
+    setError("");
+    try {
+      const next = await runIsoShadowVerify(batchJob.job_id);
+      setShadowJob(next);
+      setMessage(shadowVerifyMessage(next));
+    } catch (caught) {
+      const detail = caught instanceof Error ? caught.message : String(caught);
+      setShadowError(detail);
+      setError(detail);
+    } finally {
+      setShadowBusy(false);
+    }
+  }
+
   function toggleRow(rowId: string) {
     updatePlanRows((rows) => rows.map((row) => row.id === rowId && row.status !== "blocked" ? { ...row, selected: !row.selected } : row));
   }
@@ -1012,6 +1075,10 @@ export function IsoBoard() {
   const detectDone = batchJob?.progress?.done ?? (plan ? plan.summary.total : 0);
   const detectTotal = batchJob?.progress?.total ?? plan?.summary.total ?? 0;
   const oneClickBusy = busy || batchBusy || applyBusy;
+  const shadowVerifyBusy = shadowBusy || workflowJobIsRunning(shadowJob);
+  const showShadowVerify = shadowFlagEnabled && Boolean(batchJob?.state === "completed") && (oneClickStage === "done" || oneClickStage === "review");
+  const shadowVerifyDisabled = !batchJob?.job_id || shadowVerifyBusy || Boolean(shadowJob && !workflowJobIsRunning(shadowJob));
+  const shadowVerifySummary = shadowError || shadowVerifyMessage(shadowJob);
   const activePilotText = oneClickRunning || oneClickApplying
     ? activePilotSummary(pilotItems, oneClickApplying ? "正在套用更名" : `判讀流水號 ${detectDone}/${detectTotal || "?"}`)
     : "";
@@ -1222,6 +1289,37 @@ export function IsoBoard() {
   }, [batchJob?.job_id, batchRunning, activeIsoRunId, oneClickRunLog]);
 
   useEffect(() => {
+    if (!shadowJob || !workflowJobIsRunning(shadowJob)) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void loadIsoWorkflowJobStatus(shadowJob.workflow_job_id)
+        .then((job) => {
+          if (cancelled) {
+            return;
+          }
+          setShadowJob(job);
+          if (!workflowJobIsRunning(job)) {
+            setMessage(shadowVerifyMessage(job));
+            void refreshGateStatus();
+          }
+        })
+        .catch((caught) => {
+          if (!cancelled) {
+            const detail = caught instanceof Error ? caught.message : String(caught);
+            setShadowError(detail);
+            setError(detail);
+          }
+        });
+    }, 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [shadowJob?.workflow_job_id, shadowJob?.state]);
+
+  useEffect(() => {
     if (!roiDraftDirty || isoView !== "engineer" || !isTauri()) {
       return;
     }
@@ -1323,10 +1421,11 @@ export function IsoBoard() {
   const overlayDiffs = useMemo(() => diffOverlayAgainstProfile(workflowInspectorInputs, profile), [profile, workflowInspectorInputs]);
   function verifyCurrentTuningWithWorkflow() {
     setPendingWorkflowVerify(true);
-    setIsoView("nodes");
+    openNodesView();
   }
   function openNodesView() {
     setIsoView("nodes");
+    void refreshGateStatus();
   }
   const isEngineerView = isoView === "engineer";
   const isNodesView = isoView === "nodes";
@@ -1361,7 +1460,7 @@ export function IsoBoard() {
               <Settings size={15} />
               <span>調校</span>
             </button>
-            <button className={isoView === "nodes" ? "active" : ""} onClick={() => setIsoView("nodes")} title="節點式：graph / run log / 進階檢視">
+            <button className={isoView === "nodes" ? "active" : ""} onClick={openNodesView} title="節點式：graph / run log / 進階檢視">
               <GitBranch size={15} />
               <span>節點式</span>
               {workflowJobLabel ? <small>{workflowJobLabel}</small> : null}
@@ -1416,7 +1515,12 @@ export function IsoBoard() {
           probableFailureCause={probableFailureCause}
           readyCount={readyCount}
           runOneClick={runOneClick}
+          runShadowVerify={() => void runShadowVerify()}
           selectedRowId={selectedRow?.id}
+          shadowVerifyBusy={shadowVerifyBusy}
+          shadowVerifyDisabled={shadowVerifyDisabled}
+          shadowVerifySummary={shadowVerifySummary}
+          showShadowVerify={showShadowVerify}
           successSummary={pilotSuccessSummary}
           terminalRef={terminalRef}
           warnCount={warnCount}
@@ -1488,6 +1592,10 @@ export function IsoBoard() {
           workflowInputs={workflowInspectorInputs}
           workflowJob={workflowJob}
           setWorkflowJob={setWorkflowJob}
+          gateVerdict={gateVerdict}
+          setGateVerdict={setGateVerdict}
+          shadowFlagEnabled={shadowFlagEnabled}
+          setShadowFlagEnabled={setShadowFlagEnabled}
           registerSafeRun={(runner) => {
             workflowSafeRunRef.current = runner;
             if (pendingWorkflowVerify) {

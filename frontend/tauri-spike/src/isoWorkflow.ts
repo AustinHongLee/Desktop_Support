@@ -33,7 +33,10 @@ export type IsoWorkflowAction =
   | "workflow_read_run_log"
   | "workflow_plan_from_run"
   | "workflow_read_artifact"
-  | "workflow_parity_history";
+  | "workflow_parity_history"
+  | "workflow_shadow_run"
+  | "workflow_set_shadow_flag"
+  | "workflow_switchover_gate";
 
 export interface IsoRegion {
   left: number;
@@ -188,6 +191,14 @@ export interface IsoParityReportSummary {
   inputs_digest: string;
   legacy_digest: string;
   workflow_digest: string;
+  trigger?: "cli" | "shadow" | string;
+  sample_kind?: "real" | "fixture" | "unknown" | string;
+  iso_job_id?: string;
+  workflow_run_id?: string;
+  timing?: {
+    legacy_ms?: number;
+    workflow_ms?: number;
+  };
   report_path: string;
 }
 
@@ -271,6 +282,15 @@ export interface IsoNodeWorkflowJobResult {
   error?: { type?: string; message?: string } | null;
 }
 
+export interface IsoNodeWorkflowParitySummary {
+  status?: "recorded" | "shadow_failed" | string;
+  equal?: boolean;
+  violation_count?: number;
+  acceptable_diff_count?: number;
+  report_path?: string;
+  error?: string;
+}
+
 export interface IsoNodeWorkflowJobPayload {
   schema_version: number;
   action: "workflow_job";
@@ -286,7 +306,26 @@ export interface IsoNodeWorkflowJobPayload {
   topology: string[];
   nodes: Record<string, IsoNodeWorkflowJobNode>;
   result: IsoNodeWorkflowJobResult | null;
+  parity_summary?: IsoNodeWorkflowParitySummary;
   error: string;
+}
+
+export interface IsoSwitchoverGateCondition {
+  id: string;
+  title: string;
+  met: boolean | null;
+  detail: string;
+}
+
+export interface IsoSwitchoverGateVerdict {
+  schema_version: number;
+  action: "workflow_switchover_gate";
+  ready: boolean;
+  headline: string;
+  conditions: IsoSwitchoverGateCondition[];
+  window: IsoParityReportSummary[];
+  evaluated_at: string;
+  shadow_flag_enabled?: boolean;
 }
 
 export interface IsoRunLogRef {
@@ -730,6 +769,18 @@ export async function listIsoWorkflowRuns(): Promise<IsoNodeWorkflowRunListPaylo
 
 export async function listIsoParityReports(): Promise<IsoParityHistoryPayload> {
   return invokeJson<IsoParityHistoryPayload>("run_iso_workflow", { action: "workflow_parity_history" });
+}
+
+export async function runIsoShadowVerify(jobId: string): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", { action: "workflow_shadow_run", job_id: jobId });
+}
+
+export async function loadIsoSwitchoverGate(): Promise<IsoSwitchoverGateVerdict> {
+  return invokeJson<IsoSwitchoverGateVerdict>("run_iso_workflow", { action: "workflow_switchover_gate" });
+}
+
+export async function setIsoShadowFlag(enabled: boolean): Promise<{ schema_version: number; action: "workflow_set_shadow_flag"; enabled: boolean; flag_path: string }> {
+  return invokeJson("run_iso_workflow", { action: "workflow_set_shadow_flag", workflow: { enabled } });
 }
 
 export async function readIsoWorkflowRunLog(runId: string): Promise<IsoNodeWorkflowRunLog> {

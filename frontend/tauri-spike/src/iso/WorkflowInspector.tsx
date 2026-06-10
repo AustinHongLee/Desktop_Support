@@ -18,16 +18,19 @@ import {
   listIsoParityReports,
   listIsoWorkflowNodes,
   listIsoWorkflowRuns,
+  loadIsoSwitchoverGate,
   loadIsoWorkflowJobStatus,
   loadIsoNodeWorkflow,
   readIsoWorkflowRunLog,
   runIsoNodeWorkflowSafe,
+  setIsoShadowFlag,
   type IsoNodeWorkflowJobPayload,
   type IsoNodeWorkflowListPayload,
   type IsoNodeWorkflowRunLog,
   type IsoNodeWorkflowRunSummary,
   type IsoNodeWorkflowValidationPayload,
   type IsoParityReportSummary,
+  type IsoSwitchoverGateVerdict,
 } from "../isoWorkflow";
 import { compactPath } from "./helpers";
 import { WorkflowCanvas } from "./WorkflowCanvas";
@@ -40,9 +43,22 @@ type WorkflowInspectorProps = {
   registerSafeRun?: (runner: () => void) => void;
   workflowJob?: IsoNodeWorkflowJobPayload | null;
   setWorkflowJob?: (job: IsoNodeWorkflowJobPayload | null) => void;
+  gateVerdict?: IsoSwitchoverGateVerdict | null;
+  setGateVerdict?: (verdict: IsoSwitchoverGateVerdict | null) => void;
+  shadowFlagEnabled?: boolean;
+  setShadowFlagEnabled?: (enabled: boolean) => void;
 };
 
-export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workflowJob, setWorkflowJob }: WorkflowInspectorProps) {
+export function WorkflowInspector({
+  workflowInputs = {},
+  registerSafeRun,
+  workflowJob,
+  setWorkflowJob,
+  gateVerdict,
+  setGateVerdict,
+  shadowFlagEnabled,
+  setShadowFlagEnabled,
+}: WorkflowInspectorProps) {
   const [expanded, setExpanded] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -58,11 +74,18 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
   const [safeRunBusy, setSafeRunBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [localJob, setLocalJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
+  const [localGateVerdict, setLocalGateVerdict] = useState<IsoSwitchoverGateVerdict | null>(null);
+  const [localShadowFlagEnabled, setLocalShadowFlagEnabled] = useState(false);
   const [projectionRunId, setProjectionRunId] = useState("");
   const [graphCopied, setGraphCopied] = useState(false);
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState("");
+  const [shadowFlagBusy, setShadowFlagBusy] = useState(false);
   const job = workflowJob === undefined ? localJob : workflowJob;
   const updateJob = setWorkflowJob ?? setLocalJob;
+  const gate = gateVerdict === undefined ? localGateVerdict : gateVerdict;
+  const updateGate = setGateVerdict ?? setLocalGateVerdict;
+  const shadowFlag = shadowFlagEnabled === undefined ? localShadowFlagEnabled : shadowFlagEnabled;
+  const updateShadowFlag = setShadowFlagEnabled ?? setLocalShadowFlagEnabled;
 
   const specByType = useMemo(() => {
     const entries = (nodeCatalog?.nodes ?? []).map((spec) => [spec.node_type, spec] as const);
@@ -138,16 +161,19 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
     setLoading(true);
     setError("");
     try {
-      const [nodesPayload, graphPayload, runsPayload, parityPayload] = await Promise.all([
+      const [nodesPayload, graphPayload, runsPayload, parityPayload, gatePayload] = await Promise.all([
         listIsoWorkflowNodes(),
         loadIsoNodeWorkflow(SAFE_WORKFLOW_PATH),
         listIsoWorkflowRuns(),
         listIsoParityReports(),
+        loadIsoSwitchoverGate(),
       ]);
       setNodeCatalog(nodesPayload);
       setGraph(graphPayload);
       setRuns(runsPayload.runs);
       setParityReports(parityPayload.reports);
+      updateGate(gatePayload);
+      updateShadowFlag(Boolean(gatePayload.shadow_flag_enabled));
       setLoaded(true);
       const runId = selectedRunId || runsPayload.runs[0]?.run_id || "";
       if (runId) {
@@ -265,6 +291,25 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
       window.setTimeout(() => setGraphCopied(false), 1500);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function toggleShadowFlag() {
+    if (shadowFlagBusy) {
+      return;
+    }
+    setShadowFlagBusy(true);
+    setError("");
+    try {
+      const next = await setIsoShadowFlag(!shadowFlag);
+      updateShadowFlag(next.enabled);
+      const gatePayload = await loadIsoSwitchoverGate();
+      updateGate(gatePayload);
+      updateShadowFlag(Boolean(gatePayload.shadow_flag_enabled));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setShadowFlagBusy(false);
     }
   }
 
@@ -515,17 +560,36 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workfl
           </section>
 
           <section style={styles.sectionFull}>
-            <SectionHead icon={<ShieldCheck size={16} />} title="換軌守門" meta={parityReports.length ? `${parityReports.length} 筆 parity` : "等待證據"} />
+            <SectionHead icon={<ShieldCheck size={16} />} title="換軌守門" meta={gate?.headline || (parityReports.length ? `${parityReports.length} 筆 parity` : "等待證據")} />
             <div style={styles.gateNote}>
-              <span>D 期開工 gate：最近 5 筆 parity 全 equal，且至少 2 筆來自 real sample；C1 防污染套件維持綠燈；shadow run 設計書就緒。</span>
-              <code style={styles.code}>python -m launcher.plugins.iso_tools.workflow.cli parity-history --json</code>
+              <span>{gate?.headline || "尚未讀取換軌 gate。"}</span>
+              <code style={styles.code}>python -m launcher.plugins.iso_tools.workflow.cli gate --json</code>
+              <button className="action-button" type="button" onClick={() => void toggleShadowFlag()} disabled={!isTauri() || shadowFlagBusy}>
+                <ShieldCheck size={14} />
+                <span>{!isTauri() ? "桌面版啟用" : shadowFlagBusy ? "更新中" : shadowFlag ? "關閉影子驗證" : "開啟影子驗證"}</span>
+              </button>
             </div>
+            {gate?.conditions?.length ? (
+              <div style={styles.gateChecklist}>
+                {gate.conditions.map((condition) => (
+                  <div style={{ ...styles.gateCondition, borderColor: condition.met === true ? "rgba(47,245,200,0.32)" : condition.met === false ? "rgba(255,107,107,0.42)" : "rgba(255,209,102,0.32)" }} key={condition.id}>
+                    <strong>{gateConditionMark(condition.met)} {condition.title}</strong>
+                    <span>{condition.detail}</span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div style={styles.parityList}>
               {parityReports.map((report) => (
                 <div style={{ ...styles.parityItem, borderColor: report.equal ? "rgba(47,245,200,0.32)" : "rgba(255,107,107,0.48)" }} key={report.report_path}>
                   <strong>{report.equal ? "equal" : "violation"}</strong>
                   <span>{report.created_at}</span>
                   <em>{report.violation_count} violation · {report.acceptable_diff_count} accepted</em>
+                  <span style={styles.reportChips}>
+                    <small style={styles.reportChip}>{report.trigger || "cli"}</small>
+                    <small style={{ ...styles.reportChip, color: report.sample_kind === "real" ? "#7fd7ff" : "rgba(220,235,228,0.58)" }}>{report.sample_kind || "unknown"}</small>
+                    {report.timing?.workflow_ms != null ? <small style={styles.reportChip}>workflow {report.timing.workflow_ms} ms</small> : null}
+                  </span>
                   <code style={styles.code}>{compactPath(report.report_path)}</code>
                 </div>
               ))}
@@ -736,6 +800,12 @@ function sideEffectLabel(effect: string) {
   if (effect === "writes_debug_bundle") return "問題包";
   if (effect === "spawns_worker") return "背景處理";
   return effect;
+}
+
+function gateConditionMark(met: boolean | null) {
+  if (met === true) return "通過";
+  if (met === false) return "未通過";
+  return "手動";
 }
 
 function statusLabel(status: string) {
@@ -1076,9 +1146,27 @@ const styles = {
     border: "1px solid rgba(255,209,102,0.22)",
     borderRadius: 8,
     color: "rgba(255,244,207,0.9)",
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 7,
+    justifyContent: "space-between",
+    padding: 10,
+  },
+  gateChecklist: {
     display: "grid",
     gap: 7,
-    padding: 10,
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    minWidth: 0,
+  },
+  gateCondition: {
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    display: "grid",
+    gap: 5,
+    minWidth: 0,
+    padding: "8px 10px",
   },
   issueList: {
     color: "#ffd166",
@@ -1120,6 +1208,20 @@ const styles = {
     gap: 4,
     minWidth: 0,
     padding: "8px 10px",
+  },
+  reportChips: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 5,
+  },
+  reportChip: {
+    background: "rgba(255,255,255,0.055)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 999,
+    color: "rgba(220,235,228,0.72)",
+    fontSize: 11,
+    fontWeight: 800,
+    padding: "2px 7px",
   },
   parityList: {
     display: "grid",
