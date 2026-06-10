@@ -29,6 +29,7 @@ import { StatusTile } from "../components/StatusTile";
 import { AutopilotView } from "./AutopilotView";
 import { EngineerView } from "./EngineerView";
 import { WorkbenchView } from "./WorkbenchView";
+import { WorkflowInspector } from "./WorkflowInspector";
 import {
   applyIsoPlan,
   cancelIsoJob,
@@ -1394,61 +1395,64 @@ export function IsoBoard() {
           warnCount={warnCount}
         />
       ) : isoView === "engineer" ? (
-        <EngineerView
-          activeProfileFolderReady={Boolean(activeProfileFolder())}
-          batchRunning={batchRunning}
-          busy={busy}
-          cancelBatchDetect={cancelBatchDetect}
-          chooseCombinePdf={chooseCombinePdf}
-          chooseIsoList={chooseIsoList}
-          choosePageFolder={choosePageFolder}
-          chooseWorkFolder={chooseWorkFolder}
-          columnSummary={columnSummary}
-          combinePdf={combinePdf}
-          confidenceThreshold={confidenceThreshold}
-          exportBusy={exportBusy}
-          exportRenameCsv={exportRenameCsv}
-          generatePlan={generatePlan}
-          hasDraftProfile={Boolean(hasDraftProfile)}
-          hasPublishedProfile={Boolean(hasPublishedProfile)}
-          headers={headers}
-          issueCount={issueRows.length}
-          isoList={isoList}
-          legacy={legacy}
-          lineCol={lineCol}
-          openRunLogDrawer={openRunLogDrawer}
-          pageFolder={pageFolder}
-          pattern={pattern}
-          pilotItems={pilotItems}
-          plan={plan}
-          profileBusy={profileBusy}
-          profileHistoryCount={profileHistoryCount}
-          profileLabel={profileLabel}
-          publishProfileToOneClick={publishProfileToOneClick}
-          revertPublishedProfile={revertPublishedProfile}
-          roiDistribution={roiDistribution}
-          roiDistributionBusy={roiDistributionBusy}
-          roiDistributionError={roiDistributionError}
-          rows={rows}
-          rowCount={rows.length}
-          runLogBusy={runLogBusy}
-          selectedCount={selectedCount}
-          serialCol={serialCol}
-          setLineCol={setLineCol}
-          setPattern={setPattern}
-          setSerialCol={setSerialCol}
-          setSheetName={setSheetName}
-          sheetName={sheetName}
-          sheetOptions={sheetOptions}
-          startBatchDetect={startBatchDetect}
-          canCancelBatch={isoMachine.canCancelBatch}
-          canGenerateDraft={isoMachine.canGenerateDraft}
-          canStartBatch={isoMachine.canStartBatch}
-          visualPanel={visualPanel}
-          workFolder={workFolder}
-          onPilotAutoFix={() => void generatePlan()}
-          onPilotJump={handlePilotJump}
-        />
+        <>
+          <EngineerView
+            activeProfileFolderReady={Boolean(activeProfileFolder())}
+            batchRunning={batchRunning}
+            busy={busy}
+            cancelBatchDetect={cancelBatchDetect}
+            chooseCombinePdf={chooseCombinePdf}
+            chooseIsoList={chooseIsoList}
+            choosePageFolder={choosePageFolder}
+            chooseWorkFolder={chooseWorkFolder}
+            columnSummary={columnSummary}
+            combinePdf={combinePdf}
+            confidenceThreshold={confidenceThreshold}
+            exportBusy={exportBusy}
+            exportRenameCsv={exportRenameCsv}
+            generatePlan={generatePlan}
+            hasDraftProfile={Boolean(hasDraftProfile)}
+            hasPublishedProfile={Boolean(hasPublishedProfile)}
+            headers={headers}
+            issueCount={issueRows.length}
+            isoList={isoList}
+            legacy={legacy}
+            lineCol={lineCol}
+            openRunLogDrawer={openRunLogDrawer}
+            pageFolder={pageFolder}
+            pattern={pattern}
+            pilotItems={pilotItems}
+            plan={plan}
+            profileBusy={profileBusy}
+            profileHistoryCount={profileHistoryCount}
+            profileLabel={profileLabel}
+            publishProfileToOneClick={publishProfileToOneClick}
+            revertPublishedProfile={revertPublishedProfile}
+            roiDistribution={roiDistribution}
+            roiDistributionBusy={roiDistributionBusy}
+            roiDistributionError={roiDistributionError}
+            rows={rows}
+            rowCount={rows.length}
+            runLogBusy={runLogBusy}
+            selectedCount={selectedCount}
+            serialCol={serialCol}
+            setLineCol={setLineCol}
+            setPattern={setPattern}
+            setSerialCol={setSerialCol}
+            setSheetName={setSheetName}
+            sheetName={sheetName}
+            sheetOptions={sheetOptions}
+            startBatchDetect={startBatchDetect}
+            canCancelBatch={isoMachine.canCancelBatch}
+            canGenerateDraft={isoMachine.canGenerateDraft}
+            canStartBatch={isoMachine.canStartBatch}
+            visualPanel={visualPanel}
+            workFolder={workFolder}
+            onPilotAutoFix={() => void generatePlan()}
+            onPilotJump={handlePilotJump}
+          />
+          <WorkflowInspector />
+        </>
       ) : (
         <WorkbenchView
           activeProfileFolderReady={Boolean(activeProfileFolder())}
