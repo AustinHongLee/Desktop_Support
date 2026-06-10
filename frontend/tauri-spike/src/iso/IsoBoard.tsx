@@ -415,6 +415,28 @@ export function IsoBoard() {
     }
   }
 
+  function adoptWorkflowSource(source: IsoWorkflowPlan["source"]) {
+    setWorkFolder(source.work_folder || workFolder);
+    setCombinePdf(source.combine_pdf || combinePdf);
+    setPageFolder(source.page_folder || pageFolder);
+    setIsoList(source.iso_list || isoList);
+    setSheetName(source.sheet_name || sheetName);
+    setSerialCol(source.serial_col ?? serialCol);
+    setLineCol(source.line_col ?? lineCol);
+    setPattern(source.pattern || pattern);
+    setDetectSerials(source.detect_serials);
+    if (typeof source.confidence_threshold === "number") {
+      setConfidenceThreshold(source.confidence_threshold);
+    }
+    if (source.serial_region) {
+      setSerialRegion(normalizeRegion(source.serial_region));
+    }
+    if (source.drawing_region) {
+      setDrawingRegion(normalizeRegion(source.drawing_region));
+    }
+    setMessage("已帶入節點流程參數，請按重新產生草稿。");
+  }
+
   function openFailureWorkbench() {
     const firstProblem = plan?.rows.find((row) => row.status === "blocked" || row.status === "warn");
     if (firstProblem) {
@@ -1498,6 +1520,7 @@ export function IsoBoard() {
           openEngineerView={() => setIsoView("engineer")}
           openDryRun={openDryRun}
           openRunLogDrawer={openRunLogDrawer}
+          onAdoptWorkflowSource={adoptWorkflowSource}
           pageFolder={pageFolder}
           pattern={pattern}
           pilotItems={pilotItems}

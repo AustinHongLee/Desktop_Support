@@ -30,7 +30,9 @@ export type IsoWorkflowAction =
   | "workflow_run_status"
   | "workflow_cancel"
   | "workflow_list_runs"
-  | "workflow_read_run_log";
+  | "workflow_read_run_log"
+  | "workflow_plan_from_run"
+  | "workflow_read_artifact";
 
 export interface IsoRegion {
   left: number;
@@ -66,6 +68,8 @@ export interface IsoWorkflowRequest {
   workflow_mode?: "run" | "dry_run" | "replay";
   workflow_job_id?: string;
   workflow_run_id?: string;
+  workflow_node_id?: string;
+  workflow_port?: string;
   rows?: IsoPlanRow[];
 }
 
@@ -206,6 +210,17 @@ export interface IsoNodeWorkflowRunLog {
   nodes: Record<string, IsoNodeWorkflowNodeRunLog>;
   side_effect_summary: IsoNodeWorkflowSideEffectSummary;
   issues: Array<Record<string, unknown>>;
+}
+
+export interface IsoNodeWorkflowArtifactPayload {
+  schema_version: number;
+  action: "workflow_read_artifact";
+  created_at: string;
+  run_id: string;
+  node_id: string;
+  port: string;
+  ref: Record<string, unknown>;
+  payload: unknown;
 }
 
 export interface IsoNodeWorkflowJobProgress {
@@ -362,7 +377,7 @@ export interface IsoWorkflowStep {
 
 export interface IsoWorkflowPlan {
   schema_version: number;
-  action: "plan" | "build_rename_plan" | "batch_detect_result" | "replay_run_log";
+  action: "plan" | "build_rename_plan" | "batch_detect_result" | "replay_run_log" | "workflow_plan_from_run";
   created_at: string;
   source: {
     kind: string;
@@ -398,9 +413,25 @@ export interface IsoWorkflowPlan {
   pilot_results?: IsoPilotItem[];
   pilot_summary?: Record<IsoPilotItem["status"], number>;
   run_log?: IsoRunLogRef;
+  provenance?: IsoWorkflowPlanProvenance;
   source_run_id?: string;
   replay_dry_run?: boolean;
   message?: string;
+}
+
+export interface IsoWorkflowPlanProvenance {
+  workflow_run_id: string;
+  workflow_id: string;
+  graph_hash: string;
+  run_mode: string;
+  run_status: string;
+  projected_at: string;
+  rows_node: string;
+  pilot_node: string;
+  iso_run_log?: {
+    run_id: string;
+    run_dir: string;
+  };
 }
 
 export interface IsoRunLogSummary {
@@ -676,6 +707,19 @@ export async function listIsoWorkflowRuns(): Promise<IsoNodeWorkflowRunListPaylo
 
 export async function readIsoWorkflowRunLog(runId: string): Promise<IsoNodeWorkflowRunLog> {
   return invokeJson<IsoNodeWorkflowRunLog>("run_iso_workflow", { action: "workflow_read_run_log", workflow_run_id: runId });
+}
+
+export async function loadIsoWorkflowPlanFromRun(runId: string): Promise<IsoWorkflowPlan> {
+  return invokeJson<IsoWorkflowPlan>("run_iso_workflow", { action: "workflow_plan_from_run", workflow_run_id: runId });
+}
+
+export async function readIsoWorkflowArtifact(runId: string, nodeId: string, port: string): Promise<IsoNodeWorkflowArtifactPayload> {
+  return invokeJson<IsoNodeWorkflowArtifactPayload>("run_iso_workflow", {
+    action: "workflow_read_artifact",
+    workflow_run_id: runId,
+    workflow_node_id: nodeId,
+    workflow_port: port,
+  });
 }
 
 export async function runIsoNodeWorkflowSafe(request: { workflow_path: string; workflow_inputs?: Record<string, unknown> }): Promise<IsoNodeWorkflowJobPayload> {
