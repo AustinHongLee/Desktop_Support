@@ -27,6 +27,9 @@ from launcher.app.tauri_iso_workflow import (
     save_iso_draft_profile,
     save_iso_profile,
     split_iso_pdf,
+    workflow_list_nodes_action,
+    workflow_load_action,
+    workflow_validate_action,
 )
 from launcher.app.tauri_iso_worker import run_job
 from launcher.core.state_store import AppStateStore
@@ -111,6 +114,38 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(replay["source_run_id"], "iso-replay-test")
         self.assertEqual(replay["rows"][0]["new_name"], "1--PIPE-A.pdf")
         self.assertEqual(len(run_dirs), 1)
+
+    def test_workflow_readonly_actions_list_load_and_validate_safe_poc(self) -> None:
+        workflow_path = Path("launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json")
+
+        nodes = workflow_list_nodes_action(IsoWorkflowRequest(action="workflow_list_nodes"))
+        loaded = workflow_load_action(IsoWorkflowRequest(action="workflow_load", workflow_path=workflow_path))
+        validated = workflow_validate_action(IsoWorkflowRequest(action="workflow_validate", workflow_path=workflow_path))
+        bad = workflow_validate_action(
+            IsoWorkflowRequest(
+                action="workflow_validate",
+                workflow={
+                    "schema_version": 1,
+                    "workflow_id": "bad",
+                    "display_name": "Bad",
+                    "description": "Bad graph",
+                    "inputs": {},
+                    "nodes": [{"node_id": "missing", "node_type": "iso.missing", "inputs": {}}],
+                },
+            )
+        )
+
+        self.assertEqual(nodes["node_count"], 12)
+        guarded = {item["node_type"]: item for item in nodes["nodes"] if item.get("guarded")}
+        self.assertEqual(guarded["iso.apply_rename"]["side_effects"], ["renames_files"])
+        self.assertEqual(guarded["iso.save_draft_profile"]["side_effects"], ["writes_profile"])
+        self.assertTrue(loaded["valid"])
+        self.assertEqual(loaded["graph"]["workflow_id"], "iso_pdf_safe_poc")
+        self.assertTrue(validated["valid"])
+        self.assertEqual(len(validated["edges"]), 5)
+        self.assertEqual(validated["topology"][0], "discover")
+        self.assertFalse(bad["valid"])
+        self.assertIn("WF003", {issue["code"] for issue in bad["issues"]})
 
     def test_work_folder_autodetects_combine_pdf_and_iso_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

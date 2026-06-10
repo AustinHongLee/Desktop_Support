@@ -22,7 +22,10 @@ export type IsoWorkflowAction =
   | "save_profile"
   | "save_draft_profile"
   | "publish_profile"
-  | "revert_profile";
+  | "revert_profile"
+  | "workflow_list_nodes"
+  | "workflow_load"
+  | "workflow_validate";
 
 export interface IsoRegion {
   left: number;
@@ -49,7 +52,88 @@ export interface IsoWorkflowRequest {
   export_path?: string;
   job_id?: string;
   run_id?: string;
+  workflow_path?: string;
+  workflow?: IsoNodeWorkflowGraph | Record<string, unknown>;
+  graph?: IsoNodeWorkflowGraph | Record<string, unknown>;
   rows?: IsoPlanRow[];
+}
+
+export interface IsoNodeWorkflowPortSpec {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+}
+
+export interface IsoNodeWorkflowSpec {
+  node_type: string;
+  display_name: string;
+  description: string;
+  inputs: IsoNodeWorkflowPortSpec[];
+  outputs: IsoNodeWorkflowPortSpec[];
+  params_schema: Record<string, Record<string, unknown>>;
+  side_effects: string[];
+  guarded: boolean;
+  requires_confirm_default: boolean;
+}
+
+export interface IsoNodeWorkflowInstance {
+  node_id: string;
+  node_type: string;
+  display_name?: string;
+  inputs?: Record<string, unknown>;
+  outputs?: Record<string, string>;
+  params?: Record<string, unknown>;
+  enabled?: boolean;
+  requires_confirm?: boolean;
+  side_effects?: string[];
+}
+
+export interface IsoNodeWorkflowEdge {
+  from_node: string;
+  from_output: string;
+  to_node: string;
+  to_input: string;
+}
+
+export interface IsoNodeWorkflowGraph {
+  schema_version: number;
+  workflow_id: string;
+  display_name: string;
+  description?: string;
+  inputs: Record<string, unknown>;
+  nodes: IsoNodeWorkflowInstance[];
+  edges?: IsoNodeWorkflowEdge[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface IsoNodeWorkflowValidationIssue {
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+  node_id: string;
+  edge: string;
+}
+
+export interface IsoNodeWorkflowListPayload {
+  schema_version: number;
+  action: "workflow_list_nodes";
+  created_at: string;
+  nodes: IsoNodeWorkflowSpec[];
+  node_count: number;
+}
+
+export interface IsoNodeWorkflowValidationPayload {
+  schema_version: number;
+  action: "workflow_load" | "workflow_validate";
+  created_at: string;
+  workflow_path: string;
+  workflow_id?: string;
+  graph?: IsoNodeWorkflowGraph;
+  valid: boolean;
+  issues: IsoNodeWorkflowValidationIssue[];
+  edges: IsoNodeWorkflowEdge[];
+  topology: string[];
 }
 
 export interface IsoRunLogRef {
@@ -454,6 +538,18 @@ export async function readIsoRunLog(runId: string): Promise<IsoRunLogDetail> {
 
 export async function replayIsoRunLog(runId: string): Promise<IsoWorkflowPlan> {
   return invokeJson<IsoWorkflowPlan>("run_iso_workflow", { action: "replay_run_log", run_id: runId });
+}
+
+export async function listIsoWorkflowNodes(): Promise<IsoNodeWorkflowListPayload> {
+  return invokeJson<IsoNodeWorkflowListPayload>("run_iso_workflow", { action: "workflow_list_nodes" });
+}
+
+export async function loadIsoNodeWorkflow(workflowPath: string): Promise<IsoNodeWorkflowValidationPayload> {
+  return invokeJson<IsoNodeWorkflowValidationPayload>("run_iso_workflow", { action: "workflow_load", workflow_path: workflowPath });
+}
+
+export async function validateIsoNodeWorkflow(request: Pick<IsoWorkflowRequest, "workflow_path" | "workflow" | "graph">): Promise<IsoNodeWorkflowValidationPayload> {
+  return invokeJson<IsoNodeWorkflowValidationPayload>("run_iso_workflow", { ...request, action: "workflow_validate" });
 }
 
 export async function startIsoBatchDetect(request: Partial<IsoWorkflowRequest>): Promise<IsoJobPayload> {

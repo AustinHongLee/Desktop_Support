@@ -77,6 +77,8 @@ class IsoWorkflowRequest:
     export_path: Path | None = None
     job_id: str | None = None
     run_id: str | None = None
+    workflow_path: Path | None = None
+    workflow: dict[str, Any] | None = None
     rows: tuple[dict[str, Any], ...] = ()
 
 
@@ -151,6 +153,12 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return publish_iso_profile_action(request)
     if request.action == "revert_profile":
         return revert_iso_profile_action(request)
+    if request.action == "workflow_list_nodes":
+        return workflow_list_nodes_action(request)
+    if request.action == "workflow_load":
+        return workflow_load_action(request)
+    if request.action == "workflow_validate":
+        return workflow_validate_action(request)
     raise ValueError(f"unknown action: {request.action}")
 
 
@@ -452,6 +460,44 @@ def revert_iso_profile_action(request: IsoWorkflowRequest) -> dict[str, Any]:
         message=f"已回復上一版 ISO profile：{folder}",
         profile_scope="published",
     )
+
+
+def workflow_list_nodes_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
+    from launcher.plugins.iso_tools.workflow.registry import get_registry
+
+    specs = [spec.to_payload() for spec in get_registry().list_specs()]
+    return {
+        "schema_version": 1,
+        "action": "workflow_list_nodes",
+        "created_at": _now(),
+        "nodes": specs,
+        "node_count": len(specs),
+    }
+
+
+def workflow_load_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    graph = _workflow_graph_from_request(request)
+    validation = _workflow_validation_payload(graph)
+    return {
+        "schema_version": 1,
+        "action": "workflow_load",
+        "created_at": _now(),
+        "workflow_path": str(request.workflow_path or ""),
+        "graph": graph.to_payload(),
+        **validation,
+    }
+
+
+def workflow_validate_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    graph = _workflow_graph_from_request(request)
+    return {
+        "schema_version": 1,
+        "action": "workflow_validate",
+        "created_at": _now(),
+        "workflow_path": str(request.workflow_path or ""),
+        "workflow_id": graph.workflow_id,
+        **_workflow_validation_payload(graph),
+    }
 
 
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -886,6 +932,8 @@ def _normalize_request(payload: dict[str, Any]) -> dict[str, Any]:
         "export_path": _path_or_none(payload.get("export_path")),
         "job_id": str(payload.get("job_id") or "").strip() or None,
         "run_id": str(payload.get("run_id") or "").strip() or None,
+        "workflow_path": _path_or_none(payload.get("workflow_path")),
+        "workflow": _dict_or_none(payload.get("workflow") or payload.get("graph")),
         "rows": tuple(payload.get("rows") or ()),
     }
 
@@ -914,6 +962,44 @@ def _dict_or_none(value: Any) -> dict[str, Any] | None:
 def _state_store() -> AppStateStore:
     override = os.environ.get(STATE_PATH_ENV)
     return AppStateStore(Path(override)) if override else AppStateStore()
+
+
+def _workflow_graph_from_request(request: IsoWorkflowRequest) -> Any:
+    from launcher.plugins.iso_tools.workflow.schema import load_workflow, normalize_graph
+
+    if request.workflow is not None:
+        return normalize_graph(request.workflow)
+    if request.workflow_path is None:
+        raise ValueError("請提供 workflow_path 或 workflow graph。")
+    path = _resolve_workflow_path(request.workflow_path)
+    return load_workflow(path)
+
+
+def _workflow_validation_payload(graph: Any) -> dict[str, Any]:
+    from launcher.plugins.iso_tools.workflow.errors import GraphValidationError
+    from launcher.plugins.iso_tools.workflow.executor import topological_order, validate_graph
+    from launcher.plugins.iso_tools.workflow.registry import get_registry
+
+    issues = validate_graph(graph, get_registry())
+    errors = [issue for issue in issues if issue.severity == "error"]
+    topology: list[str] = []
+    if not errors:
+        try:
+            topology = topological_order(graph)
+        except GraphValidationError as exc:
+            issues.extend(exc.issues)
+    return {
+        "valid": not any(issue.severity == "error" for issue in issues),
+        "issues": [issue.to_payload() for issue in issues],
+        "edges": [edge.to_payload() for edge in graph.edges],
+        "topology": topology,
+    }
+
+
+def _resolve_workflow_path(path: Path) -> Path:
+    if path.is_absolute():
+        return path
+    return Path.cwd() / path
 
 
 def _job_root() -> Path:
