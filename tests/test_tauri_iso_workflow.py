@@ -31,6 +31,7 @@ from launcher.app.tauri_iso_workflow import (
     workflow_load_action,
     workflow_plan_from_run_action,
     workflow_read_artifact_action,
+    workflow_read_run_log_action,
     workflow_validate_action,
 )
 from launcher.app.tauri_iso_worker import run_job
@@ -191,6 +192,43 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertEqual(plan["summary"]["selected"], 1)
         self.assertEqual(plan["provenance"]["workflow_run_id"], "wf-action")
         self.assertEqual(artifact["payload"][0]["new_name"], "1--PIPE-A.pdf")
+
+    def test_workflow_run_id_path_must_stay_under_run_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_root = root / "workflow_runs"
+            allowed_run = run_root / "wf-allowed"
+            outside_run = root / "outside"
+            rows = [
+                {
+                    "id": "row-1",
+                    "page": 1,
+                    "source_path": str(root / "page_001.pdf"),
+                    "source_name": "page_001.pdf",
+                    "serial": "1",
+                    "line_no": "PIPE-A",
+                    "new_name": "1--PIPE-A.pdf",
+                    "target_path": str(root / "1--PIPE-A.pdf"),
+                    "status": "ready",
+                    "selected": True,
+                    "confidence": 1.0,
+                    "vision_message": "",
+                    "note": "",
+                }
+            ]
+            _write_projection_run(allowed_run, rows)
+            _write_projection_run(outside_run, rows)
+
+            with patch.dict(os.environ, {"DESKTOP_SUPPORT_WORKFLOW_RUN_ROOT": str(run_root)}):
+                allowed = workflow_read_run_log_action(
+                    IsoWorkflowRequest(action="workflow_read_run_log", workflow_run_id=str(allowed_run))
+                )
+                with self.assertRaisesRegex(ValueError, "run root"):
+                    workflow_read_run_log_action(
+                        IsoWorkflowRequest(action="workflow_read_run_log", workflow_run_id=str(outside_run))
+                    )
+
+        self.assertEqual(allowed["run_id"], "wf-allowed")
 
     def test_work_folder_autodetects_combine_pdf_and_iso_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

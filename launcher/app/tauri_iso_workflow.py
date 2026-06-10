@@ -1264,7 +1264,13 @@ def _workflow_run_dir_required(request: IsoWorkflowRequest) -> Path:
         raise ValueError("缺少 workflow_run_id。")
     candidate = Path(run_id)
     if candidate.exists() and candidate.is_dir():
-        return candidate
+        root = _workflow_run_root().resolve()
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError("workflow_run_id 不可指向 run root 以外路徑。")
+        if not (resolved / "run_log.json").exists():
+            raise FileNotFoundError(f"找不到 workflow run log：{run_id}")
+        return resolved
     safe_id = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
     if not safe_id:
         raise ValueError("workflow_run_id 不合法。")
