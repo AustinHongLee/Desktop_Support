@@ -17,6 +17,10 @@ def load_iso_table(payload: dict[str, Any]) -> dict[str, Any]:
     return _call("load_iso_table", payload, "load_iso_table")
 
 
+def split_iso_pdf(payload: dict[str, Any]) -> dict[str, Any]:
+    return _call("split_pdf", payload, "split_iso_pdf")
+
+
 def load_iso_profile(payload: dict[str, Any], *, prefer_draft: bool = False) -> dict[str, Any]:
     backend = _backend()
     request = build_request({"action": "load_profile", **payload})
@@ -52,6 +56,69 @@ def pilot_report(payload: dict[str, Any]) -> dict[str, Any]:
 
 def roi_distribution(payload: dict[str, Any]) -> dict[str, Any]:
     return _call("roi_distribution", payload, "roi_distribution")
+
+
+def export_plan_csv(payload: dict[str, Any]) -> dict[str, Any]:
+    return _call("export_plan_csv", payload, "export_plan_csv")
+
+
+def export_debug_bundle(payload: dict[str, Any]) -> dict[str, Any]:
+    return _call("export_debug_bundle", payload, "export_debug_bundle")
+
+
+def start_batch_detect(payload: dict[str, Any]) -> dict[str, Any]:
+    return _call("start_batch_detect", payload, "start_batch_detect")
+
+
+def iso_job_status(job_id: str) -> dict[str, Any]:
+    return _call("job_status", {"job_id": job_id}, "iso_job_status")
+
+
+def cancel_iso_job(job_id: str) -> dict[str, Any]:
+    return _call("cancel_job", {"job_id": job_id}, "cancel_iso_job")
+
+
+def predict_split_pdf(payload: dict[str, Any]) -> dict[str, Any]:
+    request = build_request({"action": "split_pdf", **payload})
+    backend = _backend()
+    if request.page_folder is not None:
+        return {
+            "would_write": False,
+            "source_kind": "page_folder",
+            "page_folder": str(request.page_folder),
+            "reason": "page_folder input supplied",
+        }
+
+    combine_pdf = request.combine_pdf
+    if combine_pdf is None and request.work_folder is not None:
+        combine_pdf = backend._auto_combine_pdf_candidate(request.work_folder)
+        if combine_pdf is None:
+            pdfs = backend._pdfs_from_folder(request.work_folder) if request.work_folder.exists() and request.work_folder.is_dir() else []
+            return {
+                "would_write": False,
+                "source_kind": "work_folder_pages" if pdfs else "missing_source",
+                "page_folder": str(request.work_folder) if pdfs else "",
+                "reason": "work_folder pages" if pdfs else "no combine pdf discovered",
+            }
+
+    if combine_pdf is None:
+        return {"would_write": False, "source_kind": "missing_source", "page_folder": "", "reason": "no combine_pdf"}
+
+    page_folder = combine_pdf.with_name(f"{combine_pdf.stem}_pages")
+    if page_folder.exists() and backend._pdfs_from_folder(page_folder):
+        return {
+            "would_write": False,
+            "source_kind": "existing_pages",
+            "page_folder": str(page_folder),
+            "reason": "existing split pages",
+        }
+    return {
+        "would_write": True,
+        "source_kind": "combine_pdf",
+        "page_folder": str(page_folder),
+        "combine_pdf": str(combine_pdf),
+        "reason": "combine pdf needs split",
+    }
 
 
 def profile_from_response(payload: dict[str, Any]) -> dict[str, Any]:
