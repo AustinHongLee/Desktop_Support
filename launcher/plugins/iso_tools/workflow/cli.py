@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,22 @@ def main(argv: list[str] | None = None) -> int:
                 policy=SideEffectPolicy(mode="replay", include_auto_in_replay=args.include_auto_side_effects),
             )
             return _print(_result_payload(result), args.json, exit_code=_exit_for_status(result.get("status")))
+        if args.command == "parity":
+            try:
+                inputs = _load_inputs(args.inputs_json, [])
+            except (OSError, json.JSONDecodeError) as exc:
+                return _print({"error": str(exc), "type": type(exc).__name__}, args.json, exit_code=2)
+            from launcher.plugins.iso_tools.workflow.parity import SAFE_WORKFLOW_PATH, run_parity
+
+            workflow_path = Path(args.workflow) if args.workflow else SAFE_WORKFLOW_PATH
+            work_dir = Path(args.work_dir) if args.work_dir else Path.cwd() / ".runtime" / "temp" / "workflow_parity"
+            report = run_parity(inputs, workflow_path=workflow_path, work_dir=work_dir)
+            payload = report.to_payload()
+            report_path = Path(args.report_out) if args.report_out else _default_parity_report_path()
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(json.dumps(json_safe(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            payload["report_path"] = str(report_path)
+            return _print(payload, args.json, exit_code=0 if report.equal else 6)
         parser.error("missing command")
         return 2
     except GraphValidationError as exc:
@@ -99,6 +116,13 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument("--run-root", default="")
     replay.add_argument("--include-auto-side-effects", action="store_true")
     replay.add_argument("--json", action="store_true")
+
+    parity = sub.add_parser("parity")
+    parity.add_argument("--inputs-json", required=True)
+    parity.add_argument("--workflow", default="")
+    parity.add_argument("--work-dir", default="")
+    parity.add_argument("--report-out", default="")
+    parity.add_argument("--json", action="store_true")
 
     return parser
 
@@ -188,6 +212,11 @@ def _exit_for_status(status: Any) -> int:
     if status == "completed_with_blocked":
         return 4
     return 0
+
+
+def _default_parity_report_path() -> Path:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Path.cwd() / ".runtime" / "temp" / f"parity_report_{stamp}.json"
 
 
 def _configure_stdio() -> None:

@@ -144,7 +144,7 @@ class TauriIsoWorkflowTests(unittest.TestCase):
         self.assertTrue(loaded["valid"])
         self.assertEqual(loaded["graph"]["workflow_id"], "iso_pdf_safe_poc")
         self.assertTrue(validated["valid"])
-        self.assertEqual(len(validated["edges"]), 5)
+        self.assertEqual(len(validated["edges"]), 7)
         self.assertEqual(validated["topology"][0], "discover")
         self.assertFalse(bad["valid"])
         self.assertIn("WF003", {issue["code"] for issue in bad["issues"]})
