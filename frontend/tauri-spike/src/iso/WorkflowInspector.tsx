@@ -15,6 +15,7 @@ import type { CSSProperties, ReactNode, SyntheticEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   cancelIsoWorkflowJob,
+  listIsoParityReports,
   listIsoWorkflowNodes,
   listIsoWorkflowRuns,
   loadIsoWorkflowJobStatus,
@@ -26,8 +27,10 @@ import {
   type IsoNodeWorkflowRunLog,
   type IsoNodeWorkflowRunSummary,
   type IsoNodeWorkflowValidationPayload,
+  type IsoParityReportSummary,
 } from "../isoWorkflow";
 import { compactPath } from "./helpers";
+import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
@@ -35,9 +38,11 @@ const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pd
 type WorkflowInspectorProps = {
   workflowInputs?: Record<string, unknown>;
   registerSafeRun?: (runner: () => void) => void;
+  workflowJob?: IsoNodeWorkflowJobPayload | null;
+  setWorkflowJob?: (job: IsoNodeWorkflowJobPayload | null) => void;
 };
 
-export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: WorkflowInspectorProps) {
+export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workflowJob, setWorkflowJob }: WorkflowInspectorProps) {
   const [expanded, setExpanded] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -46,20 +51,27 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
   const [nodeCatalog, setNodeCatalog] = useState<IsoNodeWorkflowListPayload | null>(null);
   const [graph, setGraph] = useState<IsoNodeWorkflowValidationPayload | null>(null);
   const [runs, setRuns] = useState<IsoNodeWorkflowRunSummary[]>([]);
+  const [parityReports, setParityReports] = useState<IsoParityReportSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runLog, setRunLog] = useState<IsoNodeWorkflowRunLog | null>(null);
   const [safeRunConfirmOpen, setSafeRunConfirmOpen] = useState(false);
   const [safeRunBusy, setSafeRunBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
-  const [job, setJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
+  const [localJob, setLocalJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
   const [projectionRunId, setProjectionRunId] = useState("");
   const [graphCopied, setGraphCopied] = useState(false);
+  const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState("");
+  const job = workflowJob === undefined ? localJob : workflowJob;
+  const updateJob = setWorkflowJob ?? setLocalJob;
 
   const specByType = useMemo(() => {
     const entries = (nodeCatalog?.nodes ?? []).map((spec) => [spec.node_type, spec] as const);
     return new Map(entries);
   }, [nodeCatalog]);
   const graphNodes = graph?.graph?.nodes ?? [];
+  const selectedCanvasNode = graphNodes.find((node) => node.node_id === selectedCanvasNodeId) ?? null;
+  const selectedCanvasSpec = selectedCanvasNode ? specByType.get(selectedCanvasNode.node_type) : undefined;
+  const selectedCanvasLog = selectedCanvasNode ? runLog?.nodes?.[selectedCanvasNode.node_id] : undefined;
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
   const summary = job?.result?.side_effect_summary ?? selectedRun?.side_effect_summary ?? runLog?.side_effect_summary;
   const blockedCount = summary?.blocked?.length ?? 0;
@@ -84,7 +96,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
         if (cancelled) {
           return;
         }
-        setJob(next);
+        updateJob(next);
         setRunError(next.error || "");
         if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
           await refreshRuns(next.workflow_run_id);
@@ -126,14 +138,16 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
     setLoading(true);
     setError("");
     try {
-      const [nodesPayload, graphPayload, runsPayload] = await Promise.all([
+      const [nodesPayload, graphPayload, runsPayload, parityPayload] = await Promise.all([
         listIsoWorkflowNodes(),
         loadIsoNodeWorkflow(SAFE_WORKFLOW_PATH),
         listIsoWorkflowRuns(),
+        listIsoParityReports(),
       ]);
       setNodeCatalog(nodesPayload);
       setGraph(graphPayload);
       setRuns(runsPayload.runs);
+      setParityReports(parityPayload.reports);
       setLoaded(true);
       const runId = selectedRunId || runsPayload.runs[0]?.run_id || "";
       if (runId) {
@@ -185,6 +199,9 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
       setRunError("請用 Tauri 桌面版執行節點工作流。");
       return;
     }
+    if (safeRunBusy || isWorkflowJobRunning(job)) {
+      return;
+    }
     const graphValid = nextGraph?.valid === true;
     if (!graphValid || !hasPdfSource || !hasIsoSource) {
       setRunError(safeRunBlockReason(graphValid, hasPdfSource, hasIsoSource));
@@ -195,6 +212,9 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
   }
 
   async function confirmSafeRun() {
+    if (safeRunBusy || isWorkflowJobRunning(job)) {
+      return;
+    }
     if (!canRunSafe) {
       setRunError(safeRunBlockReason(graph?.valid === true, hasPdfSource, hasIsoSource));
       return;
@@ -206,7 +226,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
         workflow_path: SAFE_WORKFLOW_PATH,
         workflow_inputs: safeInputs,
       });
-      setJob(next);
+      updateJob(next);
       setSafeRunConfirmOpen(false);
       if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
         await refreshRuns(next.workflow_run_id);
@@ -227,7 +247,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
     setCancelBusy(true);
     setRunError("");
     try {
-      setJob(await cancelIsoWorkflowJob(jobId));
+      updateJob(await cancelIsoWorkflowJob(jobId));
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -362,6 +382,38 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
 
           <section style={styles.sectionWide}>
             <SectionHead icon={<Route size={16} />} title="Safe POC Graph" meta={graph?.workflow_id || graph?.graph?.workflow_id || "等待"} />
+            <WorkflowCanvas payload={graph} runLog={runLog} selectedNodeId={selectedCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />
+            {selectedCanvasNode ? (
+              <div style={styles.canvasDetail}>
+                <div style={styles.canvasDetailHead}>
+                  <strong>{selectedCanvasNode.display_name || selectedCanvasSpec?.display_name || selectedCanvasNode.node_id}</strong>
+                  <code style={styles.code}>{selectedCanvasNode.node_type}</code>
+                  <span>{selectedCanvasLog?.status ? statusLabel(selectedCanvasLog.status) : selectedCanvasNode.enabled === false ? "停用" : "尚無紀錄"}</span>
+                </div>
+                <div style={styles.canvasDetailGrid}>
+                  <div>
+                    <small>參數</small>
+                    <pre style={styles.compactPre}>{JSON.stringify(selectedCanvasNode.params ?? {}, null, 2)}</pre>
+                  </div>
+                  <div>
+                    <small>副作用</small>
+                    <div style={styles.previewList}>
+                      {(selectedCanvasLog?.side_effects ?? []).length ? (selectedCanvasLog?.side_effects ?? []).map((record) => (
+                        <span style={styles.previewRow} key={`${record.kind}-${record.decision}`}>
+                          <em>{sideEffectLabel(record.kind)}</em>
+                          <code style={styles.code}>{record.decision}</code>
+                        </span>
+                      )) : (
+                        <span style={styles.previewRow}>
+                          <em>宣告</em>
+                          <code style={styles.code}>{(selectedCanvasNode.side_effects?.length ? selectedCanvasNode.side_effects : selectedCanvasSpec?.side_effects ?? []).map(sideEffectLabel).join(" / ") || "純讀"}</code>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <div style={styles.topology}>
               {(graph?.topology ?? []).map((nodeId) => (
                 <span style={styles.topologyStep} key={nodeId}>{nodeId}</span>
@@ -460,6 +512,25 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
             {projectionRunId ? (
               <WorkflowRunPlanPanel fixedRunId={projectionRunId} />
             ) : null}
+          </section>
+
+          <section style={styles.sectionFull}>
+            <SectionHead icon={<ShieldCheck size={16} />} title="換軌守門" meta={parityReports.length ? `${parityReports.length} 筆 parity` : "等待證據"} />
+            <div style={styles.gateNote}>
+              <span>D 期開工 gate：最近 5 筆 parity 全 equal，且至少 2 筆來自 real sample；C1 防污染套件維持綠燈；shadow run 設計書就緒。</span>
+              <code style={styles.code}>python -m launcher.plugins.iso_tools.workflow.cli parity-history --json</code>
+            </div>
+            <div style={styles.parityList}>
+              {parityReports.map((report) => (
+                <div style={{ ...styles.parityItem, borderColor: report.equal ? "rgba(47,245,200,0.32)" : "rgba(255,107,107,0.48)" }} key={report.report_path}>
+                  <strong>{report.equal ? "equal" : "violation"}</strong>
+                  <span>{report.created_at}</span>
+                  <em>{report.violation_count} violation · {report.acceptable_diff_count} accepted</em>
+                  <code style={styles.code}>{compactPath(report.report_path)}</code>
+                </div>
+              ))}
+              {loaded && !parityReports.length ? <EmptyLine text="尚無 parity 報告。請用 CLI 產生證據，不在 UI 直接觸發比對。" /> : null}
+            </div>
           </section>
         </div>
         {safeRunConfirmOpen ? (
@@ -934,6 +1005,41 @@ const styles = {
     gap: 4,
     padding: "2px 7px",
   },
+  canvasDetail: {
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(47,245,200,0.18)",
+    borderRadius: 8,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    padding: 10,
+  },
+  canvasDetailGrid: {
+    display: "grid",
+    gap: 10,
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    minWidth: 0,
+  },
+  canvasDetailHead: {
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
+    minWidth: 0,
+  },
+  compactPre: {
+    background: "rgba(0,0,0,0.22)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 7,
+    color: "rgba(220,235,228,0.78)",
+    fontSize: 11,
+    lineHeight: 1.45,
+    margin: "5px 0 0",
+    maxHeight: 120,
+    overflow: "auto",
+    padding: 8,
+    whiteSpace: "pre-wrap",
+  },
   topology: {
     display: "flex",
     flexWrap: "wrap",
@@ -964,6 +1070,15 @@ const styles = {
     gridTemplateColumns: "auto 1fr",
     minWidth: 0,
     padding: "8px 9px",
+  },
+  gateNote: {
+    background: "rgba(255,209,102,0.08)",
+    border: "1px solid rgba(255,209,102,0.22)",
+    borderRadius: 8,
+    color: "rgba(255,244,207,0.9)",
+    display: "grid",
+    gap: 7,
+    padding: 10,
   },
   issueList: {
     color: "#ffd166",
@@ -996,6 +1111,20 @@ const styles = {
     overflow: "auto",
     padding: 10,
     whiteSpace: "pre-wrap",
+  },
+  parityItem: {
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    display: "grid",
+    gap: 4,
+    minWidth: 0,
+    padding: "8px 10px",
+  },
+  parityList: {
+    display: "grid",
+    gap: 7,
+    minWidth: 0,
   },
   runLayout: {
     display: "grid",

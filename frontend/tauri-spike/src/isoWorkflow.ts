@@ -32,7 +32,8 @@ export type IsoWorkflowAction =
   | "workflow_list_runs"
   | "workflow_read_run_log"
   | "workflow_plan_from_run"
-  | "workflow_read_artifact";
+  | "workflow_read_artifact"
+  | "workflow_parity_history";
 
 export interface IsoRegion {
   left: number;
@@ -177,6 +178,25 @@ export interface IsoNodeWorkflowRunListPayload {
   run_root: string;
   run_count: number;
   runs: IsoNodeWorkflowRunSummary[];
+}
+
+export interface IsoParityReportSummary {
+  created_at: string;
+  equal: boolean;
+  violation_count: number;
+  acceptable_diff_count: number;
+  inputs_digest: string;
+  legacy_digest: string;
+  workflow_digest: string;
+  report_path: string;
+}
+
+export interface IsoParityHistoryPayload {
+  schema_version: number;
+  action: "workflow_parity_history";
+  report_root: string;
+  report_count: number;
+  reports: IsoParityReportSummary[];
 }
 
 export interface IsoNodeWorkflowNodeRunLog {
@@ -552,6 +572,7 @@ export interface IsoExportResult {
   action: "export_plan_csv";
   created_at: string;
   export_path: string;
+  export_dir?: string;
   row_count: number;
   selected_count: number;
   message: string;
@@ -705,6 +726,10 @@ export async function validateIsoNodeWorkflow(request: Pick<IsoWorkflowRequest, 
 
 export async function listIsoWorkflowRuns(): Promise<IsoNodeWorkflowRunListPayload> {
   return invokeJson<IsoNodeWorkflowRunListPayload>("run_iso_workflow", { action: "workflow_list_runs" });
+}
+
+export async function listIsoParityReports(): Promise<IsoParityHistoryPayload> {
+  return invokeJson<IsoParityHistoryPayload>("run_iso_workflow", { action: "workflow_parity_history" });
 }
 
 export async function readIsoWorkflowRunLog(runId: string): Promise<IsoNodeWorkflowRunLog> {

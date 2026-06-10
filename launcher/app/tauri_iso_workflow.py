@@ -182,6 +182,8 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return workflow_plan_from_run_action(request)
     if request.action == "workflow_read_artifact":
         return workflow_read_artifact_action(request)
+    if request.action == "workflow_parity_history":
+        return workflow_parity_history_action(request)
     raise ValueError(f"unknown action: {request.action}")
 
 
@@ -622,6 +624,12 @@ def workflow_read_artifact_action(request: IsoWorkflowRequest) -> dict[str, Any]
     }
 
 
+def workflow_parity_history_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
+    from launcher.plugins.iso_tools.workflow.parity import list_parity_reports
+
+    return list_parity_reports(limit=10)
+
+
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
     selected_rows = [row for row in request.rows if row.get("selected")]
     operations = [RenameOperation(Path(row["source_path"]), Path(row["target_path"])) for row in selected_rows]
@@ -711,6 +719,7 @@ def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:
         raise ValueError("沒有可匯出的命名草稿。")
 
     created_at = _now()
+    explicit_export_path = request.export_path is not None
     export_path = request.export_path or _default_export_path(request, rows)
     export_path.parent.mkdir(parents=True, exist_ok=True)
     columns = [
@@ -728,24 +737,66 @@ def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:
         "target_path",
         "created_at",
     ]
-    with export_path.open("w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            exported_row = {column: row.get(column, "") for column in columns}
-            exported_row["created_at"] = created_at
-            writer.writerow(exported_row)
+    _write_export_csv_atomic(export_path, columns, rows, created_at)
+    retention_issues = [] if explicit_export_path else _prune_exports(export_path.parent)
 
     selected_count = sum(1 for row in rows if row.get("selected"))
-    return {
+    payload = {
         "schema_version": 1,
         "action": "export_plan_csv",
         "created_at": created_at,
         "export_path": str(export_path),
+        "export_dir": str(export_path.parent),
         "row_count": len(rows),
         "selected_count": selected_count,
         "message": f"已匯出命名草稿 CSV：{export_path}",
     }
+    if retention_issues:
+        payload["retention_issues"] = retention_issues
+    return payload
+
+
+def _write_export_csv_atomic(export_path: Path, columns: list[str], rows: list[dict[str, Any]], created_at: str) -> None:
+    temporary = export_path.with_name(f".{export_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                exported_row = {column: row.get(column, "") for column in columns}
+                exported_row["created_at"] = created_at
+                writer.writerow(exported_row)
+        os.replace(temporary, export_path)
+    except (PermissionError, OSError) as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if _is_csv_lock_error(exc):
+            raise ValueError(f"CSV 正被其他程式（例如 Excel）開啟，請關閉後重試：{export_path}") from exc
+        raise
+
+
+def _prune_exports(folder: Path, *, keep: int = 50) -> list[dict[str, str]]:
+    issues: list[dict[str, str]] = []
+    files = sorted(folder.glob("iso_rename_plan_*.csv"), key=_export_prune_key, reverse=True)
+    for path in files[max(0, keep) :]:
+        try:
+            path.unlink()
+        except OSError as exc:
+            issues.append({"path": str(path), "error": str(exc)})
+    return issues
+
+
+def _export_prune_key(path: Path) -> tuple[float, str]:
+    try:
+        return path.stat().st_mtime, path.name
+    except OSError:
+        return 0.0, path.name
+
+
+def _is_csv_lock_error(exc: OSError) -> bool:
+    return isinstance(exc, PermissionError) or getattr(exc, "winerror", None) in {32, 33}
 
 
 def export_debug_bundle(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -975,19 +1026,7 @@ def _default_export_path(request: IsoWorkflowRequest, rows: list[dict[str, Any]]
 
 
 def _default_export_folder(request: IsoWorkflowRequest, rows: list[dict[str, Any]]) -> Path:
-    for path in (
-        request.page_folder,
-        request.combine_pdf.parent if request.combine_pdf else None,
-        request.work_folder,
-        request.iso_list.parent if request.iso_list else None,
-    ):
-        if path is not None:
-            return path if path.is_dir() else path.parent
-    for row in rows:
-        source = _path_or_none(row.get("source_path"))
-        if source is not None:
-            return source.parent
-    return Path.cwd()
+    return runtime_root() / ".runtime" / "exports" / "iso"
 
 
 def _steps(source_kind: str, pdf_count: int, record_count: int, detect_serials: bool, summary: dict[str, int]) -> list[dict[str, str]]:
@@ -1264,7 +1303,13 @@ def _workflow_run_dir_required(request: IsoWorkflowRequest) -> Path:
         raise ValueError("缺少 workflow_run_id。")
     candidate = Path(run_id)
     if candidate.exists() and candidate.is_dir():
-        return candidate
+        root = _workflow_run_root().resolve()
+        resolved = candidate.resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError("workflow_run_id 不可指向 run root 以外路徑。")
+        if not (resolved / "run_log.json").exists():
+            raise FileNotFoundError(f"找不到 workflow run log：{run_id}")
+        return resolved
     safe_id = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
     if not safe_id:
         raise ValueError("workflow_run_id 不合法。")

@@ -52,6 +52,7 @@ import {
   saveIsoDraftProfile,
   startIsoBatchDetect,
   type IsoJobPayload,
+  type IsoNodeWorkflowJobPayload,
   type IsoPilotItem,
   type IsoPlanRow,
   type IsoProfilePayload,
@@ -128,6 +129,7 @@ export function IsoBoard() {
   const [applyBusy, setApplyBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [batchJob, setBatchJob] = useState<IsoJobPayload | null>(null);
+  const [workflowJob, setWorkflowJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
   const [batchBusy, setBatchBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -274,6 +276,10 @@ export function IsoBoard() {
     if (state === "failed") return "失敗";
     if (state === "queued") return "等待中";
     return localizeIsoDisplayText(state || "待命");
+  }
+
+  function workflowJobRunningLabel(job: IsoNodeWorkflowJobPayload | null) {
+    return job && ["queued", "running", "cancel_requested"].includes(job.state) ? "執行中" : "";
   }
 
   function registerRunLog(ref?: IsoRunLogRef | null, fallbackRunId = "") {
@@ -859,7 +865,7 @@ export function IsoBoard() {
         line_col: plan.source.line_col ?? lineCol,
         pattern: plan.source.pattern || pattern,
       });
-      setMessage(result.message);
+      setMessage(result.export_path ? `已匯出命名草稿 CSV：${result.export_path}` : result.message);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -1324,6 +1330,7 @@ export function IsoBoard() {
   }
   const isEngineerView = isoView === "engineer";
   const isNodesView = isoView === "nodes";
+  const workflowJobLabel = workflowJobRunningLabel(workflowJob);
 
   return (
     <section className={`iso-board iso-workbench iso-view-${isoView}`}>
@@ -1357,6 +1364,7 @@ export function IsoBoard() {
             <button className={isoView === "nodes" ? "active" : ""} onClick={() => setIsoView("nodes")} title="節點式：graph / run log / 進階檢視">
               <GitBranch size={15} />
               <span>節點式</span>
+              {workflowJobLabel ? <small>{workflowJobLabel}</small> : null}
             </button>
           </div>
           {isoView !== "autopilot" ? (
@@ -1478,6 +1486,8 @@ export function IsoBoard() {
       ) : isoView === "nodes" ? (
         <WorkflowInspector
           workflowInputs={workflowInspectorInputs}
+          workflowJob={workflowJob}
+          setWorkflowJob={setWorkflowJob}
           registerSafeRun={(runner) => {
             workflowSafeRunRef.current = runner;
             if (pendingWorkflowVerify) {
