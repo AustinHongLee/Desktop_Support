@@ -35,9 +35,11 @@ const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pd
 type WorkflowInspectorProps = {
   workflowInputs?: Record<string, unknown>;
   registerSafeRun?: (runner: () => void) => void;
+  workflowJob?: IsoNodeWorkflowJobPayload | null;
+  setWorkflowJob?: (job: IsoNodeWorkflowJobPayload | null) => void;
 };
 
-export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: WorkflowInspectorProps) {
+export function WorkflowInspector({ workflowInputs = {}, registerSafeRun, workflowJob, setWorkflowJob }: WorkflowInspectorProps) {
   const [expanded, setExpanded] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -51,9 +53,11 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
   const [safeRunConfirmOpen, setSafeRunConfirmOpen] = useState(false);
   const [safeRunBusy, setSafeRunBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
-  const [job, setJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
+  const [localJob, setLocalJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
   const [projectionRunId, setProjectionRunId] = useState("");
   const [graphCopied, setGraphCopied] = useState(false);
+  const job = workflowJob === undefined ? localJob : workflowJob;
+  const updateJob = setWorkflowJob ?? setLocalJob;
 
   const specByType = useMemo(() => {
     const entries = (nodeCatalog?.nodes ?? []).map((spec) => [spec.node_type, spec] as const);
@@ -84,7 +88,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
         if (cancelled) {
           return;
         }
-        setJob(next);
+        updateJob(next);
         setRunError(next.error || "");
         if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
           await refreshRuns(next.workflow_run_id);
@@ -185,6 +189,9 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
       setRunError("請用 Tauri 桌面版執行節點工作流。");
       return;
     }
+    if (safeRunBusy || isWorkflowJobRunning(job)) {
+      return;
+    }
     const graphValid = nextGraph?.valid === true;
     if (!graphValid || !hasPdfSource || !hasIsoSource) {
       setRunError(safeRunBlockReason(graphValid, hasPdfSource, hasIsoSource));
@@ -195,6 +202,9 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
   }
 
   async function confirmSafeRun() {
+    if (safeRunBusy || isWorkflowJobRunning(job)) {
+      return;
+    }
     if (!canRunSafe) {
       setRunError(safeRunBlockReason(graph?.valid === true, hasPdfSource, hasIsoSource));
       return;
@@ -206,7 +216,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
         workflow_path: SAFE_WORKFLOW_PATH,
         workflow_inputs: safeInputs,
       });
-      setJob(next);
+      updateJob(next);
       setSafeRunConfirmOpen(false);
       if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
         await refreshRuns(next.workflow_run_id);
@@ -227,7 +237,7 @@ export function WorkflowInspector({ workflowInputs = {}, registerSafeRun }: Work
     setCancelBusy(true);
     setRunError("");
     try {
-      setJob(await cancelIsoWorkflowJob(jobId));
+      updateJob(await cancelIsoWorkflowJob(jobId));
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
     } finally {
