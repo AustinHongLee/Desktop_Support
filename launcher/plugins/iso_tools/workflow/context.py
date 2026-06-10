@@ -5,7 +5,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from launcher.plugins.iso_tools.workflow.policy import SideEffectGate, SideEffectPolicy
 from launcher.plugins.iso_tools.workflow.schema import WorkflowGraph
@@ -61,6 +61,7 @@ class WorkflowContext:
     log: Any
     artifacts: ArtifactStore
     node_outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
+    should_cancel: Callable[[], bool] | None = None
 
 
 class NodeExecutionContext:
@@ -107,6 +108,11 @@ class NodeExecutionContext:
 
     def mark_blocked(self, reason: str) -> None:
         self.blocked_reason = reason
+
+    def should_stop(self) -> bool:
+        if self.workflow.should_cancel is None:
+            return False
+        return bool(self.workflow.should_cancel())
 
 
 def _safe_name(value: str) -> str:

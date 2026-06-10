@@ -49,6 +49,10 @@ class ReplayViolationError(WorkflowError):
     pass
 
 
+class WorkflowCancelledError(WorkflowError):
+    pass
+
+
 class SideEffectAccountingError(WorkflowError):
     pass
 

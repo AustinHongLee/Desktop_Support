@@ -79,6 +79,12 @@ class IsoWorkflowRequest:
     run_id: str | None = None
     workflow_path: Path | None = None
     workflow: dict[str, Any] | None = None
+    workflow_inputs: dict[str, Any] | None = None
+    workflow_allow: tuple[str, ...] = ()
+    workflow_confirm: tuple[str, ...] = ()
+    workflow_mode: str | None = None
+    workflow_job_id: str | None = None
+    workflow_run_id: str | None = None
     rows: tuple[dict[str, Any], ...] = ()
 
 
@@ -159,6 +165,16 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return workflow_load_action(request)
     if request.action == "workflow_validate":
         return workflow_validate_action(request)
+    if request.action == "workflow_run":
+        return workflow_run_action(request)
+    if request.action == "workflow_run_status":
+        return workflow_run_status_action(request)
+    if request.action == "workflow_cancel":
+        return workflow_cancel_action(request)
+    if request.action == "workflow_list_runs":
+        return workflow_list_runs_action(request)
+    if request.action == "workflow_read_run_log":
+        return workflow_read_run_log_action(request)
     raise ValueError(f"unknown action: {request.action}")
 
 
@@ -498,6 +514,78 @@ def workflow_validate_action(request: IsoWorkflowRequest) -> dict[str, Any]:
         "workflow_id": graph.workflow_id,
         **_workflow_validation_payload(graph),
     }
+
+
+def workflow_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    _workflow_policy_from_request(request)
+    if (request.workflow_mode or "run") != "replay":
+        _workflow_graph_from_request(request)
+    else:
+        _workflow_run_dir_required(request)
+
+    job_id = request.workflow_job_id or uuid.uuid4().hex
+    job_dir = _workflow_job_dir(job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    job = _initial_workflow_job_payload(job_id, "queued")
+    _write_json(job_dir / "job.json", job)
+    _write_json(job_dir / "request.json", _workflow_request_payload(request, job_id=job_id))
+    _spawn_workflow_job(job_dir)
+    return _read_json(job_dir / "job.json")
+
+
+def workflow_run_status_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    return _read_json(_workflow_job_dir_required(request) / "job.json")
+
+
+def workflow_cancel_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    job_dir = _workflow_job_dir_required(request)
+    _write_json(job_dir / "cancel.json", {"cancelled_at": _now()})
+    job = _read_json(job_dir / "job.json")
+    if job.get("state") in {"queued", "running"}:
+        job["state"] = "cancel_requested"
+        job["updated_at"] = _now()
+        _write_json(job_dir / "job.json", job)
+    return job
+
+
+def workflow_list_runs_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
+    root = _workflow_run_root()
+    runs: list[dict[str, Any]] = []
+    if root.exists():
+        for run_dir in root.iterdir():
+            run_log = run_dir / "run_log.json"
+            if not run_dir.is_dir() or not run_log.exists():
+                continue
+            try:
+                payload = _read_json(run_log)
+            except (OSError, json.JSONDecodeError):
+                continue
+            runs.append(
+                {
+                    "run_id": payload.get("run_id") or run_dir.name,
+                    "workflow_id": payload.get("workflow_id"),
+                    "mode": payload.get("mode"),
+                    "status": payload.get("status"),
+                    "started_at": payload.get("started_at"),
+                    "ended_at": payload.get("ended_at"),
+                    "source_run_id": payload.get("source_run_id"),
+                    "run_dir": str(run_dir),
+                    "side_effect_summary": payload.get("side_effect_summary") or {},
+                }
+            )
+    runs.sort(key=lambda item: str(item.get("started_at") or item.get("run_id") or ""), reverse=True)
+    return {
+        "schema_version": 1,
+        "action": "workflow_list_runs",
+        "created_at": _now(),
+        "run_root": str(root),
+        "run_count": len(runs),
+        "runs": runs[:30],
+    }
+
+
+def workflow_read_run_log_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    return _read_json(_workflow_run_dir_required(request) / "run_log.json")
 
 
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -934,6 +1022,12 @@ def _normalize_request(payload: dict[str, Any]) -> dict[str, Any]:
         "run_id": str(payload.get("run_id") or "").strip() or None,
         "workflow_path": _path_or_none(payload.get("workflow_path")),
         "workflow": _dict_or_none(payload.get("workflow") or payload.get("graph")),
+        "workflow_inputs": _dict_or_none(payload.get("workflow_inputs")),
+        "workflow_allow": _str_tuple(payload.get("workflow_allow") or payload.get("allow")),
+        "workflow_confirm": _str_tuple(payload.get("workflow_confirm") or payload.get("confirm")),
+        "workflow_mode": str(payload.get("workflow_mode") or payload.get("mode") or "").strip() or None,
+        "workflow_job_id": str(payload.get("workflow_job_id") or "").strip() or None,
+        "workflow_run_id": str(payload.get("workflow_run_id") or payload.get("source_run_id") or "").strip() or None,
         "rows": tuple(payload.get("rows") or ()),
     }
 
@@ -957,6 +1051,16 @@ def _float_or_none(value: Any) -> float | None:
 
 def _dict_or_none(value: Any) -> dict[str, Any] | None:
     return dict(value) if isinstance(value, dict) else None
+
+
+def _str_tuple(value: Any) -> tuple[str, ...]:
+    if value is None or value == "":
+        return ()
+    if isinstance(value, str):
+        return (value.strip(),) if value.strip() else ()
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    return (str(value).strip(),) if str(value).strip() else ()
 
 
 def _state_store() -> AppStateStore:
@@ -996,10 +1100,114 @@ def _workflow_validation_payload(graph: Any) -> dict[str, Any]:
     }
 
 
+def _workflow_policy_from_request(request: IsoWorkflowRequest) -> Any:
+    from launcher.plugins.iso_tools.workflow.policy import GUARDED, SideEffectPolicy
+
+    mode = (request.workflow_mode or "run").strip() or "run"
+    if mode not in {"run", "dry_run", "replay"}:
+        raise ValueError(f"workflow_mode 不支援：{mode}")
+    if mode == "replay" and (request.workflow_allow or request.workflow_confirm):
+        raise ValueError("workflow replay 不接受 allow/confirm。")
+    allowed = frozenset(request.workflow_allow)
+    unknown = allowed - GUARDED
+    if unknown:
+        raise ValueError(f"workflow_allow 只接受 guarded side effects {sorted(GUARDED)}；收到 {sorted(unknown)}")
+    return SideEffectPolicy(
+        mode=mode,
+        allowed_guarded=allowed,
+        confirmed_nodes=frozenset(request.workflow_confirm),
+    )
+
+
+def _workflow_request_payload(request: IsoWorkflowRequest, *, job_id: str) -> dict[str, Any]:
+    return {
+        "action": "workflow_run",
+        "workflow_path": str(request.workflow_path or ""),
+        "workflow": request.workflow,
+        "workflow_inputs": request.workflow_inputs or {},
+        "workflow_allow": list(request.workflow_allow),
+        "workflow_confirm": list(request.workflow_confirm),
+        "workflow_mode": request.workflow_mode or "run",
+        "workflow_job_id": job_id,
+        "workflow_run_id": request.workflow_run_id or request.run_id or "",
+    }
+
+
 def _resolve_workflow_path(path: Path) -> Path:
     if path.is_absolute():
         return path
     return Path.cwd() / path
+
+
+def _workflow_job_root() -> Path:
+    root = os.environ.get("DESKTOP_SUPPORT_WORKFLOW_JOB_ROOT")
+    if root:
+        return Path(root)
+    project_root = os.environ.get(PROJECT_ROOT_ENV)
+    if project_root:
+        return Path(project_root) / ".runtime" / "jobs" / "workflow"
+    return runtime_root() / ".runtime" / "jobs" / "workflow"
+
+
+def _workflow_run_root() -> Path:
+    root = os.environ.get("DESKTOP_SUPPORT_WORKFLOW_RUN_ROOT")
+    if root:
+        return Path(root)
+    project_root = os.environ.get(PROJECT_ROOT_ENV)
+    if project_root:
+        return Path(project_root) / ".runtime" / "runs" / "workflow"
+    return runtime_root() / ".runtime" / "runs" / "workflow"
+
+
+def _workflow_job_dir(job_id: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "", job_id)
+    if not safe_id:
+        raise ValueError("workflow_job_id 不合法。")
+    return _workflow_job_root() / safe_id
+
+
+def _workflow_job_dir_required(request: IsoWorkflowRequest) -> Path:
+    job_id = request.workflow_job_id or request.job_id
+    if not job_id:
+        raise ValueError("缺少 workflow_job_id。")
+    job_dir = _workflow_job_dir(job_id)
+    if not (job_dir / "job.json").exists():
+        raise FileNotFoundError(f"找不到 workflow job：{job_id}")
+    return job_dir
+
+
+def _workflow_run_dir_required(request: IsoWorkflowRequest) -> Path:
+    run_id = request.workflow_run_id or request.run_id
+    if not run_id:
+        raise ValueError("缺少 workflow_run_id。")
+    candidate = Path(run_id)
+    if candidate.exists() and candidate.is_dir():
+        return candidate
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "", run_id)
+    if not safe_id:
+        raise ValueError("workflow_run_id 不合法。")
+    run_dir = _workflow_run_root() / safe_id
+    if not (run_dir / "run_log.json").exists():
+        raise FileNotFoundError(f"找不到 workflow run log：{run_id}")
+    return run_dir
+
+
+def _initial_workflow_job_payload(job_id: str, state: str) -> dict[str, Any]:
+    now = _now()
+    return {
+        "schema_version": 1,
+        "action": "workflow_job",
+        "workflow_job_id": job_id,
+        "job_id": job_id,
+        "state": state,
+        "created_at": now,
+        "updated_at": now,
+        "progress": {"total": 0, "done": 0, "percent": 0, "current_node": ""},
+        "topology": [],
+        "nodes": {},
+        "result": None,
+        "error": "",
+    }
 
 
 def _job_root() -> Path:
@@ -1075,6 +1283,19 @@ def _should_write_run_log(request: IsoWorkflowRequest) -> bool:
 
 def _spawn_iso_worker(job_dir: Path) -> None:
     command = [sys.executable, "-m", "launcher.app.tauri_iso_worker", str(job_dir)]
+    creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.Popen(
+        command,
+        cwd=Path.cwd(),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creation_flags,
+    )
+
+
+def _spawn_workflow_job(job_dir: Path) -> None:
+    command = [sys.executable, "-m", "launcher.app.tauri_workflow_job", str(job_dir)]
     creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.Popen(
         command,
