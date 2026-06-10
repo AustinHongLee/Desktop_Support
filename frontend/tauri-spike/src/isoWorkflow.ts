@@ -26,6 +26,9 @@ export type IsoWorkflowAction =
   | "workflow_list_nodes"
   | "workflow_load"
   | "workflow_validate"
+  | "workflow_run"
+  | "workflow_run_status"
+  | "workflow_cancel"
   | "workflow_list_runs"
   | "workflow_read_run_log";
 
@@ -203,6 +206,52 @@ export interface IsoNodeWorkflowRunLog {
   nodes: Record<string, IsoNodeWorkflowNodeRunLog>;
   side_effect_summary: IsoNodeWorkflowSideEffectSummary;
   issues: Array<Record<string, unknown>>;
+}
+
+export interface IsoNodeWorkflowJobProgress {
+  total: number;
+  done: number;
+  percent: number;
+  current_node: string;
+}
+
+export interface IsoNodeWorkflowJobNode {
+  node_id: string;
+  node_type?: string;
+  status: string;
+  updated_at?: string;
+}
+
+export interface IsoNodeWorkflowJobResult {
+  schema_version: number;
+  action: "workflow_result";
+  run_id?: string;
+  workflow_id?: string;
+  mode?: string;
+  status: string;
+  run_dir?: string;
+  side_effect_summary?: IsoNodeWorkflowSideEffectSummary;
+  topology?: string[];
+  nodes?: Record<string, IsoNodeWorkflowNodeRunLog | IsoNodeWorkflowJobNode>;
+  error?: { type?: string; message?: string } | null;
+}
+
+export interface IsoNodeWorkflowJobPayload {
+  schema_version: number;
+  action: "workflow_job";
+  workflow_job_id: string;
+  job_id: string;
+  state: "queued" | "running" | "completed" | "completed_with_blocked" | "failed" | "cancelled" | "cancel_requested" | string;
+  created_at: string;
+  updated_at: string;
+  workflow_run_id?: string;
+  run_id?: string;
+  run_dir?: string;
+  progress: IsoNodeWorkflowJobProgress;
+  topology: string[];
+  nodes: Record<string, IsoNodeWorkflowJobNode>;
+  result: IsoNodeWorkflowJobResult | null;
+  error: string;
 }
 
 export interface IsoRunLogRef {
@@ -627,6 +676,23 @@ export async function listIsoWorkflowRuns(): Promise<IsoNodeWorkflowRunListPaylo
 
 export async function readIsoWorkflowRunLog(runId: string): Promise<IsoNodeWorkflowRunLog> {
   return invokeJson<IsoNodeWorkflowRunLog>("run_iso_workflow", { action: "workflow_read_run_log", workflow_run_id: runId });
+}
+
+export async function runIsoNodeWorkflowSafe(request: { workflow_path: string; workflow_inputs?: Record<string, unknown> }): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", {
+    action: "workflow_run",
+    workflow_path: request.workflow_path,
+    workflow_inputs: request.workflow_inputs ?? {},
+    workflow_mode: "run",
+  });
+}
+
+export async function loadIsoWorkflowJobStatus(workflowJobId: string): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", { action: "workflow_run_status", workflow_job_id: workflowJobId });
+}
+
+export async function cancelIsoWorkflowJob(workflowJobId: string): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", { action: "workflow_cancel", workflow_job_id: workflowJobId });
 }
 
 export async function startIsoBatchDetect(request: Partial<IsoWorkflowRequest>): Promise<IsoJobPayload> {

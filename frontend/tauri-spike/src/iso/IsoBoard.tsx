@@ -1308,6 +1308,19 @@ export function IsoBoard() {
       updateRoi={updateRoi}
     />
   );
+  const workflowInspectorInputs = useMemo(() => ({
+    work_folder: workFolder || null,
+    combine_pdf: combinePdf || null,
+    iso_list: isoList || null,
+    sheet_name: sheetName || "",
+    serial_col: serialCol === "" ? null : serialCol,
+    line_col: lineCol === "" ? null : lineCol,
+    pattern,
+    detect_serials: detectSerials,
+    confidence_threshold: confidenceThreshold,
+    serial_region: serialRegion,
+    drawing_region: drawingRegion,
+  }), [combinePdf, confidenceThreshold, detectSerials, drawingRegion, isoList, lineCol, pattern, serialCol, serialRegion, sheetName, workFolder]);
   const isEngineerView = isoView === "engineer";
 
   return (
@@ -1451,7 +1464,7 @@ export function IsoBoard() {
             onPilotAutoFix={() => void generatePlan()}
             onPilotJump={handlePilotJump}
           />
-          <WorkflowInspector />
+          <WorkflowInspector workflowInputs={workflowInspectorInputs} />
         </>
       ) : (
         <WorkbenchView
