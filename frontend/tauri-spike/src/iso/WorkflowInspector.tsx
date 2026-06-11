@@ -26,6 +26,8 @@ import {
   loadIsoNodeWorkflow,
   readIsoWorkflowArtifact,
   readIsoWorkflowRunLog,
+  runIsoWorkflowFromSafe,
+  runIsoWorkflowNodeSafe,
   runIsoNodeWorkflowSafe,
   setIsoOneClickEngine,
   setIsoShadowFlag,
@@ -150,6 +152,8 @@ export function WorkflowInspector({
   const hasIsoSource = Boolean(safeInputs.iso_list || safeInputs.work_folder);
   const safeRunReady = Boolean(graph?.valid) && hasPdfSource && hasIsoSource;
   const canRunSafe = safeRunReady && !safeRunBusy && !isWorkflowJobRunning(job);
+  const rerunSourceRunId = runLog?.run_id || selectedRun?.run_id || "";
+  const canRerun = Boolean(rerunSourceRunId) && !safeRunBusy && !isWorkflowJobRunning(job);
   const sideEffectPreview = useMemo(() => buildSideEffectPreview(graphNodes, specByType), [graphNodes, specByType]);
   const workflowSteps = useMemo(
     () => buildWorkflowSteps(graphNodes, graph?.topology ?? [], graph?.edges ?? [], specByType, runLog, job),
@@ -428,6 +432,44 @@ export function WorkflowInspector({
     setDirtyNodeIds((previous) => mergeUnique(previous, dirtyNodesFrom(nodeId)));
   }
 
+  async function rerunWorkflowNode(nodeId: string) {
+    const engineNodeId = rerunEngineNodeId(nodeId);
+    if (!engineNodeId || !rerunSourceRunId || isWorkflowJobRunning(job)) {
+      return;
+    }
+    setRunError("");
+    try {
+      const next = await runIsoWorkflowNodeSafe({
+        source_run_id: rerunSourceRunId,
+        node_id: engineNodeId,
+        workflow_inputs: safeInputs,
+      });
+      updateJob(next);
+      setSelectedCanvasNodeId(engineNodeId);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function rerunWorkflowFrom(nodeId: string) {
+    const engineNodeId = rerunEngineNodeId(nodeId);
+    if (!engineNodeId || !rerunSourceRunId || isWorkflowJobRunning(job)) {
+      return;
+    }
+    setRunError("");
+    try {
+      const next = await runIsoWorkflowFromSafe({
+        source_run_id: rerunSourceRunId,
+        node_id: engineNodeId,
+        workflow_inputs: safeInputs,
+      });
+      updateJob(next);
+      setSelectedCanvasNodeId(engineNodeId);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
   async function confirmSafeRun() {
     if (safeRunBusy || isWorkflowJobRunning(job)) {
       return;
@@ -622,18 +664,32 @@ export function WorkflowInspector({
               <Metric icon={<ShieldCheck size={16} />} label="副作用" value={`${executedCount} / ${blockedCount}`} tone={blockedCount ? "warn" : "ready"} />
             </div>
           )}
-          canvas={<WorkflowCanvas payload={graph} runLog={runLog} nodeSummaries={nodeSummaries} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />}
+          canvas={(
+            <WorkflowCanvas
+              payload={graph}
+              runLog={runLog}
+              nodeSummaries={nodeSummaries}
+              selectedNodeId={activeCanvasNodeId}
+              onSelectNode={setSelectedCanvasNodeId}
+              onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
+              onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
+              rerunEnabled={canRerun}
+            />
+          )}
           detail={(
             <NodeDetailPanel
               dirtyNodeIds={dirtyNodeIds}
               node={selectedCanvasNode}
               nodeLog={selectedCanvasLog}
+              onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
+              onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
               onSelectNode={setSelectedCanvasNodeId}
               onWorkflowInputChange={handleWorkflowInputChange}
               plan={projectedPlan}
               preview={nodePreview}
               previewBusy={nodePreviewBusy}
               previewError={nodePreviewError || projectionError}
+              rerunEnabled={canRerun}
               summary={selectedCanvasNode ? nodeSummaries[selectedCanvasNode.node_id] : undefined}
               workflowInputs={safeInputs}
             />
@@ -733,7 +789,16 @@ export function WorkflowInspector({
 
           <section style={styles.sectionWide}>
             <SectionHead icon={<Route size={16} />} title="工程 DAG" meta={graph?.workflow_id || graph?.graph?.workflow_id || "等待"} />
-            <WorkflowCanvas payload={graph} runLog={runLog} nodeSummaries={nodeSummaries} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />
+            <WorkflowCanvas
+              payload={graph}
+              runLog={runLog}
+              nodeSummaries={nodeSummaries}
+              selectedNodeId={activeCanvasNodeId}
+              onSelectNode={setSelectedCanvasNodeId}
+              onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
+              onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
+              rerunEnabled={canRerun}
+            />
             {selectedCanvasNode ? (
               <div style={styles.canvasDetail}>
                 <div style={styles.canvasDetailHead}>
@@ -1352,6 +1417,16 @@ function dirtyNodesFrom(nodeId: string): string[] {
     batch_detect: ["batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
   };
   return downstream[nodeId] ?? [nodeId];
+}
+
+function rerunEngineNodeId(nodeId: string): string {
+  if (nodeId === "pdf_source") {
+    return "discover";
+  }
+  if (nodeId === "roi_calib") {
+    return "batch_detect";
+  }
+  return nodeId;
 }
 
 function buildSideEffectPreview(

@@ -12,12 +12,13 @@ from launcher.app.tauri_iso_workflow import (
     _now,
     _read_json,
     _workflow_graph_from_request,
+    _workflow_node_id_required,
     _workflow_policy_from_request,
     _workflow_run_dir_required,
     _workflow_run_root,
     _write_json,
 )
-from launcher.plugins.iso_tools.workflow.executor import replay_workflow, run_workflow
+from launcher.plugins.iso_tools.workflow.executor import replay_workflow, run_from_node, run_single_node, run_workflow
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -51,7 +52,26 @@ def run_job(job_dir: Path) -> dict[str, Any]:
     callback = _progress_callback(job_dir)
     should_cancel = lambda: (job_dir / "cancel.json").exists()
 
-    if mode == "replay":
+    if request.action == "workflow_run_node":
+        result = run_single_node(
+            _workflow_run_dir_required(request),
+            _workflow_node_id_required(request),
+            run_root=_workflow_run_root(),
+            policy=policy,
+            should_cancel=should_cancel,
+            on_update=callback,
+        )
+    elif request.action == "workflow_run_from":
+        result = run_from_node(
+            _workflow_run_dir_required(request),
+            _workflow_node_id_required(request),
+            inputs=request.workflow_inputs or {},
+            run_root=_workflow_run_root(),
+            policy=policy,
+            should_cancel=should_cancel,
+            on_update=callback,
+        )
+    elif mode == "replay":
         result = replay_workflow(
             _workflow_run_dir_required(request),
             run_root=_workflow_run_root(),
@@ -161,6 +181,7 @@ def _job_result_payload(result: dict[str, Any]) -> dict[str, Any]:
         "mode": result.get("mode") or "",
         "status": result.get("status") or "",
         "run_dir": result.get("run_dir") or "",
+        "source_run_id": result.get("source_run_id") or "",
         "side_effect_summary": result.get("side_effect_summary") or {},
         "topology": result.get("topology") or [],
         "nodes": result.get("nodes") or {},

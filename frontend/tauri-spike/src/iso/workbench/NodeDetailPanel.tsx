@@ -25,11 +25,14 @@ type NodeDetailPanelProps = {
   node: IsoNodeWorkflowInstance | null;
   nodeLog?: IsoNodeWorkflowNodeRunLog;
   onSelectNode?: (nodeId: string) => void;
+  onRunFrom?: (nodeId: string) => void;
+  onRunNode?: (nodeId: string) => void;
   onWorkflowInputChange?: (nodeId: string, field: string, value: unknown) => void;
   plan: IsoWorkflowPlan | null;
   preview: IsoPreviewPayload | null;
   previewBusy?: boolean;
   previewError?: string;
+  rerunEnabled?: boolean;
   summary?: NodeCardSummary;
   workflowInputs?: Record<string, unknown>;
 };
@@ -39,11 +42,14 @@ export function NodeDetailPanel({
   node,
   nodeLog,
   onSelectNode,
+  onRunFrom,
+  onRunNode,
   onWorkflowInputChange,
   plan,
   preview,
   previewBusy = false,
   previewError = "",
+  rerunEnabled = false,
   summary,
   workflowInputs = {},
 }: NodeDetailPanelProps) {
@@ -67,6 +73,12 @@ export function NodeDetailPanel({
         </div>
       ) : null}
       {summary ? <SummaryBlock summary={summary} /> : null}
+      <ActionRow
+        actions={[
+          { label: "重跑此節點", disabled: !rerunEnabled || node.node_type.startsWith("ui."), onClick: () => onRunNode?.(node.node_id) },
+          { label: "重跑下游", disabled: !rerunEnabled, onClick: () => onRunFrom?.(node.node_id), tone: "primary" },
+        ]}
+      />
       {renderNodeDetail({ node, onSelectNode, onWorkflowInputChange, plan, preview, previewBusy, previewError, workflowInputs })}
       <LogBlock nodeLog={nodeLog} />
     </div>

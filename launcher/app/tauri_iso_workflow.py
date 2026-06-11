@@ -172,6 +172,10 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return workflow_validate_action(request)
     if request.action == "workflow_run":
         return workflow_run_action(request)
+    if request.action == "workflow_run_node":
+        return workflow_run_node_action(request)
+    if request.action == "workflow_run_from":
+        return workflow_run_from_action(request)
     if request.action == "workflow_run_status":
         return workflow_run_status_action(request)
     if request.action == "workflow_cancel":
@@ -544,7 +548,26 @@ def workflow_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
         _workflow_graph_from_request(request)
     else:
         _workflow_run_dir_required(request)
+    return _queue_workflow_job(request, one_click=one_click)
 
+
+def workflow_run_node_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    _workflow_run_dir_required(request)
+    _workflow_node_id_required(request)
+    request = replace(request, workflow_allow=(), workflow_confirm=(), workflow_mode="run")
+    _workflow_policy_from_request(request)
+    return _queue_workflow_job(request, one_click=None)
+
+
+def workflow_run_from_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    _workflow_run_dir_required(request)
+    _workflow_node_id_required(request)
+    request = replace(request, workflow_allow=(), workflow_confirm=(), workflow_mode="run")
+    _workflow_policy_from_request(request)
+    return _queue_workflow_job(request, one_click=None)
+
+
+def _queue_workflow_job(request: IsoWorkflowRequest, *, one_click: dict[str, Any] | None) -> dict[str, Any]:
     job_id = request.workflow_job_id or uuid.uuid4().hex
     job_dir = _workflow_job_dir(job_id)
     job_dir.mkdir(parents=True, exist_ok=True)
@@ -1479,7 +1502,7 @@ def _workflow_request_payload(
     one_click: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
-        "action": "workflow_run",
+        "action": request.action,
         "workflow_path": str(request.workflow_path or ""),
         "workflow": request.workflow,
         "workflow_inputs": request.workflow_inputs or {},
@@ -1488,6 +1511,7 @@ def _workflow_request_payload(
         "workflow_mode": request.workflow_mode or "run",
         "workflow_job_id": job_id,
         "workflow_run_id": request.workflow_run_id or request.run_id or "",
+        "workflow_node_id": request.workflow_node_id or "",
     }
     if shadow:
         payload["shadow"] = shadow
@@ -1715,6 +1739,13 @@ def _workflow_job_dir_required(request: IsoWorkflowRequest) -> Path:
     if not (job_dir / "job.json").exists():
         raise FileNotFoundError(f"找不到 workflow job：{job_id}")
     return job_dir
+
+
+def _workflow_node_id_required(request: IsoWorkflowRequest) -> str:
+    node_id = (request.workflow_node_id or "").strip()
+    if not node_id:
+        raise ValueError("缺少 workflow_node_id。")
+    return node_id
 
 
 def _workflow_run_dir_required(request: IsoWorkflowRequest) -> Path:

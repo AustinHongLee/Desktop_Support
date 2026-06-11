@@ -9,6 +9,10 @@ import type { NodeCardSummary } from "./workbench/nodeCards";
 
 type CanvasNodeData = FlowNodeData & Record<string, unknown> & {
   decision: string;
+  nodeId: string;
+  onRunFrom?: (nodeId: string) => void;
+  onRunNode?: (nodeId: string) => void;
+  rerunEnabled: boolean;
   selected: boolean;
   summary?: NodeCardSummary;
   status: string;
@@ -22,11 +26,14 @@ type WorkflowCanvasProps = {
   nodeSummaries?: Record<string, NodeCardSummary>;
   selectedNodeId?: string;
   onSelectNode?: (nodeId: string) => void;
+  onRunFrom?: (nodeId: string) => void;
+  onRunNode?: (nodeId: string) => void;
+  rerunEnabled?: boolean;
 };
 
 const guardedTitle = "guarded：需 CLI 三因子授權（--allow + --confirm + enabled）";
 
-export function WorkflowCanvas({ payload, runLog, nodeSummaries = {}, selectedNodeId = "", onSelectNode }: WorkflowCanvasProps) {
+export function WorkflowCanvas({ payload, runLog, nodeSummaries = {}, selectedNodeId = "", onSelectNode, onRunFrom, onRunNode, rerunEnabled = false }: WorkflowCanvasProps) {
   const flow = useMemo(() => {
     if (!payload?.graph) {
       return { nodes: [] as CanvasNode[], edges: [] as Edge[] };
@@ -41,6 +48,10 @@ export function WorkflowCanvas({ payload, runLog, nodeSummaries = {}, selectedNo
         data: {
           ...node.data,
           decision: firstDecision(logNode?.side_effects ?? []),
+          nodeId: node.id,
+          onRunFrom,
+          onRunNode,
+          rerunEnabled,
           selected: selectedNodeId === node.id,
           summary: nodeSummaries[node.id],
           status: logNode?.status ?? "",
@@ -57,7 +68,7 @@ export function WorkflowCanvas({ payload, runLog, nodeSummaries = {}, selectedNo
       style: { stroke: "rgba(47,245,200,0.36)", strokeWidth: 1.4 },
     }));
     return { nodes, edges };
-  }, [payload, runLog, nodeSummaries, selectedNodeId]);
+  }, [payload, runLog, nodeSummaries, onRunFrom, onRunNode, rerunEnabled, selectedNodeId]);
 
   if (!payload?.graph) {
     return <div style={styles.empty}>尚未載入 graph。</div>;
@@ -129,6 +140,14 @@ function IsoNode({ data, selected }: NodeProps<CanvasNode>) {
         {guarded ? <span style={styles.guardedChip} title={guardedTitle}>需授權</span> : data.sideEffects.length ? <span style={styles.autoChip}>自動允許</span> : <span style={styles.readChip}>純讀</span>}
         {data.status ? <span style={styles.statusChip}>{statusLabel(data.status)}</span> : null}
         {data.decision ? <span style={styles.statusChip}>{decisionLabel(data.decision)}</span> : null}
+      </div>
+      <div style={styles.nodeActions}>
+        <button disabled={!data.rerunEnabled || data.nodeType.startsWith("ui.")} onClick={(event) => { event.stopPropagation(); data.onRunNode?.(data.nodeId); }} style={styles.nodeActionButton} type="button">
+          重跑此節點
+        </button>
+        <button disabled={!data.rerunEnabled} onClick={(event) => { event.stopPropagation(); data.onRunFrom?.(data.nodeId); }} style={styles.nodeActionButton} type="button">
+          重跑下游
+        </button>
       </div>
     </div>
   );
@@ -301,6 +320,22 @@ const styles = {
     display: "flex",
     flexWrap: "wrap",
     gap: 5,
+    marginTop: 8,
+  },
+  nodeActionButton: {
+    background: "rgba(47,245,200,0.10)",
+    border: "1px solid rgba(47,245,200,0.24)",
+    borderRadius: 7,
+    color: "#dffcf4",
+    cursor: "pointer",
+    fontSize: 10,
+    fontWeight: 800,
+    padding: "5px 7px",
+  },
+  nodeActions: {
+    display: "grid",
+    gap: 5,
+    gridTemplateColumns: "1fr 1fr",
     marginTop: 8,
   },
   nodeHead: {
