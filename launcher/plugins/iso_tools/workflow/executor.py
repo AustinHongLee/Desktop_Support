@@ -386,6 +386,47 @@ def run_single_node(
         registry=registry,
         run_root=run_root,
         policy=policy or SideEffectPolicy(),
+        source_run_dir=source_run_dir,
+        should_cancel=should_cancel,
+        on_update=on_update,
+    )
+
+
+def run_from_node(
+    source_run_dir: Path,
+    start_node: str,
+    *,
+    inputs: dict[str, Any] | None = None,
+    registry: NodeRegistry | None = None,
+    run_root: Path | None = None,
+    policy: SideEffectPolicy | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    on_update: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    source = _read_source_log(source_run_dir)
+    graph = normalize_graph(source["workflow"])
+    topology = topological_order(graph)
+    if start_node not in graph.node_map():
+        raise KeyError(f"unknown node_id: {start_node}")
+    rerun_ids = _downstream_node_ids(graph, start_node, topology)
+    nodes = [_rerun_node_with_hydrated_upstream_inputs(source, source_run_dir, node, rerun_ids) for node in graph.nodes if node.node_id in rerun_ids]
+    rerun_graph = WorkflowGraph(
+        schema_version=graph.schema_version,
+        workflow_id=f"{graph.workflow_id}_from_{start_node}",
+        display_name=f"Rerun from: {start_node}",
+        description=graph.description,
+        inputs=dict(source.get("inputs") or {}),
+        nodes=nodes,
+        edges=[edge for edge in graph.edges if edge.from_node in rerun_ids and edge.to_node in rerun_ids],
+        metadata={"source_workflow_id": graph.workflow_id, "rerun_from": start_node},
+    )
+    return run_workflow(
+        rerun_graph,
+        inputs={**dict(source.get("inputs") or {}), **(inputs or {})},
+        registry=registry,
+        run_root=run_root,
+        policy=policy or SideEffectPolicy(),
+        source_run_dir=source_run_dir,
         should_cancel=should_cancel,
         on_update=on_update,
     )
@@ -419,6 +460,47 @@ def _record_not_run_nodes(
         )
         ctx.node_outputs[node_id] = {}
         _notify_node_finished(on_update, node_id, "not_run", done + offset + 1, total)
+
+
+def _downstream_node_ids(graph: WorkflowGraph, start_node: str, topology: list[str]) -> set[str]:
+    selected = {start_node}
+    changed = True
+    while changed:
+        changed = False
+        for edge in graph.edges:
+            if edge.from_node in selected and edge.to_node not in selected:
+                selected.add(edge.to_node)
+                changed = True
+    return {node_id for node_id in topology if node_id in selected}
+
+
+def _rerun_node_with_hydrated_upstream_inputs(
+    source_log: dict[str, Any],
+    source_run_dir: Path,
+    node: NodeInstance,
+    rerun_ids: set[str],
+) -> NodeInstance:
+    inputs: dict[str, Any] = {}
+    for input_name, raw in node.inputs.items():
+        parsed = parse_node_output_ref(raw)
+        if parsed is not None and parsed[0] not in rerun_ids:
+            value = _read_output_artifact(source_log, source_run_dir, parsed[0], parsed[1])
+            if value is None:
+                raise KeyError(f"missing source artifact for {raw}")
+            inputs[input_name] = value
+        else:
+            inputs[input_name] = raw
+    return NodeInstance(
+        node_id=node.node_id,
+        node_type=node.node_type,
+        display_name=node.display_name,
+        inputs=inputs,
+        outputs=dict(node.outputs),
+        params=dict(node.params),
+        enabled=node.enabled,
+        requires_confirm=node.requires_confirm,
+        side_effects=tuple(node.side_effects),
+    )
 
 
 def _notify_node_finished(

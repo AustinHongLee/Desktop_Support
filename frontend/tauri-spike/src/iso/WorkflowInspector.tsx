@@ -15,15 +15,21 @@ import type { CSSProperties, ReactNode, SyntheticEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   cancelIsoWorkflowJob,
+  applyIsoPlan,
+  exportIsoPlanCsv,
   listIsoParityReports,
   listIsoWorkflowNodes,
   listIsoWorkflowRuns,
   loadIsoOneClickEngine,
+  loadIsoPreview,
   loadIsoSwitchoverGate,
   loadIsoWorkflowJobStatus,
+  loadIsoWorkflowPlanFromRun,
   loadIsoNodeWorkflow,
   readIsoWorkflowArtifact,
   readIsoWorkflowRunLog,
+  runIsoWorkflowFromSafe,
+  runIsoWorkflowNodeSafe,
   runIsoNodeWorkflowSafe,
   setIsoOneClickEngine,
   setIsoShadowFlag,
@@ -39,11 +45,18 @@ import {
   type IsoNodeWorkflowSpec,
   type IsoNodeWorkflowValidationPayload,
   type IsoParityReportSummary,
+  type IsoPlanRow,
+  type IsoPreviewPayload,
   type IsoSwitchoverGateVerdict,
+  type IsoWorkflowRequest,
+  type IsoWorkflowPlan,
 } from "../isoWorkflow";
-import { compactPath } from "./helpers";
+import { compactPath, DEFAULT_DRAWING_REGION, DEFAULT_SERIAL_REGION } from "./helpers";
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
+import { NodeDetailPanel } from "./workbench/NodeDetailPanel";
+import { NodeWorkbench } from "./workbench/NodeWorkbench";
+import { buildNodeCardSummaries } from "./workbench/nodeCards";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
 
@@ -79,6 +92,15 @@ export function WorkflowInspector({
   const [parityReports, setParityReports] = useState<IsoParityReportSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runLog, setRunLog] = useState<IsoNodeWorkflowRunLog | null>(null);
+  const [projectedPlan, setProjectedPlan] = useState<IsoWorkflowPlan | null>(null);
+  const [projectionError, setProjectionError] = useState("");
+  const [nodePreview, setNodePreview] = useState<IsoPreviewPayload | null>(null);
+  const [nodePreviewBusy, setNodePreviewBusy] = useState(false);
+  const [nodePreviewError, setNodePreviewError] = useState("");
+  const [overlayInputs, setOverlayInputs] = useState<Record<string, unknown>>({});
+  const [dirtyNodeIds, setDirtyNodeIds] = useState<string[]>([]);
+  const [workbenchActionBusy, setWorkbenchActionBusy] = useState<"" | "apply" | "export">("");
+  const [workbenchActionMessage, setWorkbenchActionMessage] = useState("");
   const [safeRunConfirmOpen, setSafeRunConfirmOpen] = useState(false);
   const [safeRunBusy, setSafeRunBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -104,20 +126,40 @@ export function WorkflowInspector({
     return new Map(entries);
   }, [nodeCatalog]);
   const graphNodes = graph?.graph?.nodes ?? [];
-  const fallbackNodeId = graph?.topology?.find((nodeId) => graphNodes.some((node) => node.node_id === nodeId)) || graphNodes[0]?.node_id || "";
-  const activeCanvasNodeId = graphNodes.some((node) => node.node_id === selectedCanvasNodeId) ? selectedCanvasNodeId : fallbackNodeId;
-  const selectedCanvasNode = graphNodes.find((node) => node.node_id === activeCanvasNodeId) ?? null;
+  const syntheticCanvasNodes = useMemo<IsoNodeWorkflowInstance[]>(() => [
+    { node_id: "pdf_source", node_type: "ui.pdf_source", display_name: "PDF 來源", enabled: true, params: {}, side_effects: [] },
+    { node_id: "roi_calib", node_type: "ui.roi_calibration", display_name: "ROI 調校", enabled: true, params: {}, side_effects: [] },
+  ], []);
+  const canvasDetailNodes = useMemo(
+    () => graph?.graph ? [...syntheticCanvasNodes, ...graphNodes] : graphNodes,
+    [graph?.graph, graphNodes, syntheticCanvasNodes],
+  );
+  const fallbackNodeId = graph?.graph ? "pdf_source" : graph?.topology?.find((nodeId) => graphNodes.some((node) => node.node_id === nodeId)) || graphNodes[0]?.node_id || "";
+  const activeCanvasNodeId = canvasDetailNodes.some((node) => node.node_id === selectedCanvasNodeId) ? selectedCanvasNodeId : fallbackNodeId;
+  const selectedCanvasNode = canvasDetailNodes.find((node) => node.node_id === activeCanvasNodeId) ?? null;
   const selectedCanvasSpec = selectedCanvasNode ? specByType.get(selectedCanvasNode.node_type) : undefined;
   const selectedCanvasLog = selectedCanvasNode ? runLog?.nodes?.[selectedCanvasNode.node_id] : undefined;
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
   const summary = job?.result?.side_effect_summary ?? selectedRun?.side_effect_summary ?? runLog?.side_effect_summary;
   const blockedCount = summary?.blocked?.length ?? 0;
   const executedCount = summary?.executed?.length ?? 0;
-  const safeInputs = useMemo(() => compactWorkflowInputs(workflowInputs), [workflowInputs]);
+  const baseInputs = useMemo(() => compactWorkflowInputs(workflowInputs), [workflowInputs]);
+  const baseInputsKey = useMemo(() => stableJson(baseInputs), [baseInputs]);
+  const safeInputs = useMemo(() => compactWorkflowInputs({ ...baseInputs, ...overlayInputs }), [baseInputs, overlayInputs]);
+  const selectedPreviewRow = useMemo(() => {
+    const rows = projectedPlan?.rows ?? [];
+    return rows.find((row) => row.status === "warn" || row.status === "blocked") ?? rows[0] ?? null;
+  }, [projectedPlan]);
+  const nodeSummaries = useMemo(
+    () => buildNodeCardSummaries({ dirtyNodeIds, job, plan: projectedPlan, preview: nodePreview, runLog, workflowInputs: safeInputs }),
+    [dirtyNodeIds, job, projectedPlan, nodePreview, runLog, safeInputs],
+  );
   const hasPdfSource = Boolean(safeInputs.work_folder || safeInputs.combine_pdf);
   const hasIsoSource = Boolean(safeInputs.iso_list || safeInputs.work_folder);
   const safeRunReady = Boolean(graph?.valid) && hasPdfSource && hasIsoSource;
   const canRunSafe = safeRunReady && !safeRunBusy && !isWorkflowJobRunning(job);
+  const rerunSourceRunId = runLog?.run_id || selectedRun?.run_id || "";
+  const canRerun = Boolean(rerunSourceRunId) && !safeRunBusy && !isWorkflowJobRunning(job);
   const sideEffectPreview = useMemo(() => buildSideEffectPreview(graphNodes, specByType), [graphNodes, specByType]);
   const workflowSteps = useMemo(
     () => buildWorkflowSteps(graphNodes, graph?.topology ?? [], graph?.edges ?? [], specByType, runLog, job),
@@ -133,6 +175,11 @@ export function WorkflowInspector({
       ? "節點路徑（驗證中）"
       : "傳統路徑"
     : "傳統路徑（未設旗標）";
+
+  useEffect(() => {
+    setOverlayInputs({});
+    setDirtyNodeIds([]);
+  }, [baseInputsKey]);
 
   useEffect(() => {
     if (!selectedStep || !runLog?.run_id || !isTauri()) {
@@ -193,6 +240,55 @@ export function WorkflowInspector({
   }, [runLog?.run_id, selectedStep?.node.node_id]);
 
   useEffect(() => {
+    const needsPreview = ["pdf_source", "split", "roi_calib"].includes(activeCanvasNodeId);
+    if (!needsPreview || !selectedPreviewRow?.source_path || !isTauri()) {
+      setNodePreview(null);
+      setNodePreviewBusy(false);
+      setNodePreviewError("");
+      return;
+    }
+    let cancelled = false;
+    const serialRegion = regionOrDefault(projectedPlan?.source.serial_region ?? safeInputs.serial_region, DEFAULT_SERIAL_REGION);
+    const drawingRegion = regionOrDefault(projectedPlan?.source.drawing_region ?? safeInputs.drawing_region, DEFAULT_DRAWING_REGION);
+    setNodePreviewBusy(true);
+    setNodePreviewError("");
+    loadIsoPreview({
+      source_path: selectedPreviewRow.source_path,
+      detect_serial: false,
+      serial_region: serialRegion,
+      drawing_region: drawingRegion,
+    })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setNodePreview(payload);
+      })
+      .catch((caught) => {
+        if (cancelled) {
+          return;
+        }
+        setNodePreview(null);
+        setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setNodePreviewBusy(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeCanvasNodeId,
+    projectedPlan?.source.drawing_region,
+    projectedPlan?.source.serial_region,
+    safeInputs.drawing_region,
+    safeInputs.serial_region,
+    selectedPreviewRow?.source_path,
+  ]);
+
+  useEffect(() => {
     if (!job?.workflow_job_id || !isWorkflowJobRunning(job)) {
       return;
     }
@@ -208,6 +304,7 @@ export function WorkflowInspector({
         if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
           await refreshRuns(next.workflow_run_id);
           setProjectionRunId(next.workflow_run_id);
+          setDirtyNodeIds([]);
         }
       } catch (caught) {
         if (!cancelled) {
@@ -266,6 +363,8 @@ export function WorkflowInspector({
         await loadRunLog(runId);
       } else {
         setRunLog(null);
+        setProjectedPlan(null);
+        setProjectionError("");
       }
       return graphPayload;
     } catch (caught) {
@@ -284,6 +383,8 @@ export function WorkflowInspector({
       await loadRunLog(runId);
     } else {
       setRunLog(null);
+      setProjectedPlan(null);
+      setProjectionError("");
     }
   }
 
@@ -292,11 +393,20 @@ export function WorkflowInspector({
       return;
     }
     setSelectedRunId(runId);
+    setProjectionError("");
     try {
-      setRunLog(await readIsoWorkflowRunLog(runId));
+      const nextRunLog = await readIsoWorkflowRunLog(runId);
+      setRunLog(nextRunLog);
+      try {
+        setProjectedPlan(await loadIsoWorkflowPlanFromRun(runId));
+      } catch (caught) {
+        setProjectedPlan(null);
+        setProjectionError(caught instanceof Error ? caught.message : String(caught));
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setRunLog(null);
+      setProjectedPlan(null);
     }
   }
 
@@ -323,6 +433,92 @@ export function WorkflowInspector({
     setSafeRunConfirmOpen(true);
   }
 
+  function handleWorkflowInputChange(nodeId: string, field: string, value: unknown) {
+    setOverlayInputs((previous) => ({ ...previous, [field]: value }));
+    setDirtyNodeIds((previous) => mergeUnique(previous, dirtyNodesFrom(nodeId)));
+  }
+
+  async function rerunWorkflowNode(nodeId: string) {
+    const engineNodeId = rerunEngineNodeId(nodeId);
+    if (!engineNodeId || !rerunSourceRunId || isWorkflowJobRunning(job)) {
+      return;
+    }
+    setRunError("");
+    try {
+      const next = await runIsoWorkflowNodeSafe({
+        source_run_id: rerunSourceRunId,
+        node_id: engineNodeId,
+        workflow_inputs: safeInputs,
+      });
+      updateJob(next);
+      setSelectedCanvasNodeId(engineNodeId);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function rerunWorkflowFrom(nodeId: string) {
+    const engineNodeId = rerunEngineNodeId(nodeId);
+    if (!engineNodeId || !rerunSourceRunId || isWorkflowJobRunning(job)) {
+      return;
+    }
+    setRunError("");
+    try {
+      const next = await runIsoWorkflowFromSafe({
+        source_run_id: rerunSourceRunId,
+        node_id: engineNodeId,
+        workflow_inputs: safeInputs,
+      });
+      updateJob(next);
+      setSelectedCanvasNodeId(engineNodeId);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  async function exportWorkbenchPlan() {
+    if (!projectedPlan || workbenchActionBusy) {
+      return;
+    }
+    setWorkbenchActionBusy("export");
+    setRunError("");
+    setWorkbenchActionMessage("");
+    try {
+      const result = await exportIsoPlanCsv(workbenchPlanRequest(projectedPlan, safeInputs, projectedPlan.rows));
+      setWorkbenchActionMessage(result.export_path ? `已匯出命名草稿 CSV：${result.export_path}` : result.message);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setWorkbenchActionBusy("");
+    }
+  }
+
+  async function applyWorkbenchPlan() {
+    if (!projectedPlan || workbenchActionBusy) {
+      return;
+    }
+    const rows = projectedPlan.rows.filter((row) => row.selected && row.status === "ready");
+    if (!rows.length) {
+      setRunError("沒有可套用的 ready 列。");
+      return;
+    }
+    if (!window.confirm(`將套用更名 ${rows.length} 筆。此動作會實際改名 PDF，並寫入既有更名記錄。是否繼續？`)) {
+      return;
+    }
+    setWorkbenchActionBusy("apply");
+    setRunError("");
+    setWorkbenchActionMessage("");
+    try {
+      const result = await applyIsoPlan(workbenchPlanRequest(projectedPlan, safeInputs, rows));
+      setWorkbenchActionMessage(result.message);
+      await refreshRuns(rerunSourceRunId);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setWorkbenchActionBusy("");
+    }
+  }
+
   async function confirmSafeRun() {
     if (safeRunBusy || isWorkflowJobRunning(job)) {
       return;
@@ -343,6 +539,7 @@ export function WorkflowInspector({
       if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
         await refreshRuns(next.workflow_run_id);
         setProjectionRunId(next.workflow_run_id);
+        setDirtyNodeIds([]);
       }
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
@@ -476,6 +673,11 @@ export function WorkflowInspector({
             <span>{runError}</span>
           </div>
         ) : null}
+        {workbenchActionMessage ? (
+          <div style={styles.notice}>
+            <span>{workbenchActionMessage}</span>
+          </div>
+        ) : null}
         {!safeRunReady ? (
           <div style={styles.notice}>
             <span>{safeRunBlockReason(graph?.valid === true, hasPdfSource, hasIsoSource)}</span>
@@ -502,19 +704,56 @@ export function WorkflowInspector({
           </div>
         ) : null}
 
-        <div style={styles.metrics}>
-          <Metric icon={<Braces size={16} />} label="型錄" value={nodeCatalog ? `${nodeCatalog.node_count}` : "-"} />
-          <Metric
-            icon={graph?.valid ? <CircleCheck size={16} /> : <CircleAlert size={16} />}
-            label="驗證"
-            value={graph ? (graph.valid ? "通過" : `${graph.issues.length}`) : "-"}
-            tone={graph?.valid === false ? "warn" : "ready"}
-          />
-          <Metric icon={<Route size={16} />} label="拓撲" value={graph?.topology?.length ? `${graph.topology.length}` : "-"} />
-          <Metric icon={<ShieldCheck size={16} />} label="副作用" value={`${executedCount} / ${blockedCount}`} tone={blockedCount ? "warn" : "ready"} />
-        </div>
-
-        <div style={styles.grid}>
+        <NodeWorkbench
+          header={(
+            <div style={styles.metrics}>
+              <Metric icon={<Braces size={16} />} label="型錄" value={nodeCatalog ? `${nodeCatalog.node_count}` : "-"} />
+              <Metric
+                icon={graph?.valid ? <CircleCheck size={16} /> : <CircleAlert size={16} />}
+                label="驗證"
+                value={graph ? (graph.valid ? "通過" : `${graph.issues.length}`) : "-"}
+                tone={graph?.valid === false ? "warn" : "ready"}
+              />
+              <Metric icon={<Route size={16} />} label="拓撲" value={graph?.topology?.length ? `${graph.topology.length}` : "-"} />
+              <Metric icon={<ShieldCheck size={16} />} label="副作用" value={`${executedCount} / ${blockedCount}`} tone={blockedCount ? "warn" : "ready"} />
+            </div>
+          )}
+          canvas={(
+            <WorkflowCanvas
+              payload={graph}
+              runLog={runLog}
+              nodeSummaries={nodeSummaries}
+              selectedNodeId={activeCanvasNodeId}
+              onSelectNode={setSelectedCanvasNodeId}
+              onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
+              onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
+              rerunEnabled={canRerun}
+            />
+          )}
+          detail={(
+            <NodeDetailPanel
+              dirtyNodeIds={dirtyNodeIds}
+              node={selectedCanvasNode}
+              nodeLog={selectedCanvasLog}
+              onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
+              onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
+              onSelectNode={setSelectedCanvasNodeId}
+              onWorkflowInputChange={handleWorkflowInputChange}
+              onApplyPlan={() => void applyWorkbenchPlan()}
+              onExportPlan={() => void exportWorkbenchPlan()}
+              plan={projectedPlan}
+              preview={nodePreview}
+              previewBusy={nodePreviewBusy}
+              previewError={nodePreviewError || projectionError}
+              rerunEnabled={canRerun}
+              summary={selectedCanvasNode ? nodeSummaries[selectedCanvasNode.node_id] : undefined}
+              workbenchActionBusy={workbenchActionBusy}
+              workflowInputs={safeInputs}
+            />
+          )}
+          drawerMeta={`${workflowSteps.length || graphNodes.length} 節點 · ${runs.length} 紀錄`}
+          drawer={(
+            <div style={styles.grid}>
           <section style={styles.sectionFlowTree}>
             <SectionHead icon={<Route size={16} />} title="流程樹" meta={selectedRun ? `${statusLabel(selectedRun.status)} · ${compactPath(selectedRun.run_id)}` : "等待紀錄"} />
             <div style={styles.flowTreeLayout}>
@@ -607,7 +846,16 @@ export function WorkflowInspector({
 
           <section style={styles.sectionWide}>
             <SectionHead icon={<Route size={16} />} title="工程 DAG" meta={graph?.workflow_id || graph?.graph?.workflow_id || "等待"} />
-            <WorkflowCanvas payload={graph} runLog={runLog} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />
+            <WorkflowCanvas
+              payload={graph}
+              runLog={runLog}
+              nodeSummaries={nodeSummaries}
+              selectedNodeId={activeCanvasNodeId}
+              onSelectNode={setSelectedCanvasNodeId}
+              onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
+              onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
+              rerunEnabled={canRerun}
+            />
             {selectedCanvasNode ? (
               <div style={styles.canvasDetail}>
                 <div style={styles.canvasDetailHead}>
@@ -787,7 +1035,9 @@ export function WorkflowInspector({
               {loaded && !parityReports.length ? <EmptyLine text="尚無 parity 報告。請用 CLI 產生證據，不在 UI 直接觸發比對。" /> : null}
             </div>
           </section>
-        </div>
+            </div>
+          )}
+        />
         {safeRunConfirmOpen ? (
           <div style={styles.modalBackdrop}>
             <div style={styles.modal}>
@@ -1201,6 +1451,41 @@ function compactWorkflowInputs(inputs: Record<string, unknown>): Record<string, 
   );
 }
 
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return entry;
+    }
+    return Object.fromEntries(Object.entries(entry as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)));
+  });
+}
+
+function mergeUnique(left: string[], right: string[]): string[] {
+  return [...new Set([...left, ...right])];
+}
+
+function dirtyNodesFrom(nodeId: string): string[] {
+  const downstream: Record<string, string[]> = {
+    pdf_source: ["pdf_source", "discover", "split", "load_table", "roi_calib", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    discover: ["discover", "split", "load_table", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    split: ["split", "roi_calib", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    load_table: ["load_table", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    roi_calib: ["roi_calib", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    batch_detect: ["batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+  };
+  return downstream[nodeId] ?? [nodeId];
+}
+
+function rerunEngineNodeId(nodeId: string): string {
+  if (nodeId === "pdf_source") {
+    return "discover";
+  }
+  if (nodeId === "roi_calib") {
+    return "batch_detect";
+  }
+  return nodeId;
+}
+
 function buildSideEffectPreview(
   graphNodes: Array<{ display_name?: string; enabled?: boolean; node_id: string; node_type: string; requires_confirm?: boolean; side_effects?: string[] }>,
   specByType: Map<string, { display_name: string; guarded: boolean; side_effects: string[] }>,
@@ -1224,6 +1509,27 @@ function inputPreviewRows(inputs: Record<string, unknown>): Array<[string, strin
     .map(([key, value]) => [key, formatInputPreview(value)]);
 }
 
+function workbenchPlanRequest(plan: IsoWorkflowPlan, inputs: Record<string, unknown>, rows: IsoPlanRow[]): IsoWorkflowRequest {
+  const source = plan.source;
+  return {
+    action: "apply",
+    work_folder: stringInput(inputs.work_folder ?? source.work_folder),
+    combine_pdf: stringInput(inputs.combine_pdf ?? source.combine_pdf),
+    page_folder: stringInput(inputs.page_folder ?? source.page_folder),
+    iso_list: stringInput(inputs.iso_list ?? source.iso_list),
+    sheet_name: stringInput(inputs.sheet_name ?? source.sheet_name),
+    serial_col: numberInput(inputs.serial_col ?? source.serial_col),
+    line_col: numberInput(inputs.line_col ?? source.line_col),
+    pattern: stringInput(inputs.pattern ?? source.pattern),
+    serial_region: regionOrDefault(inputs.serial_region ?? source.serial_region, DEFAULT_SERIAL_REGION),
+    drawing_region: regionOrDefault(inputs.drawing_region ?? source.drawing_region, DEFAULT_DRAWING_REGION),
+    confidence_threshold: numberInput(inputs.confidence_threshold ?? source.confidence_threshold) || 0.7,
+    detect_serials: booleanInput(inputs.detect_serials ?? source.detect_serials),
+    run_id: plan.source_run_id || plan.provenance?.workflow_run_id,
+    rows,
+  };
+}
+
 function formatInputPreview(value: unknown): string {
   if (typeof value === "string") {
     return compactPath(value);
@@ -1232,6 +1538,42 @@ function formatInputPreview(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function stringInput(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function numberInput(value: unknown): number | "" {
+  if (value === "" || value === null || value === undefined) {
+    return "";
+  }
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : "";
+}
+
+function booleanInput(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.toLowerCase() !== "false";
+  }
+  return Boolean(value);
+}
+
+function regionOrDefault(value: unknown, fallback: typeof DEFAULT_SERIAL_REGION): typeof DEFAULT_SERIAL_REGION {
+  if (!value || typeof value !== "object") {
+    return fallback;
+  }
+  const region = value as Partial<typeof DEFAULT_SERIAL_REGION>;
+  const next = {
+    left: Number(region.left),
+    top: Number(region.top),
+    width: Number(region.width),
+    height: Number(region.height),
+  };
+  return Object.values(next).every(Number.isFinite) ? next : fallback;
 }
 
 function inputLabel(key: string) {

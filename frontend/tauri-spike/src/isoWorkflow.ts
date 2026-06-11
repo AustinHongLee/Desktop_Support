@@ -27,6 +27,8 @@ export type IsoWorkflowAction =
   | "workflow_load"
   | "workflow_validate"
   | "workflow_run"
+  | "workflow_run_node"
+  | "workflow_run_from"
   | "workflow_run_status"
   | "workflow_cancel"
   | "workflow_list_runs"
@@ -278,6 +280,7 @@ export interface IsoNodeWorkflowJobResult {
   mode?: string;
   status: string;
   run_dir?: string;
+  source_run_id?: string;
   side_effect_summary?: IsoNodeWorkflowSideEffectSummary;
   topology?: string[];
   nodes?: Record<string, IsoNodeWorkflowNodeRunLog | IsoNodeWorkflowJobNode>;
@@ -825,6 +828,26 @@ export async function runIsoNodeWorkflowSafe(request: { workflow_path: string; w
   return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", {
     action: "workflow_run",
     workflow_path: request.workflow_path,
+    workflow_inputs: request.workflow_inputs ?? {},
+    workflow_mode: "run",
+  });
+}
+
+export async function runIsoWorkflowNodeSafe(request: { source_run_id: string; node_id: string; workflow_inputs?: Record<string, unknown> }): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", {
+    action: "workflow_run_node",
+    workflow_run_id: request.source_run_id,
+    workflow_node_id: request.node_id,
+    workflow_inputs: request.workflow_inputs ?? {},
+    workflow_mode: "run",
+  });
+}
+
+export async function runIsoWorkflowFromSafe(request: { source_run_id: string; node_id: string; workflow_inputs?: Record<string, unknown> }): Promise<IsoNodeWorkflowJobPayload> {
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", {
+    action: "workflow_run_from",
+    workflow_run_id: request.source_run_id,
+    workflow_node_id: request.node_id,
     workflow_inputs: request.workflow_inputs ?? {},
     workflow_mode: "run",
   });
