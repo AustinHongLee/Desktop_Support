@@ -32,7 +32,7 @@ def test_safe_workflow_run_has_single_frontend_call_path_and_no_effect_autorun()
     call_count = sum(text.count("runIsoNodeWorkflowSafe(") for text in sources.values())
     assert call_count <= 2
 
-    forbidden = ('"workflow_run"', "'workflow_run'", "startIsoBatchDetect(", "runIsoNodeWorkflowSafe(")
+    forbidden = ('"workflow_run"', "'workflow_run'", "startIsoBatchDetect(", "runIsoNodeWorkflowSafe(", "runIsoShadowVerify(", "setIsoShadowFlag(")
     for path, text in sources.items():
         for block in _call_blocks(text, "useEffect"):
             for token in forbidden:
@@ -57,6 +57,16 @@ def test_workflow_canvas_is_readonly_display_only() -> None:
     assert "onConnect" not in text
     assert "onNodesDelete" not in text
     assert "guarded：需 CLI 三因子授權" in text
+
+
+def test_shadow_verify_has_single_click_path_and_no_generic_ui_action() -> None:
+    sources = {path: path.read_text(encoding="utf-8") for path in _frontend_sources()}
+    assert sum(text.count("runIsoShadowVerify(") for text in sources.values()) == 2
+    assert sum(text.count("setIsoShadowFlag(") for text in sources.values()) == 2
+    for path, text in sources.items():
+        if path.name == "isoWorkflow.ts":
+            continue
+        assert "workflow_shadow_run" not in text
 
 
 def test_policy_keeps_guarded_side_effects_out_of_auto_and_replay() -> None:

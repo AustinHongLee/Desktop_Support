@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import contextlib
 import json
 import os
 import re
@@ -184,6 +185,12 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return workflow_read_artifact_action(request)
     if request.action == "workflow_parity_history":
         return workflow_parity_history_action(request)
+    if request.action == "workflow_set_shadow_flag":
+        return workflow_set_shadow_flag_action(request)
+    if request.action == "workflow_shadow_run":
+        return workflow_shadow_run_action(request)
+    if request.action == "workflow_switchover_gate":
+        return workflow_switchover_gate_action(request)
     raise ValueError(f"unknown action: {request.action}")
 
 
@@ -628,6 +635,83 @@ def workflow_parity_history_action(_request: IsoWorkflowRequest) -> dict[str, An
     from launcher.plugins.iso_tools.workflow.parity import list_parity_reports
 
     return list_parity_reports(limit=10)
+
+
+def workflow_set_shadow_flag_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    payload = request.workflow if request.workflow is not None else request.workflow_inputs or {}
+    enabled = bool(payload.get("enabled")) if isinstance(payload, dict) else False
+    flag = _shadow_flag_path()
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    if enabled:
+        _write_json(flag, {"enabled": True, "updated_at": _now()})
+    else:
+        with contextlib.suppress(FileNotFoundError):
+            flag.unlink()
+    return {
+        "schema_version": 1,
+        "action": "workflow_set_shadow_flag",
+        "created_at": _now(),
+        "enabled": flag.exists(),
+        "flag_path": str(flag),
+    }
+
+
+def workflow_shadow_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    if not _shadow_flag_enabled():
+        raise ValueError("影子驗證未啟用。請在節點式分頁開啟。")
+    job_dir = _job_dir_required(request)
+    iso_job = _read_json(job_dir / "job.json")
+    state = str(iso_job.get("state") or "")
+    if state != "completed":
+        raise ValueError(f"ISO job 尚未完成，不能啟動影子驗證：{state or 'unknown'}")
+
+    shadow_path = job_dir / "shadow.json"
+    if shadow_path.exists():
+        shadow = _read_json(shadow_path)
+        workflow_job_id = str(shadow.get("workflow_job_id") or "")
+        if workflow_job_id:
+            return _read_json(_workflow_job_dir_required(IsoWorkflowRequest(action="workflow_run_status", workflow_job_id=workflow_job_id)) / "job.json")
+        raise ValueError("影子驗證紀錄不完整，缺少 workflow_job_id。")
+
+    from launcher.plugins.iso_tools.workflow.parity import SAFE_WORKFLOW_PATH
+
+    request_payload = _read_json(job_dir / "request.json")
+    workflow_job_id = f"shadow-{uuid.uuid4().hex[:12]}"
+    workflow_job_dir = _workflow_job_dir(workflow_job_id)
+    workflow_job_dir.mkdir(parents=True, exist_ok=True)
+    workflow_request = IsoWorkflowRequest(
+        action="workflow_run",
+        workflow_path=SAFE_WORKFLOW_PATH,
+        workflow_inputs=_shadow_workflow_inputs_from_iso_request(request_payload),
+        workflow_allow=(),
+        workflow_confirm=(),
+        workflow_mode="run",
+        workflow_job_id=workflow_job_id,
+    )
+    workflow_job = _initial_workflow_job_payload(workflow_job_id, "queued")
+    _write_json(workflow_job_dir / "job.json", workflow_job)
+    _write_json(
+        workflow_job_dir / "request.json",
+        _workflow_request_payload(
+            workflow_request,
+            job_id=workflow_job_id,
+            shadow={
+                "iso_job_id": str(iso_job.get("job_id") or request.job_id or ""),
+                "sample_kind": "real",
+            },
+        ),
+    )
+    _write_json(shadow_path, {"workflow_job_id": workflow_job_id, "created_at": _now()})
+    _spawn_workflow_job(workflow_job_dir)
+    return _read_json(workflow_job_dir / "job.json")
+
+
+def workflow_switchover_gate_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
+    from launcher.plugins.iso_tools.workflow.gate import evaluate_switchover_gate
+
+    payload = evaluate_switchover_gate()
+    payload["shadow_flag_enabled"] = _shadow_flag_enabled()
+    return payload
 
 
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -1240,8 +1324,8 @@ def _workflow_policy_from_request(request: IsoWorkflowRequest) -> Any:
     )
 
 
-def _workflow_request_payload(request: IsoWorkflowRequest, *, job_id: str) -> dict[str, Any]:
-    return {
+def _workflow_request_payload(request: IsoWorkflowRequest, *, job_id: str, shadow: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
         "action": "workflow_run",
         "workflow_path": str(request.workflow_path or ""),
         "workflow": request.workflow,
@@ -1252,6 +1336,32 @@ def _workflow_request_payload(request: IsoWorkflowRequest, *, job_id: str) -> di
         "workflow_job_id": job_id,
         "workflow_run_id": request.workflow_run_id or request.run_id or "",
     }
+    if shadow:
+        payload["shadow"] = shadow
+    return payload
+
+
+def _shadow_workflow_inputs_from_iso_request(payload: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "profile_folder",
+        "work_folder",
+        "combine_pdf",
+        "page_folder",
+        "iso_list",
+        "sheet_name",
+        "serial_col",
+        "line_col",
+        "pattern",
+        "serial_region",
+        "drawing_region",
+        "confidence_threshold",
+        "detect_serials",
+    )
+    inputs: dict[str, Any] = {}
+    for key in keys:
+        if key in payload:
+            inputs[key] = payload.get(key)
+    return inputs
 
 
 def _resolve_workflow_path(path: Path) -> Path:
@@ -1268,6 +1378,14 @@ def _workflow_job_root() -> Path:
     if project_root:
         return Path(project_root) / ".runtime" / "jobs" / "workflow"
     return runtime_root() / ".runtime" / "jobs" / "workflow"
+
+
+def _shadow_flag_path() -> Path:
+    return runtime_root() / ".runtime" / "flags" / "iso-shadow-run-enabled"
+
+
+def _shadow_flag_enabled() -> bool:
+    return _shadow_flag_path().exists()
 
 
 def _workflow_run_root() -> Path:

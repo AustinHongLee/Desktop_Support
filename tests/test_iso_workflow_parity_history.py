@@ -28,6 +28,8 @@ def test_parity_reports_default_to_runtime_history_and_list_newest_first() -> No
     assert history["report_count"] == 2
     assert history["reports"][0]["report_path"] == str(newer)
     assert history["reports"][0]["violation_count"] == 1
+    assert history["reports"][0]["trigger"] == "cli"
+    assert history["reports"][0]["sample_kind"] == "unknown"
     assert history["reports"][1]["equal"] is True
 
 
@@ -35,7 +37,7 @@ def test_cli_parity_history_lists_reports_as_json() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "parity"
         report_path = root / "20260610_000000_test" / "report.json"
-        write_parity_report(ParityReport(equal=True), path=report_path, inputs={"sample": "fixture"})
+        write_parity_report(ParityReport(equal=True), path=report_path, inputs={"sample": "fixture"}, sample_kind="fixture")
 
         stdout = StringIO()
         with redirect_stdout(stdout):
@@ -46,6 +48,7 @@ def test_cli_parity_history_lists_reports_as_json() -> None:
     assert payload["action"] == "workflow_parity_history"
     assert payload["reports"][0]["report_path"] == str(report_path)
     assert payload["reports"][0]["inputs_digest"].startswith("sha256:")
+    assert payload["reports"][0]["sample_kind"] == "fixture"
 
 
 def test_tauri_action_reads_parity_history_without_writing() -> None:

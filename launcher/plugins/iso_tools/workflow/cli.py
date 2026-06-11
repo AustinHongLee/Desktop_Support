@@ -69,13 +69,21 @@ def main(argv: list[str] | None = None) -> int:
                 inputs=inputs,
                 workflow_path=workflow_path,
                 work_dir=work_dir,
+                sample_kind=args.sample_kind,
             )
             payload["report_path"] = str(report_path)
+            payload["sample_kind"] = args.sample_kind
+            payload["trigger"] = "cli"
             return _print(payload, args.json, exit_code=0 if report.equal else 6)
         if args.command == "parity-history":
             from launcher.plugins.iso_tools.workflow.parity import list_parity_reports
 
             return _print(list_parity_reports(root=Path(args.root) if args.root else None, limit=args.limit), args.json)
+        if args.command == "gate":
+            from launcher.plugins.iso_tools.workflow.gate import evaluate_switchover_gate
+
+            payload = evaluate_switchover_gate()
+            return _print(payload, args.json, exit_code=0 if payload.get("ready") else 7)
         parser.error("missing command")
         return 2
     except GraphValidationError as exc:
@@ -129,12 +137,16 @@ def _parser() -> argparse.ArgumentParser:
     parity.add_argument("--workflow", default="")
     parity.add_argument("--work-dir", default="")
     parity.add_argument("--report-out", default="")
+    parity.add_argument("--sample-kind", choices=("real", "fixture", "unknown"), default="fixture")
     parity.add_argument("--json", action="store_true")
 
     parity_history = sub.add_parser("parity-history")
     parity_history.add_argument("--root", default="")
     parity_history.add_argument("--limit", type=int, default=20)
     parity_history.add_argument("--json", action="store_true")
+
+    gate = sub.add_parser("gate")
+    gate.add_argument("--json", action="store_true")
 
     return parser
 

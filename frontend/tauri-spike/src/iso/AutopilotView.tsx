@@ -1,4 +1,4 @@
-import { ChevronRight, CircleCheck, TerminalSquare } from "lucide-react";
+import { ChevronRight, CircleCheck, ShieldCheck, TerminalSquare } from "lucide-react";
 import { Fragment, type ReactNode, type Ref } from "react";
 import type { IsoPilotItem, IsoPlanRow } from "../isoWorkflow";
 import { FailureCard, type IsoFailureInfo } from "./components/FailureCard";
@@ -49,7 +49,12 @@ export function AutopilotView({
   probableFailureCause,
   readyCount,
   runOneClick,
+  runShadowVerify,
   selectedRowId,
+  shadowVerifyBusy,
+  shadowVerifyDisabled,
+  shadowVerifySummary,
+  showShadowVerify,
   successSummary,
   terminalRef,
   activePilotText,
@@ -76,7 +81,12 @@ export function AutopilotView({
   probableFailureCause: string;
   readyCount: number;
   runOneClick: () => void;
+  runShadowVerify: () => void;
   selectedRowId?: string;
+  shadowVerifyBusy: boolean;
+  shadowVerifyDisabled: boolean;
+  shadowVerifySummary: string;
+  showShadowVerify: boolean;
   successSummary: string;
   terminalRef: Ref<HTMLDivElement>;
   activePilotText: string;
@@ -117,6 +127,22 @@ export function AutopilotView({
           <div className="one-click-success-summary">
             <CircleCheck size={16} />
             <span>{successSummary}</span>
+          </div>
+        ) : null}
+
+        {showShadowVerify ? (
+          <div className="shadow-verify-card">
+            <div className="shadow-verify-main">
+              <ShieldCheck size={16} />
+              <div>
+                <strong>影子驗證（實驗）</strong>
+                <span>{shadowVerifySummary}</span>
+              </div>
+            </div>
+            <button className="action-button" type="button" onClick={runShadowVerify} disabled={shadowVerifyDisabled}>
+              <ShieldCheck size={14} />
+              <span>{shadowVerifyBusy ? "驗證中" : shadowVerifyDisabled ? "已送出" : "執行影子驗證"}</span>
+            </button>
           </div>
         ) : null}
 

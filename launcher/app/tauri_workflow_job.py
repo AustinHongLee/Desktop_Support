@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from launcher.app.tauri_iso_workflow import (
     IsoWorkflowRequest,
+    _job_dir,
     _normalize_request,
     _now,
     _read_json,
@@ -38,6 +40,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def run_job(job_dir: Path) -> dict[str, Any]:
     request_payload = _read_json(job_dir / "request.json")
+    shadow_payload = dict(request_payload.get("shadow") or {}) if isinstance(request_payload.get("shadow"), dict) else None
     request = IsoWorkflowRequest(**_normalize_request(request_payload))
     job = _read_json(job_dir / "job.json")
     job.update({"state": "running", "updated_at": _now(), "error": ""})
@@ -67,6 +70,7 @@ def run_job(job_dir: Path) -> dict[str, Any]:
         )
 
     current = _read_json(job_dir / "job.json")
+    parity_summary = _shadow_parity_summary(shadow_payload, request, result, current)
     state = "cancelled" if result.get("status") == "cancelled" else "completed"
     current.update(
         {
@@ -84,6 +88,8 @@ def run_job(job_dir: Path) -> dict[str, Any]:
         int(current.get("progress", {}).get("total") or len(result.get("topology") or [])),
         "",
     )
+    if parity_summary is not None:
+        current["parity_summary"] = parity_summary
     _write_json(job_dir / "job.json", current)
     return current
 
@@ -159,6 +165,71 @@ def _job_result_payload(result: dict[str, Any]) -> dict[str, Any]:
         "topology": result.get("topology") or [],
         "nodes": result.get("nodes") or {},
     }
+
+
+def _shadow_parity_summary(
+    shadow: dict[str, Any] | None,
+    request: IsoWorkflowRequest,
+    result: dict[str, Any],
+    workflow_job: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not shadow:
+        return None
+    if result.get("status") not in {"completed", "completed_with_blocked"}:
+        return {
+            "status": "shadow_failed",
+            "error": f"workflow status is {result.get('status') or 'unknown'}",
+        }
+    try:
+        from launcher.plugins.iso_tools.workflow.parity import SAFE_WORKFLOW_PATH, compare_plans, write_parity_report
+        from launcher.plugins.iso_tools.workflow.projection import plan_from_run
+
+        iso_job_id = str(shadow.get("iso_job_id") or "")
+        if not iso_job_id:
+            raise ValueError("shadow request missing iso_job_id")
+        iso_job = _read_json(_job_dir(iso_job_id) / "job.json")
+        legacy_plan = iso_job.get("result")
+        if not isinstance(legacy_plan, dict):
+            raise ValueError("ISO job does not contain a result plan")
+        run_dir = Path(str(result.get("run_dir") or ""))
+        workflow_plan = plan_from_run(run_dir)
+        report = compare_plans(legacy_plan, workflow_plan)
+        timing = {
+            "legacy_ms": _elapsed_ms(iso_job.get("created_at"), iso_job.get("updated_at")),
+            "workflow_ms": _elapsed_ms(workflow_job.get("created_at"), _now()),
+        }
+        report_path = write_parity_report(
+            report,
+            inputs=request.workflow_inputs or {},
+            workflow_path=request.workflow_path or SAFE_WORKFLOW_PATH,
+            work_dir=run_dir,
+            trigger="shadow",
+            sample_kind=str(shadow.get("sample_kind") or "real"),
+            iso_job_id=iso_job_id,
+            workflow_run_id=str(result.get("run_id") or ""),
+            timing=timing,
+        )
+        return {
+            "status": "recorded",
+            "equal": report.equal,
+            "violation_count": len(report.violations),
+            "acceptable_diff_count": len(report.acceptable_diffs),
+            "report_path": str(report_path),
+        }
+    except Exception as exc:
+        return {
+            "status": "shadow_failed",
+            "error": str(exc),
+        }
+
+
+def _elapsed_ms(start: Any, end: Any) -> int:
+    try:
+        started = datetime.fromisoformat(str(start))
+        ended = datetime.fromisoformat(str(end))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, int((ended - started).total_seconds() * 1000))
 
 
 def _fail_job(job_dir: Path, exc: Exception) -> None:

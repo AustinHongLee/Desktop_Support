@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,9 @@ from launcher.plugins.iso_tools.run_log import (
     finish_iso_run_success,
     public_run_ref,
 )
+
+_PROGRESS_FULL_WRITE_EVERY_PAGES = 5
+_PROGRESS_FULL_WRITE_INTERVAL_SECONDS = 1.5
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,6 +73,7 @@ def run_job(job_dir: Path) -> dict[str, Any]:
     events: list[dict[str, str]] = [*pdf_events, *iso_meta["issues"]]
     total = len(pdfs)
     detector = _SerialDetector() if request.detect_serials else None
+    progress_write_state: dict[str, Any] = {"last_full_at": time.monotonic(), "last_full_done": 0}
 
     for index, pdf in enumerate(pdfs, start=1):
         if (job_dir / "cancel.json").exists():
@@ -87,7 +92,20 @@ def run_job(job_dir: Path) -> dict[str, Any]:
         row_payload["page"] = index
         rows.append(row_payload)
         events.extend(row_events)
-        _write_progress(job_dir, job, rows, events, total, source_kind, page_folder, iso_meta, loaded_profile, request, run_context)
+        _write_progress(
+            job_dir,
+            job,
+            rows,
+            events,
+            total,
+            source_kind,
+            page_folder,
+            iso_meta,
+            loaded_profile,
+            request,
+            run_context,
+            progress_write_state,
+        )
 
     result = _result_payload(rows, events, source_kind, page_folder, iso_meta, loaded_profile, request)
     job.update(
@@ -118,6 +136,7 @@ def _write_progress(
     loaded_profile: dict[str, Any],
     request: IsoWorkflowRequest,
     run_context: IsoRunLogContext,
+    progress_write_state: dict[str, Any] | None = None,
 ) -> None:
     done = len(rows)
     percent = round(done / total * 100) if total else 0
@@ -127,17 +146,35 @@ def _write_progress(
             "state": "running",
             "updated_at": _now(),
             "progress": {"total": total, "done": done, "percent": percent},
-            "rows": rows,
-            "issues": events,
-            "events": [
-                *job.get("events", []),
-                row_done_event,
-            ],
-            "result": _result_payload(rows, events, source_kind, page_folder, iso_meta, loaded_profile, request),
+            "events": [*job.get("events", []), row_done_event],
         }
     )
+    if _should_write_full_progress(done, progress_write_state):
+        rows_snapshot = [dict(row) for row in rows]
+        events_snapshot = [dict(event) for event in events]
+        job.update(
+            {
+                "rows": rows_snapshot,
+                "issues": events_snapshot,
+                "result": _result_payload(rows_snapshot, events_snapshot, source_kind, page_folder, iso_meta, loaded_profile, request),
+            }
+        )
     _write_json(job_dir / "job.json", job)
     append_iso_run_event(run_context, row_done_event)
+
+
+def _should_write_full_progress(done: int, progress_write_state: dict[str, Any] | None) -> bool:
+    if progress_write_state is None:
+        return True
+    last_done = int(progress_write_state.get("last_full_done") or 0)
+    last_at = float(progress_write_state.get("last_full_at") or 0.0)
+    now = time.monotonic()
+    should_write = done - last_done >= _PROGRESS_FULL_WRITE_EVERY_PAGES
+    should_write = should_write or now - last_at >= _PROGRESS_FULL_WRITE_INTERVAL_SECONDS
+    if should_write:
+        progress_write_state["last_full_done"] = done
+        progress_write_state["last_full_at"] = now
+    return should_write
 
 
 def _cancel_job(
