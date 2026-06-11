@@ -29,6 +29,7 @@ import { compactPath, DEFAULT_DRAWING_REGION, DEFAULT_SERIAL_REGION } from "../h
 import { RoiOverlay } from "../components/RoiOverlay";
 
 type WorkflowGuideCanvasProps = {
+  dataOriginLabel?: string;
   dirtyNodeIds?: string[];
   job: IsoNodeWorkflowJobPayload | null;
   onRefreshPreview?: (rowId: string) => void;
@@ -142,6 +143,7 @@ const GUIDE_LAYOUT = {
 } as const;
 
 export function WorkflowGuideCanvas({
+  dataOriginLabel = "",
   dirtyNodeIds = [],
   job,
   onRefreshPreview,
@@ -274,6 +276,7 @@ export function WorkflowGuideCanvas({
           </div>
         </div>
         <div style={styles.toolbarActions}>
+          {dataOriginLabel ? <span style={styles.toolbarPill}>{dataOriginLabel}</span> : null}
           <span style={styles.toolbarPill}>{visibleRows.length || 0} / {rows.length || 0} 頁</span>
           <button className="action-button" type="button" onClick={() => setViewResetKey((current) => current + 1)}>
             <RefreshCcw size={14} />

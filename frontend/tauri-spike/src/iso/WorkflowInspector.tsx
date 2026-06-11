@@ -63,6 +63,8 @@ const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pd
 
 type WorkflowInspectorProps = {
   workflowInputs?: Record<string, unknown>;
+  workbenchPlan?: IsoWorkflowPlan | null;
+  workbenchSelectedRowId?: string;
   registerSafeRun?: (runner: () => void) => void;
   workflowJob?: IsoNodeWorkflowJobPayload | null;
   setWorkflowJob?: (job: IsoNodeWorkflowJobPayload | null) => void;
@@ -74,6 +76,8 @@ type WorkflowInspectorProps = {
 
 export function WorkflowInspector({
   workflowInputs = {},
+  workbenchPlan = null,
+  workbenchSelectedRowId = "",
   registerSafeRun,
   workflowJob,
   setWorkflowJob,
@@ -151,16 +155,19 @@ export function WorkflowInspector({
   const baseInputs = useMemo(() => compactWorkflowInputs(workflowInputs), [workflowInputs]);
   const baseInputsKey = useMemo(() => stableJson(baseInputs), [baseInputs]);
   const safeInputs = useMemo(() => compactWorkflowInputs({ ...baseInputs, ...overlayInputs }), [baseInputs, overlayInputs]);
+  const displayPlan = projectedPlan ?? workbenchPlan;
+  const displayPlanOrigin = projectedPlan ? "節點流程結果" : workbenchPlan ? "工作台草稿已接入" : "等待資料";
+  const previewErrorForCanvas = nodePreviewError || (displayPlan ? "" : projectionError);
   const selectedPreviewRow = useMemo(() => {
-    const rows = projectedPlan?.rows ?? [];
+    const rows = displayPlan?.rows ?? [];
     return rows.find((row) => row.id === selectedGuideRowId)
       ?? rows.find((row) => row.status === "warn" || row.status === "blocked")
       ?? rows[0]
       ?? null;
-  }, [projectedPlan, selectedGuideRowId]);
+  }, [displayPlan, selectedGuideRowId]);
   const nodeSummaries = useMemo(
-    () => buildNodeCardSummaries({ dirtyNodeIds, job, plan: projectedPlan, preview: nodePreview, runLog, workflowInputs: safeInputs }),
-    [dirtyNodeIds, job, projectedPlan, nodePreview, runLog, safeInputs],
+    () => buildNodeCardSummaries({ dirtyNodeIds, job, plan: displayPlan, preview: nodePreview, runLog, workflowInputs: safeInputs }),
+    [dirtyNodeIds, displayPlan, job, nodePreview, runLog, safeInputs],
   );
   const hasPdfSource = Boolean(safeInputs.work_folder || safeInputs.combine_pdf);
   const hasIsoSource = Boolean(safeInputs.iso_list || safeInputs.work_folder);
@@ -193,14 +200,20 @@ export function WorkflowInspector({
   }, [baseInputsKey]);
 
   useEffect(() => {
+    if (workbenchSelectedRowId) {
+      setSelectedGuideRowId(workbenchSelectedRowId);
+    }
+  }, [workbenchSelectedRowId]);
+
+  useEffect(() => {
     if (!selectedGuideRowId) {
       return;
     }
-    const exists = projectedPlan?.rows.some((row) => row.id === selectedGuideRowId);
+    const exists = displayPlan?.rows.some((row) => row.id === selectedGuideRowId);
     if (!exists) {
       setSelectedGuideRowId("");
     }
-  }, [projectedPlan?.rows, selectedGuideRowId]);
+  }, [displayPlan?.rows, selectedGuideRowId]);
 
   useEffect(() => {
     if (!selectedStep || !runLog?.run_id || !isTauri()) {
@@ -269,8 +282,8 @@ export function WorkflowInspector({
       return;
     }
     let cancelled = false;
-    const serialRegion = regionOrDefault(safeInputs.serial_region ?? projectedPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
-    const drawingRegion = regionOrDefault(safeInputs.drawing_region ?? projectedPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
+    const serialRegion = regionOrDefault(safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
+    const drawingRegion = regionOrDefault(safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
     setNodePreviewBusy(true);
     setNodePreviewError("");
     loadIsoPreview({
@@ -302,8 +315,8 @@ export function WorkflowInspector({
     };
   }, [
     activeCanvasNodeId,
-    projectedPlan?.source.drawing_region,
-    projectedPlan?.source.serial_region,
+    displayPlan?.source.drawing_region,
+    displayPlan?.source.serial_region,
     nodePreviewReloadKey,
     safeInputs.drawing_region,
     safeInputs.serial_region,
@@ -467,7 +480,7 @@ export function WorkflowInspector({
   }
 
   async function runPageTrial(rowId: string) {
-    const row = projectedPlan?.rows.find((candidate) => candidate.id === rowId);
+    const row = displayPlan?.rows.find((candidate) => candidate.id === rowId);
     if (!row?.source_path) {
       setNodePreviewError("找不到目前頁面的 PDF 來源。");
       return;
@@ -485,8 +498,8 @@ export function WorkflowInspector({
       const payload = await loadIsoPreview({
         source_path: row.source_path,
         detect_serial: true,
-        serial_region: regionOrDefault(safeInputs.serial_region ?? projectedPlan?.source.serial_region, DEFAULT_SERIAL_REGION),
-        drawing_region: regionOrDefault(safeInputs.drawing_region ?? projectedPlan?.source.drawing_region, DEFAULT_DRAWING_REGION),
+        serial_region: regionOrDefault(safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION),
+        drawing_region: regionOrDefault(safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION),
       });
       setNodePreview(payload);
       setPageTrials((previous) => ({
@@ -546,14 +559,14 @@ export function WorkflowInspector({
   }
 
   async function exportWorkbenchPlan() {
-    if (!projectedPlan || workbenchActionBusy) {
+    if (!displayPlan || workbenchActionBusy) {
       return;
     }
     setWorkbenchActionBusy("export");
     setRunError("");
     setWorkbenchActionMessage("");
     try {
-      const result = await exportIsoPlanCsv(workbenchPlanRequest(projectedPlan, safeInputs, projectedPlan.rows));
+      const result = await exportIsoPlanCsv(workbenchPlanRequest(displayPlan, safeInputs, displayPlan.rows));
       setWorkbenchActionMessage(result.export_path ? `已匯出命名草稿 CSV：${result.export_path}` : result.message);
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
@@ -563,10 +576,10 @@ export function WorkflowInspector({
   }
 
   async function applyWorkbenchPlan() {
-    if (!projectedPlan || workbenchActionBusy) {
+    if (!displayPlan || workbenchActionBusy) {
       return;
     }
-    const rows = projectedPlan.rows.filter((row) => row.selected && row.status === "ready");
+    const rows = displayPlan.rows.filter((row) => row.selected && row.status === "ready");
     if (!rows.length) {
       setRunError("沒有可套用的 ready 列。");
       return;
@@ -578,7 +591,7 @@ export function WorkflowInspector({
     setRunError("");
     setWorkbenchActionMessage("");
     try {
-      const result = await applyIsoPlan(workbenchPlanRequest(projectedPlan, safeInputs, rows));
+      const result = await applyIsoPlan(workbenchPlanRequest(displayPlan, safeInputs, rows));
       setWorkbenchActionMessage(result.message);
       await refreshRuns(rerunSourceRunId);
     } catch (caught) {
@@ -789,6 +802,7 @@ export function WorkflowInspector({
           )}
           canvas={(
             <WorkflowGuideCanvas
+              dataOriginLabel={displayPlanOrigin}
               dirtyNodeIds={dirtyNodeIds}
               job={job}
               onRefreshPreview={refreshGuidePreview}
@@ -800,10 +814,10 @@ export function WorkflowInspector({
               onWorkflowInputChange={handleWorkflowInputChange}
               pageTrialBusyId={pageTrialBusyId}
               pageTrials={pageTrials}
-              plan={projectedPlan}
+              plan={displayPlan}
               preview={nodePreview}
               previewBusy={nodePreviewBusy}
-              previewError={nodePreviewError || projectionError}
+              previewError={previewErrorForCanvas}
               rerunEnabled={canRerun}
               runLog={runLog}
               selectedNodeId={activeCanvasNodeId}
@@ -822,10 +836,10 @@ export function WorkflowInspector({
               onWorkflowInputChange={handleWorkflowInputChange}
               onApplyPlan={() => void applyWorkbenchPlan()}
               onExportPlan={() => void exportWorkbenchPlan()}
-              plan={projectedPlan}
+              plan={displayPlan}
               preview={nodePreview}
               previewBusy={nodePreviewBusy}
-              previewError={nodePreviewError || projectionError}
+              previewError={previewErrorForCanvas}
               rerunEnabled={canRerun}
               summary={selectedCanvasNode ? nodeSummaries[selectedCanvasNode.node_id] : undefined}
               workbenchActionBusy={workbenchActionBusy}

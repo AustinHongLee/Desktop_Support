@@ -1757,6 +1757,8 @@ export function IsoBoard() {
       ) : isoView === "nodes" ? (
         <WorkflowInspector
           workflowInputs={workflowInspectorInputs}
+          workbenchPlan={plan}
+          workbenchSelectedRowId={selectedRowId}
           workflowJob={workflowJob}
           setWorkflowJob={setWorkflowJob}
           gateVerdict={gateVerdict}
