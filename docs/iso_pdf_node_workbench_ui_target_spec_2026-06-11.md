@@ -231,17 +231,17 @@ cd frontend\tauri-spike; npx tsc --noEmit; npm run build; npm run test:unit
 
 ## 16. Acceptance Checklist（使用者視角，W7 逐項打勾）
 
-- [ ] 打開「節點式」第一眼是大節點畫布，不是樹/表格。
-- [ ] 看見 PDF 來源 / 拆頁 / ISO 清單 / ROI 調校 / 批次判讀 / Pilot / 信心分布 / 匯出 / 套用 等節點。
-- [ ] 線路按 port 真實連接，一眼讀懂資料流左進右出。
-- [ ] 每張卡有該站資料摘要（路徑/計數/狀態），不是只有名字。
-- [ ] 點批次判讀：rows / success / 低信心 / job 進度可見。
-- [ ] 點 ROI 調校：PDF 預覽 + ROI 框 + threshold + crop 預覽；拖 slider 不觸發判讀，出現 dirty 標記。
-- [ ] 點 Pilot：P01-P15 摘要與問題清單。
-- [ ] 匯出/套用節點清楚顯示 停用·🔒guarded 與可用的受認可按鈕；套用必經確認對話框。
-- [ ] 可執行整張圖、取消、重跑單節點、從節點重跑下游；節點狀態燈即時。
-- [ ] Debug JSON / 流程樹 / 執行紀錄 / 換軌守門 全在預設收合抽屜。
-- [ ] 全部既有測試 0 failed；pollution + 安全契約綠；一鍵/工作台/調校三分頁零變化。
+- [x] 打開「節點式」第一眼是大節點畫布，不是樹/表格。
+- [x] 看見 PDF 來源 / 拆頁 / ISO 清單 / ROI 調校 / 批次判讀 / Pilot / 信心分布 / 匯出 / 套用 等節點。
+- [x] 線路按 port 真實連接，一眼讀懂資料流左進右出。
+- [x] 每張卡有該站資料摘要（路徑/計數/狀態），不是只有名字。
+- [x] 點批次判讀：rows / success / 低信心 / job 進度可見。
+- [x] 點 ROI 調校：PDF 預覽 + ROI 框 + threshold + crop 預覽；拖 slider 不觸發判讀，出現 dirty 標記。
+- [x] 點 Pilot：P01-P15 摘要與問題清單。
+- [x] 匯出/套用節點清楚顯示 停用·🔒guarded 與可用的受認可按鈕；套用必經確認對話框。
+- [x] 可執行整張圖、取消、重跑單節點、從節點重跑下游；節點狀態燈即時。
+- [x] Debug JSON / 流程樹 / 執行紀錄 / 換軌守門 全在預設收合抽屜。
+- [x] 全部既有測試 0 failed；pollution + 安全契約綠；一鍵/工作台/調校三分頁零變化。
 
 ## 17. Explicit Instructions to Codex
 
@@ -264,3 +264,33 @@ Pre-flight：cd C:\Users\a0976\Documents\GitHub\桌面輔助系統 → git statu
 鐵則：畫布是主角，debug 全收抽屜；per-port 真連線；節點卡要有資料摘要與預覽；參數改了只標 dirty、執行只能按按鈕；Export/Apply 走既有 exportIsoPlanCsv/applyIsoPlan 與既有確認，引擎 guarded 節點不解鎖；前端永無 workflow_allow/confirm；一鍵/工作台/調校三分頁零變化；既有測試 0 failed。
 不做：自訂編輯器、增刪節點、接線保存、取代舊分頁。W7 完成 → merge --no-ff 回 codex/tauri-react-spike、tag iso-workbench-v1、停工回報。
 ```
+
+## 18. Completion Postscript（2026-06-11）
+
+施工分支：`codex/iso-node-workbench`
+
+完成範圍：
+
+- W1/W2：主畫面改為 ReactFlow 大畫布；流程樹、型錄、執行紀錄、gate 與 JSON 降到預設收合的工程檢視；畫布改為呈現圖，含 `pdf_source` / `roi_calib` 合成節點與 per-port handles。
+- W3：節點卡新增資料摘要；右側詳情面板依節點顯示來源、拆頁、ISO 清單、ROI 預覽與裁切、批次判讀摘要、Pilot、信心分布、guarded 匯出/套用資訊。
+- W4：PDF/ISO/ROI 參數改為 overlay 編輯；變更只標 dirty，並透過安全契約測試禁止 `useEffect` / `onChange` 觸發 workflow/OCR 執行。
+- W5：新增 safe `workflow_run_node` / `workflow_run_from` job action；`executor.run_from_node` 以 source run artifacts hydrate 上游，從指定節點與下游重跑；前端節點卡與詳情面板接上單節點/下游重跑。
+- W6：匯出與套用維持 engine guarded disabled；UI 按鈕走既有 `exportIsoPlanCsv` / `applyIsoPlan`，套用必經 `window.confirm`，並保留污染與安全契約。
+
+驗證結果：
+
+```powershell
+python -m pytest tests -q
+# 487 passed
+
+cd frontend\tauri-spike
+npx tsc --noEmit
+npm run build
+npm run test:unit
+# vitest 4 passed
+```
+
+備註：
+
+- `.qwen/` 未追蹤且全程未 stage。
+- 這次由 Codex 完成自動驗證；Tauri 桌面全景截圖未從本回合另存成檔。
