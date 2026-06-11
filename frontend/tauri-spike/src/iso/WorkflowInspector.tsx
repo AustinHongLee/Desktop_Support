@@ -508,6 +508,20 @@ export function WorkflowInspector({
     setDirtyNodeIds((previous) => mergeUnique(previous, [`roi:${rowId}`, `batch_detect:${rowId}`, "pilot", "roi_dist", "export_csv", "apply_rename"]));
   }
 
+  function clearPageDirty(rowId: string) {
+    const pageDirtyIds = new Set([`roi:${rowId}`, `batch_detect:${rowId}`]);
+    setDirtyNodeIds((previous) => previous.filter((nodeId) => !pageDirtyIds.has(nodeId)));
+  }
+
+  async function clearWorkflowDirtyIfTerminal(next: IsoNodeWorkflowJobPayload) {
+    if (isWorkflowJobRunning(next) || !next.workflow_run_id) {
+      return;
+    }
+    await refreshRuns(next.workflow_run_id);
+    setProjectionRunId(next.workflow_run_id);
+    setDirtyNodeIds([]);
+  }
+
   function pageSerialRegion(rowId: string): IsoRegion {
     return regionOrDefault(pageRoiDrafts[rowId]?.serialRegion ?? safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
   }
@@ -625,6 +639,7 @@ export function WorkflowInspector({
           updatedAt: new Date().toISOString(),
         },
       }));
+      clearPageDirty(rowId);
     } catch (caught) {
       setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -646,6 +661,7 @@ export function WorkflowInspector({
       });
       updateJob(next);
       setSelectedCanvasNodeId(engineNodeId);
+      await clearWorkflowDirtyIfTerminal(next);
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -665,6 +681,7 @@ export function WorkflowInspector({
       });
       updateJob(next);
       setSelectedCanvasNodeId(engineNodeId);
+      await clearWorkflowDirtyIfTerminal(next);
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
     }

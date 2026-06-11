@@ -164,7 +164,7 @@ const GUIDE_LAYOUT = {
   isoY: 30,
   pdfY: 430,
   rowGapY: 820,
-  rowStartY: 300,
+  rowStartY: 900,
   sourceY: 270,
 } as const;
 
