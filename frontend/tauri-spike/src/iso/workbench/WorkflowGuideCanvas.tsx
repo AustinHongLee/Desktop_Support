@@ -32,6 +32,7 @@ type WorkflowGuideCanvasProps = {
   dataOriginLabel?: string;
   dirtyNodeIds?: string[];
   job: IsoNodeWorkflowJobPayload | null;
+  onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
@@ -39,6 +40,7 @@ type WorkflowGuideCanvasProps = {
   onSelectNode?: (nodeId: string) => void;
   onSelectRow?: (rowId: string) => void;
   onWorkflowInputChange?: (nodeId: string, field: string, value: unknown) => void;
+  pageRoiDrafts?: Record<string, IsoPageRoiDraft>;
   pageTrialBusyId?: string;
   pageTrials?: Record<string, IsoPageTrial>;
   plan: IsoWorkflowPlan | null;
@@ -60,6 +62,12 @@ export type IsoPageTrial = {
   serial: string;
   sourcePath: string;
   updatedAt: string;
+};
+
+export type IsoPageRoiDraft = {
+  confidenceThreshold?: number;
+  drawingRegion?: IsoRegion;
+  serialRegion?: IsoRegion;
 };
 
 type WorkflowNodeKind =
@@ -95,6 +103,7 @@ type GuideNodeData = {
   nodeId: string;
   notice?: { text: string; tone: "idle" | "ready" | "warn" | "danger"; title?: string };
   onLoadMore?: () => void;
+  onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
@@ -139,7 +148,7 @@ const GUIDE_LAYOUT = {
   sourceX: 0,
   isoY: 30,
   pdfY: 430,
-  rowGapY: 430,
+  rowGapY: 640,
   rowStartY: 300,
   sourceY: 270,
 } as const;
@@ -154,7 +163,9 @@ export function WorkflowGuideCanvas({
   onRunPageTrial,
   onSelectNode,
   onSelectRow,
+  onPageRoiInputChange,
   onWorkflowInputChange,
+  pageRoiDrafts = {},
   pageTrialBusyId = "",
   pageTrials = {},
   plan,
@@ -201,7 +212,9 @@ export function WorkflowGuideCanvas({
     onRunPageTrial,
     onSelectNode,
     onSelectRow,
+    onPageRoiInputChange,
     onWorkflowInputChange,
+    pageRoiDrafts,
     pageTrialBusyId,
     pageTrials,
     pageFolder,
@@ -236,7 +249,9 @@ export function WorkflowGuideCanvas({
     onRunPageTrial,
     onSelectNode,
     onSelectRow,
+    onPageRoiInputChange,
     onWorkflowInputChange,
+    pageRoiDrafts,
     pageTrialBusyId,
     pageTrials,
     pageFolder,
@@ -422,8 +437,15 @@ function RoiBody({ data }: { data: GuideNodeData }) {
   const selected = data.selectedPreview ? data.preview : null;
   const lowConfidence = Boolean(row?.confidence && row.confidence < data.threshold);
   const trial = data.pageTrial;
+  const updateRoiInput = (field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => {
+    if (row) {
+      data.onPageRoiInputChange?.(row.id, field, value);
+      return;
+    }
+    data.onWorkflowInputChange?.("roi_calib", field, value);
+  };
   const setRegion = (next: IsoRegion) => {
-    data.onWorkflowInputChange?.("roi_calib", activeRoi === "serial" ? "serial_region" : "drawing_region", next);
+    updateRoiInput(activeRoi === "serial" ? "serial_region" : "drawing_region", next);
   };
   const updateField = (field: keyof IsoRegion, value: number) => setRegion({ ...region, [field]: clampRegion(value) });
   return (
@@ -447,7 +469,7 @@ function RoiBody({ data }: { data: GuideNodeData }) {
               activeRoi={activeRoi}
               drawingRegion={data.drawingRegion}
               editable
-              onChange={(target, next) => data.onWorkflowInputChange?.("roi_calib", target === "serial" ? "serial_region" : "drawing_region", next)}
+              onChange={(target, next) => updateRoiInput(target === "serial" ? "serial_region" : "drawing_region", next)}
               onSelect={setActiveRoi}
               serialRegion={data.serialRegion}
             />
@@ -485,7 +507,7 @@ function RoiBody({ data }: { data: GuideNodeData }) {
             max={0.99}
             step={0.01}
             value={data.threshold}
-            onChange={(event) => data.onWorkflowInputChange?.("roi_calib", "confidence_threshold", Number(event.target.value))}
+            onChange={(event) => updateRoiInput("confidence_threshold", Number(event.target.value))}
           />
           <strong>{Math.round(data.threshold * 100)}%</strong>
         </label>
@@ -501,7 +523,7 @@ function RoiBody({ data }: { data: GuideNodeData }) {
         <button
           className="action-button"
           type="button"
-          onClick={() => data.onWorkflowInputChange?.("roi_calib", activeRoi === "serial" ? "serial_region" : "drawing_region", activeRoi === "serial" ? DEFAULT_SERIAL_REGION : DEFAULT_DRAWING_REGION)}
+          onClick={() => updateRoiInput(activeRoi === "serial" ? "serial_region" : "drawing_region", activeRoi === "serial" ? DEFAULT_SERIAL_REGION : DEFAULT_DRAWING_REGION)}
         >
           <RefreshCcw size={13} />
           <span>重設目前 ROI</span>
@@ -644,7 +666,7 @@ function Crop({ image, title }: { image?: string; title: string }) {
 
 type BuildGuideGraphArgs = Pick<
   WorkflowGuideCanvasProps,
-  "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
+  "onPageRoiInputChange" | "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
 > & {
   dirty: Set<string>;
   drawingRegion: IsoRegion;
@@ -690,6 +712,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     kind,
     nodeId,
     onLoadMore: args.onLoadMore,
+    onPageRoiInputChange: args.onPageRoiInputChange,
     onRefreshPreview: args.onRefreshPreview,
     onRunFrom: args.rerunEnabled && !args.jobRunning ? args.onRunFrom : undefined,
     onRunNode: args.rerunEnabled && !args.jobRunning ? args.onRunNode : undefined,
@@ -906,22 +929,30 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     const roiId = `roi_${row.page}`;
     const resultId = `result_${row.page}`;
     const outputId = `output_${row.page}`;
+    const pageDraft = args.pageRoiDrafts?.[row.id] ?? {};
+    const rowSerialRegion = pageDraft.serialRegion ?? args.serialRegion;
+    const rowDrawingRegion = pageDraft.drawingRegion ?? args.drawingRegion;
+    const rowThreshold = pageDraft.confidenceThreshold ?? args.threshold;
+    const rowDirty = args.dirty.has(`roi:${row.id}`) || args.dirty.has(`batch_detect:${row.id}`);
     const globalPreviewMatches = args.preview?.source_path === row.source_path;
     const rowPreview = args.previewBySourcePath?.[row.source_path] ?? (globalPreviewMatches ? args.preview : null);
     const rowPreviewBusy = Boolean(args.previewLoadingBySourcePath?.[row.source_path]) || (args.selectedRowId === row.id && Boolean(args.previewBusy));
     const selectedPreview = Boolean(rowPreview);
-    const lowConfidence = Number(row.confidence || 0) > 0 && Number(row.confidence || 0) < args.threshold;
+    const lowConfidence = Number(row.confidence || 0) > 0 && Number(row.confidence || 0) < rowThreshold;
     const rowTone = row.status === "blocked" ? "danger" : row.status === "warn" || lowConfidence ? "warn" : row.status === "ready" ? "ready" : "idle";
     const commonRow = (nodeId: string, kind: WorkflowNodeKind, title: string, icon: ReactNode, tone: GuideNodeData["tone"], rows: GuideNodeData["rows"]): GuideNodeData => ({
       ...common(nodeId, kind, title, icon, tone, rows),
       active: args.selectedRowId === row.id || args.selectedNodeId === nodeId,
-      dirty: args.dirty.has(nodeId) || args.dirty.has("roi_calib"),
+      dirty: args.dirty.has(nodeId) || args.dirty.has("roi_calib") || rowDirty,
+      drawingRegion: rowDrawingRegion,
       pageTrial: args.pageTrials?.[row.id],
       pageTrialBusy: args.pageTrialBusyId === row.id,
       preview: rowPreview,
       previewBusy: rowPreviewBusy,
       row,
       selectedPreview,
+      serialRegion: rowSerialRegion,
+      threshold: rowThreshold,
     });
 
     addNode({
@@ -935,8 +966,8 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     addNode({
       id: roiId,
       position: { x: GUIDE_LAYOUT.roiX, y: y - 110 },
-      data: commonRow("roi_calib", "roi", `P${row.page} ROI 調校`, <SlidersHorizontal size={17} />, args.dirty.has("roi_calib") ? "warn" : selectedPreview ? "ready" : "idle", [
-        ...roiStateRows(args.serialRegion, args.drawingRegion, selectedPreview),
+      data: commonRow("roi_calib", "roi", `P${row.page} ROI 調校`, <SlidersHorizontal size={17} />, args.dirty.has("roi_calib") || rowDirty ? "warn" : selectedPreview ? "ready" : "idle", [
+        ...roiStateRows(rowSerialRegion, rowDrawingRegion, selectedPreview),
       ]),
     });
     addNode({
@@ -961,7 +992,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     });
     addEdge("split_preview", pageId, { kind: "pdf" });
     addEdge(pageId, roiId, { kind: "pdf", animated: args.selectedRowId === row.id });
-    addEdge(roiId, resultId, { kind: "params", animated: args.jobRunning, dirty: args.dirty.has("roi_calib") });
+    addEdge(roiId, resultId, { kind: "params", animated: args.jobRunning, dirty: args.dirty.has("roi_calib") || rowDirty });
     addEdge(resultId, outputId, { kind: "rows", animated: args.jobRunning });
     addEdge("iso_preview", outputId, { kind: "table" });
   });

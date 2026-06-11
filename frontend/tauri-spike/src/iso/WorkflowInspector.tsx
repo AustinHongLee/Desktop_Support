@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
 import type { CSSProperties, ReactNode, SyntheticEvent } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelIsoWorkflowJob,
   applyIsoPlan,
@@ -47,6 +47,7 @@ import {
   type IsoParityReportSummary,
   type IsoPlanRow,
   type IsoPreviewPayload,
+  type IsoRegion,
   type IsoSwitchoverGateVerdict,
   type IsoWorkflowRequest,
   type IsoWorkflowPlan,
@@ -56,7 +57,7 @@ import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
 import { NodeDetailPanel } from "./workbench/NodeDetailPanel";
 import { NodeWorkbench } from "./workbench/NodeWorkbench";
-import { WorkflowGuideCanvas, type IsoPageTrial } from "./workbench/WorkflowGuideCanvas";
+import { WorkflowGuideCanvas, type IsoPageRoiDraft, type IsoPageTrial } from "./workbench/WorkflowGuideCanvas";
 import { buildNodeCardSummaries } from "./workbench/nodeCards";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
@@ -73,6 +74,12 @@ type WorkflowInspectorProps = {
   setGateVerdict?: (verdict: IsoSwitchoverGateVerdict | null) => void;
   shadowFlagEnabled?: boolean;
   setShadowFlagEnabled?: (enabled: boolean) => void;
+};
+
+type PreviewLoadOptions = {
+  detectSerial?: boolean;
+  force?: boolean;
+  updateSelected?: boolean;
 };
 
 export function WorkflowInspector({
@@ -107,6 +114,10 @@ export function WorkflowInspector({
   const [nodePreviewBusy, setNodePreviewBusy] = useState(false);
   const [nodePreviewError, setNodePreviewError] = useState("");
   const [nodePreviewReloadKey, setNodePreviewReloadKey] = useState(0);
+  const previewFailedRef = useRef(new Set<string>());
+  const previewInFlightRef = useRef(new Map<string, number>());
+  const previewRequestIdRef = useRef(0);
+  const [pageRoiDrafts, setPageRoiDrafts] = useState<Record<string, IsoPageRoiDraft>>({});
   const [pageTrials, setPageTrials] = useState<Record<string, IsoPageTrial>>({});
   const [pageTrialBusyId, setPageTrialBusyId] = useState("");
   const [overlayInputs, setOverlayInputs] = useState<Record<string, unknown>>({});
@@ -207,6 +218,9 @@ export function WorkflowInspector({
     setNodePreviewCache({});
     setNodePreviewFailed({});
     setNodePreviewLoading({});
+    previewFailedRef.current.clear();
+    previewInFlightRef.current.clear();
+    setPageRoiDrafts({});
     setPageTrials({});
     setPageTrialBusyId("");
   }, [baseInputsKey]);
@@ -222,50 +236,27 @@ export function WorkflowInspector({
     setNodePreviewCache((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
     setNodePreviewFailed((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
     setNodePreviewLoading((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
+    setPageRoiDrafts((previous) => Object.fromEntries(Object.entries(previous).filter(([rowId]) => previewCacheRows.some((row) => row.id === rowId))));
+    for (const sourcePath of Array.from(previewFailedRef.current)) {
+      if (!allowed.has(sourcePath)) {
+        previewFailedRef.current.delete(sourcePath);
+      }
+    }
+    for (const [sourcePath] of Array.from(previewInFlightRef.current)) {
+      if (!allowed.has(sourcePath)) {
+        previewInFlightRef.current.delete(sourcePath);
+      }
+    }
   }, [previewCacheRowsKey]);
 
   useEffect(() => {
     if (!previewCacheRows.length || !isTauri()) {
       return;
     }
-    let cancelled = false;
-    const serialRegion = regionOrDefault(safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
-    const drawingRegion = regionOrDefault(safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
-    const missingRows = previewCacheRows.filter((row) => row.source_path && !nodePreviewCache[row.source_path] && !nodePreviewLoading[row.source_path] && !nodePreviewFailed[row.source_path]);
-    if (!missingRows.length) {
-      return;
-    }
-    missingRows.forEach((row) => {
-      setNodePreviewLoading((previous) => ({ ...previous, [row.source_path]: true }));
-      loadIsoPreview({
-        source_path: row.source_path,
-        detect_serial: false,
-        serial_region: serialRegion,
-        drawing_region: drawingRegion,
-      })
-        .then((payload) => {
-          if (cancelled) {
-            return;
-          }
-          setNodePreviewCache((previous) => ({ ...previous, [row.source_path]: payload }));
-          setNodePreviewFailed((previous) => ({ ...previous, [row.source_path]: false }));
-        })
-        .catch((caught) => {
-          if (!cancelled) {
-            setNodePreviewFailed((previous) => ({ ...previous, [row.source_path]: true }));
-            setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setNodePreviewLoading((previous) => ({ ...previous, [row.source_path]: false }));
-          }
-        });
+    previewCacheRows.forEach((row) => {
+      void loadPreviewForRow(row);
     });
-    return () => {
-      cancelled = true;
-    };
-  }, [displayPlan?.source.drawing_region, displayPlan?.source.serial_region, nodePreviewCache, nodePreviewFailed, nodePreviewLoading, previewCacheRows, previewCacheRowsKey, safeInputs.drawing_region, safeInputs.serial_region]);
+  }, [previewCacheRowsKey]);
 
   useEffect(() => {
     if (!selectedGuideRowId) {
@@ -343,47 +334,10 @@ export function WorkflowInspector({
       setNodePreviewError("");
       return;
     }
-    let cancelled = false;
-    const serialRegion = regionOrDefault(safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
-    const drawingRegion = regionOrDefault(safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
-    setNodePreviewBusy(true);
-    setNodePreviewError("");
-    loadIsoPreview({
-      source_path: selectedPreviewRow.source_path,
-      detect_serial: false,
-      serial_region: serialRegion,
-      drawing_region: drawingRegion,
-    })
-      .then((payload) => {
-        if (cancelled) {
-          return;
-        }
-        setNodePreview(payload);
-        setNodePreviewCache((previous) => ({ ...previous, [payload.source_path]: payload }));
-        setNodePreviewFailed((previous) => ({ ...previous, [payload.source_path]: false }));
-      })
-      .catch((caught) => {
-        if (cancelled) {
-          return;
-        }
-        setNodePreview(null);
-        setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setNodePreviewBusy(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
+    void loadPreviewForRow(selectedPreviewRow, { updateSelected: true });
   }, [
     activeCanvasNodeId,
-    displayPlan?.source.drawing_region,
-    displayPlan?.source.serial_region,
     nodePreviewReloadKey,
-    safeInputs.drawing_region,
-    safeInputs.serial_region,
     selectedPreviewRow?.source_path,
   ]);
 
@@ -537,9 +491,108 @@ export function WorkflowInspector({
     setDirtyNodeIds((previous) => mergeUnique(previous, dirtyNodesFrom(nodeId)));
   }
 
+  function handlePageRoiInputChange(rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) {
+    setPageRoiDrafts((previous) => {
+      const current = previous[rowId] ?? {};
+      const next: IsoPageRoiDraft = { ...current };
+      if (field === "serial_region") {
+        next.serialRegion = regionOrDefault(value, DEFAULT_SERIAL_REGION);
+      } else if (field === "drawing_region") {
+        next.drawingRegion = regionOrDefault(value, DEFAULT_DRAWING_REGION);
+      } else {
+        const numeric = numberInput(value);
+        next.confidenceThreshold = numeric === "" ? current.confidenceThreshold : numeric;
+      }
+      return { ...previous, [rowId]: next };
+    });
+    setDirtyNodeIds((previous) => mergeUnique(previous, [`roi:${rowId}`, `batch_detect:${rowId}`, "pilot", "roi_dist", "export_csv", "apply_rename"]));
+  }
+
+  function pageSerialRegion(rowId: string): IsoRegion {
+    return regionOrDefault(pageRoiDrafts[rowId]?.serialRegion ?? safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
+  }
+
+  function pageDrawingRegion(rowId: string): IsoRegion {
+    return regionOrDefault(pageRoiDrafts[rowId]?.drawingRegion ?? safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
+  }
+
+  async function loadPreviewForRow(row: IsoPlanRow, options: PreviewLoadOptions = {}): Promise<IsoPreviewPayload | null> {
+    const sourcePath = row.source_path;
+    if (!sourcePath) {
+      return null;
+    }
+    if (!isTauri()) {
+      return null;
+    }
+    const cached = nodePreviewCache[sourcePath];
+    if (!options.force && cached) {
+      if (options.updateSelected) {
+        setNodePreview(cached);
+        setNodePreviewError("");
+      }
+      return cached;
+    }
+    if (!options.force && previewInFlightRef.current.has(sourcePath)) {
+      return null;
+    }
+    if (!options.force && previewFailedRef.current.has(sourcePath)) {
+      return null;
+    }
+    const requestId = previewRequestIdRef.current + 1;
+    previewRequestIdRef.current = requestId;
+    previewInFlightRef.current.set(sourcePath, requestId);
+    previewFailedRef.current.delete(sourcePath);
+    setNodePreviewFailed((previous) => ({ ...previous, [sourcePath]: false }));
+    setNodePreviewLoading((previous) => ({ ...previous, [sourcePath]: true }));
+    if (options.updateSelected) {
+      setNodePreviewBusy(true);
+      setNodePreviewError("");
+    }
+    try {
+      const payload = await loadIsoPreview({
+        source_path: sourcePath,
+        detect_serial: Boolean(options.detectSerial),
+        serial_region: pageSerialRegion(row.id),
+        drawing_region: pageDrawingRegion(row.id),
+      });
+      if (previewInFlightRef.current.get(sourcePath) !== requestId) {
+        return payload;
+      }
+      setNodePreviewCache((previous) => ({ ...previous, [sourcePath]: payload }));
+      setNodePreviewFailed((previous) => ({ ...previous, [sourcePath]: false }));
+      if (options.updateSelected) {
+        setNodePreview(payload);
+      }
+      return payload;
+    } catch (caught) {
+      if (previewInFlightRef.current.get(sourcePath) === requestId) {
+        previewFailedRef.current.add(sourcePath);
+        setNodePreviewFailed((previous) => ({ ...previous, [sourcePath]: true }));
+        if (options.updateSelected) {
+          setNodePreview(null);
+        }
+        setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
+      }
+      return null;
+    } finally {
+      if (previewInFlightRef.current.get(sourcePath) === requestId) {
+        previewInFlightRef.current.delete(sourcePath);
+        setNodePreviewLoading((previous) => ({ ...previous, [sourcePath]: false }));
+        if (options.updateSelected) {
+          setNodePreviewBusy(false);
+        }
+      }
+    }
+  }
+
   function refreshGuidePreview(rowId: string) {
+    const row = displayPlan?.rows.find((candidate) => candidate.id === rowId);
     setSelectedGuideRowId(rowId);
     setSelectedCanvasNodeId("roi_calib");
+    if (row) {
+      void loadPreviewForRow(row, { force: true, updateSelected: true });
+      return;
+    }
     setNodePreviewReloadKey((current) => current + 1);
   }
 
@@ -556,18 +609,12 @@ export function WorkflowInspector({
     setSelectedGuideRowId(rowId);
     setSelectedCanvasNodeId("roi_calib");
     setPageTrialBusyId(rowId);
-    setNodePreviewBusy(true);
     setNodePreviewError("");
     try {
-      const payload = await loadIsoPreview({
-        source_path: row.source_path,
-        detect_serial: true,
-        serial_region: regionOrDefault(safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION),
-        drawing_region: regionOrDefault(safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION),
-      });
-      setNodePreview(payload);
-      setNodePreviewCache((previous) => ({ ...previous, [payload.source_path]: payload }));
-      setNodePreviewFailed((previous) => ({ ...previous, [payload.source_path]: false }));
+      const payload = await loadPreviewForRow(row, { detectSerial: true, force: true, updateSelected: true });
+      if (!payload) {
+        return;
+      }
       setPageTrials((previous) => ({
         ...previous,
         [rowId]: {
@@ -581,7 +628,6 @@ export function WorkflowInspector({
     } catch (caught) {
       setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
     } finally {
-      setNodePreviewBusy(false);
       setPageTrialBusyId("");
     }
   }
@@ -875,9 +921,11 @@ export function WorkflowInspector({
               onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
               onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
               onRunPageTrial={(rowId) => void runPageTrial(rowId)}
+              onPageRoiInputChange={handlePageRoiInputChange}
               onSelectNode={setSelectedCanvasNodeId}
               onSelectRow={setSelectedGuideRowId}
               onWorkflowInputChange={handleWorkflowInputChange}
+              pageRoiDrafts={pageRoiDrafts}
               pageTrialBusyId={pageTrialBusyId}
               pageTrials={pageTrials}
               plan={displayPlan}
