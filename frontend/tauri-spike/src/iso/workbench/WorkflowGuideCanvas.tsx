@@ -59,6 +59,8 @@ type WorkflowNodeKind =
   | "action"
   | "more";
 
+type WorkflowNodeSize = "S" | "M" | "L" | "XL";
+
 type GuideNodeData = {
   active: boolean;
   dirty: boolean;
@@ -76,11 +78,15 @@ type GuideNodeData = {
   preview: IsoPreviewPayload | null;
   previewBusy: boolean;
   previewError: string;
+  portIn: string;
+  portOut: string;
   rows: Array<{ label: string; tone?: "idle" | "ready" | "warn" | "danger"; value: string }>;
   row?: IsoPlanRow;
   rowCount?: number;
   selectedPreview: boolean;
   serialRegion: IsoRegion;
+  size: WorkflowNodeSize;
+  subtitle: string;
   threshold: number;
   title: string;
   tone: "idle" | "ready" | "warn" | "danger";
@@ -231,12 +237,14 @@ export function WorkflowGuideCanvas({
 
 function GuideNodeCard({ data, selected }: NodeProps<GuideNode>) {
   const active = data.active || selected;
-  const borderColor = toneColor(data.tone);
-  const width = nodeWidth(data.kind);
+  const cardTone = cardToneStyle(data.tone, data.dirty);
+  const width = nodeWidth(data.size);
   return (
-    <article style={{ ...styles.node, borderColor, outline: active ? "2px solid rgba(47,245,200,0.78)" : "0", width }}>
+    <article style={{ ...styles.node, ...cardTone, outline: active ? "2px solid rgba(47,245,200,0.78)" : "0", width }}>
       <Handle type="target" position={Position.Left} style={styles.handle} />
       <Handle type="source" position={Position.Right} style={styles.handle} />
+      <span style={styles.portLabelLeft}>{data.portIn}</span>
+      <span style={styles.portLabelRight}>{data.portOut}</span>
       <NodeHeader data={data} />
       {data.kind === "source" ? <SourceBody rows={data.rows} /> : null}
       {data.kind === "config" ? <ConfigBody data={data} /> : null}
@@ -258,10 +266,11 @@ function NodeHeader({ data }: { data: GuideNodeData }) {
       <span style={{ ...styles.nodeIcon, color: toneColor(data.tone) }}>{data.icon}</span>
       <div style={styles.nodeTitle}>
         <strong>{data.title}</strong>
+        <small style={styles.nodeSubtitle}>{data.subtitle}</small>
         {data.meta ? <em>{data.meta}</em> : null}
       </div>
       <span style={{ ...styles.statusPill, borderColor: toneColor(data.tone), color: toneColor(data.tone) }}>
-        {data.dirty ? "待更新" : statusToneLabel(data.tone)}
+        {data.dirty ? "待重跑" : statusToneLabel(data.tone)}
       </span>
     </div>
   );
@@ -279,7 +288,7 @@ function PreviewRows({ data }: { data: GuideNodeData }) {
   return (
     <div style={styles.nodeBody}>
       <KeyRows rows={data.rows} />
-      {data.rowCount && data.rowCount > data.rows.length ? <span style={styles.moreHint}>+{data.rowCount - data.rows.length} more</span> : null}
+      {data.rowCount && data.rowCount > data.rows.length ? <span style={styles.moreHint}>尚有 {data.rowCount - data.rows.length} 筆</span> : null}
     </div>
   );
 }
@@ -538,9 +547,13 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     preview: args.preview,
     previewBusy: Boolean(args.previewBusy),
     previewError: args.previewError || "",
+    portIn: portLabel(kind, "in"),
+    portOut: portLabel(kind, "out"),
     rows,
     selectedPreview: false,
     serialRegion: args.serialRegion,
+    size: nodeSize(kind),
+    subtitle: nodeSubtitle(title, kind),
     threshold: args.threshold,
     title,
     tone,
@@ -555,47 +568,67 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
         { label: "合併 PDF", value: compactOrEmpty(args.pdfPath) },
         { label: "ISO 清單", value: compactOrEmpty(args.isoPath) },
       ]),
-      meta: "workflow input",
+      meta: "流程入口",
+      portIn: "使用者選擇",
+      portOut: "來源路徑",
     },
   });
 
   addNode({
     id: "iso_list",
     position: { x: 360, y: 10 },
-    data: common("load_table", "config", "ISO 清單", <Table2 size={17} />, args.isoPath || args.source?.iso_list ? "ready" : "idle", [
-      { label: "檔案", value: compactOrEmpty(args.isoPath || args.source?.iso_list || "") },
-      { label: "列數", value: String(args.source?.record_count ?? 0) },
-    ]),
+    data: {
+      ...common("load_table", "config", "ISO 清單", <Table2 size={17} />, args.isoPath || args.source?.iso_list ? "ready" : "idle", [
+        { label: "檔案", value: compactOrEmpty(args.isoPath || args.source?.iso_list || "") },
+        { label: "列數", value: String(args.source?.record_count ?? 0) },
+      ]),
+      portIn: "清單檔",
+      portOut: "表格資料",
+    },
   });
   addNode({
     id: "sheet",
     position: { x: 700, y: 10 },
-    data: common("load_table", "config", "工作表", <Table2 size={17} />, args.source?.sheet_name ? "ready" : "idle", [
-      { label: "名稱", value: stringValue(args.workflowInputs.sheet_name ?? args.source?.sheet_name) || "自動" },
-      { label: "候選", value: String(args.source?.sheet_options?.length ?? 0) },
-    ]),
+    data: {
+      ...common("load_table", "config", "工作表", <Table2 size={17} />, args.source?.sheet_name ? "ready" : "idle", [
+        { label: "名稱", value: stringValue(args.workflowInputs.sheet_name ?? args.source?.sheet_name) || "自動" },
+        { label: "候選", value: String(args.source?.sheet_options?.length ?? 0) },
+      ]),
+      portIn: "表格資料",
+      portOut: "工作表",
+    },
   });
   addNode({
     id: "columns",
     position: { x: 1040, y: 10 },
-    data: common("load_table", "config", "欄位設定", <SlidersHorizontal size={17} />, args.source?.serial_col || args.source?.line_col ? "ready" : "idle", [
-      { label: "流水號欄", value: stringValue(args.workflowInputs.serial_col ?? args.source?.serial_col) || "自動" },
-      { label: "圖號欄", value: stringValue(args.workflowInputs.line_col ?? args.source?.line_col) || "自動" },
-    ]),
+    data: {
+      ...common("load_table", "config", "欄位設定", <SlidersHorizontal size={17} />, args.source?.serial_col || args.source?.line_col ? "ready" : "idle", [
+        { label: "流水號欄", value: stringValue(args.workflowInputs.serial_col ?? args.source?.serial_col) || "自動" },
+        { label: "圖號欄", value: stringValue(args.workflowInputs.line_col ?? args.source?.line_col) || "自動" },
+      ]),
+      portIn: "工作表",
+      portOut: "欄位對應",
+    },
   });
   addNode({
     id: "pattern",
     position: { x: 1380, y: 10 },
-    data: common("roi_calib", "config", "命名格式", <FileText size={17} />, args.pattern ? "ready" : "idle", [
-      { label: "格式", value: args.pattern },
-      { label: "門檻", value: `${Math.round(args.threshold * 100)}%` },
-    ]),
+    data: {
+      ...common("roi_calib", "config", "命名格式", <FileText size={17} />, args.pattern ? "ready" : "idle", [
+        { label: "格式", value: args.pattern },
+        { label: "門檻", value: `${Math.round(args.threshold * 100)}%` },
+      ]),
+      portIn: "欄位對應",
+      portOut: "命名規則",
+    },
   });
   addNode({
     id: "iso_preview",
     position: { x: 1720, y: 10 },
     data: {
       ...common("load_table", "listPreview", "ISO 預覽", <Eye size={17} />, args.source?.record_count ? "ready" : "idle", isoPreviewRows(args.source)),
+      portIn: "命名規則",
+      portOut: "ISO 候選",
       rowCount: args.source?.record_count ?? 0,
     },
   });
@@ -603,24 +636,34 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   addNode({
     id: "combine_pdf",
     position: { x: 360, y: 390 },
-    data: common("split", "config", "合併 PDF", <FileText size={17} />, args.pdfPath || args.source?.combine_pdf ? "ready" : "idle", [
-      { label: "檔案", value: compactOrEmpty(args.pdfPath || args.source?.combine_pdf || "") },
-      { label: "頁數", value: String(args.source?.pdf_count ?? args.rows.length ?? 0) },
-    ]),
+    data: {
+      ...common("split", "config", "合併 PDF", <FileText size={17} />, args.pdfPath || args.source?.combine_pdf ? "ready" : "idle", [
+        { label: "檔案", value: compactOrEmpty(args.pdfPath || args.source?.combine_pdf || "") },
+        { label: "頁數", value: String(args.source?.pdf_count ?? args.rows.length ?? 0) },
+      ]),
+      portIn: "PDF 檔",
+      portOut: "合併頁面",
+    },
   });
   addNode({
     id: "split",
     position: { x: 700, y: 390 },
-    data: common("split", "config", "分割工具", <Layers3 size={17} />, args.source?.page_folder || args.pageFolder ? "ready" : "idle", [
-      { label: "輸出", value: compactOrEmpty(args.pageFolder || args.source?.page_folder || "") },
-      { label: "狀態", value: runStatus(args.runLog, "split") },
-    ]),
+    data: {
+      ...common("split", "config", "分割工具", <Layers3 size={17} />, args.source?.page_folder || args.pageFolder ? "ready" : "idle", [
+        { label: "輸出", value: compactOrEmpty(args.pageFolder || args.source?.page_folder || "") },
+        { label: "狀態", value: runStatus(args.runLog, "split") },
+      ]),
+      portIn: "合併頁面",
+      portOut: "單頁 PDF",
+    },
   });
   addNode({
     id: "split_preview",
     position: { x: 1040, y: 390 },
     data: {
       ...common("split", "listPreview", "拆頁預覽", <Eye size={17} />, args.rows.length ? "ready" : "idle", args.rows.slice(0, 5).map((row) => ({ label: `P${row.page}`, value: row.source_name }))),
+      portIn: "單頁 PDF",
+      portOut: "頁面卡",
       rowCount: args.rows.length || args.source?.pdf_count || 0,
     },
   });
@@ -646,10 +689,14 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     addNode({
       id: "roi_waiting",
       position: { x: 1740, y: 280 },
-      data: common("roi_calib", "roi", "P001 ROI 調校", <SlidersHorizontal size={17} />, "idle", [
-        { label: "流水號 ROI", value: regionSummary(args.serialRegion) },
-        { label: "圖號 ROI", value: regionSummary(args.drawingRegion) },
-      ]),
+      data: common(
+        "roi_calib",
+        "roi",
+        "P001 ROI 調校",
+        <SlidersHorizontal size={17} />,
+        "idle",
+        roiStateRows(args.serialRegion, args.drawingRegion, false),
+      ),
     });
     addNode({
       id: "result_waiting",
@@ -702,8 +749,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       id: roiId,
       position: { x: 1740, y: y - 110 },
       data: commonRow("roi_calib", "roi", `P${row.page} ROI 調校`, <SlidersHorizontal size={17} />, args.dirty.has("roi_calib") ? "warn" : selectedPreview ? "ready" : "idle", [
-        { label: "流水號 ROI", value: regionSummary(args.serialRegion) },
-        { label: "圖號 ROI", value: regionSummary(args.drawingRegion) },
+        ...roiStateRows(args.serialRegion, args.drawingRegion, selectedPreview),
       ]),
     });
     addNode({
@@ -746,7 +792,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     id: "export_csv",
     position: { x: 3420, y: 190 },
     data: common("export_csv", "action", "匯出 CSV", <FileText size={17} />, "warn", [
-      { label: "權限", value: "guarded", tone: "warn" },
+      { label: "權限", value: "需授權", tone: "warn" },
       { label: "列數", value: String(args.plan?.summary.selected ?? 0) },
     ]),
   });
@@ -754,7 +800,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     id: "apply_rename",
     position: { x: 3420, y: 470 },
     data: common("apply_rename", "action", "套用更名", <AlertTriangle size={17} />, "warn", [
-      { label: "權限", value: "guarded", tone: "warn" },
+      { label: "權限", value: "需授權", tone: "warn" },
       { label: "確認", value: "必經確認" },
     ]),
   });
@@ -784,11 +830,103 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   return { edges, nodes };
 }
 
-function nodeWidth(kind: WorkflowNodeKind): number {
-  if (kind === "roi") return 560;
-  if (kind === "page" || kind === "result" || kind === "output") return 300;
-  if (kind === "summary") return 310;
-  return 280;
+function nodeWidth(size: WorkflowNodeSize): number {
+  if (size === "XL") return 560;
+  if (size === "L") return 340;
+  if (size === "S") return 230;
+  return 290;
+}
+
+function nodeSize(kind: WorkflowNodeKind): WorkflowNodeSize {
+  if (kind === "roi") return "XL";
+  if (kind === "listPreview" || kind === "summary") return "L";
+  if (kind === "config") return "S";
+  return "M";
+}
+
+function nodeSubtitle(title: string, kind: WorkflowNodeKind): string {
+  if (title === "選取工作區") return "流程從這裡收集來源";
+  if (title === "ISO 清單") return "讀取清單與列數";
+  if (title === "工作表") return "選擇資料表分頁";
+  if (title === "欄位設定") return "指定流水號與圖號";
+  if (title === "命名格式") return "定義輸出檔名";
+  if (title === "合併 PDF") return "提供原始圖面";
+  if (title === "分割工具") return "拆成單頁 PDF";
+  if (title.includes("ROI")) return "框出要判讀的區域";
+  if (title.includes("判讀")) return "影像判讀與信心值";
+  if (title.includes("命名")) return "合成新檔名";
+  if (kind === "listPreview") return "抽樣檢查資料";
+  if (kind === "summary") return "匯總檢查結果";
+  if (kind === "action") return "需要授權才執行";
+  if (kind === "more") return "延遲展開避免一次載入過多";
+  return "節點處理步驟";
+}
+
+function portLabel(kind: WorkflowNodeKind, side: "in" | "out"): string {
+  if (kind === "source") return side === "in" ? "選擇" : "來源";
+  if (kind === "config") return side === "in" ? "資料" : "設定";
+  if (kind === "listPreview") return side === "in" ? "資料" : "預覽";
+  if (kind === "page") return side === "in" ? "PDF" : "頁面";
+  if (kind === "roi") return side === "in" ? "頁面" : "ROI";
+  if (kind === "result") return side === "in" ? "ROI" : "判讀";
+  if (kind === "output") return side === "in" ? "判讀" : "檔名";
+  if (kind === "summary") return side === "in" ? "結果" : "彙整";
+  if (kind === "action") return side === "in" ? "彙整" : "檔案";
+  return side === "in" ? "輸入" : "輸出";
+}
+
+function cardToneStyle(tone: GuideNodeData["tone"], dirty: boolean): CSSProperties {
+  if (dirty) {
+    return {
+      background: "linear-gradient(180deg, rgba(54,43,13,0.96), rgba(15,12,5,0.96))",
+      borderColor: "rgba(255,209,102,0.82)",
+      borderStyle: "dashed",
+      boxShadow: "0 0 0 1px rgba(255,209,102,0.12), 0 18px 40px rgba(0,0,0,0.38)",
+    };
+  }
+  if (tone === "danger") {
+    return {
+      background: "linear-gradient(180deg, rgba(46,18,18,0.96), rgba(14,7,7,0.96))",
+      borderColor: "rgba(255,155,155,0.72)",
+      boxShadow: "0 0 0 1px rgba(255,155,155,0.10), 0 18px 40px rgba(0,0,0,0.38)",
+    };
+  }
+  if (tone === "warn") {
+    return {
+      background: "linear-gradient(180deg, rgba(48,38,12,0.96), rgba(14,12,5,0.96))",
+      borderColor: "rgba(255,209,102,0.62)",
+      boxShadow: "0 0 0 1px rgba(255,209,102,0.08), 0 18px 40px rgba(0,0,0,0.38)",
+    };
+  }
+  if (tone === "ready") {
+    return {
+      background: "linear-gradient(180deg, rgba(12,47,39,0.96), rgba(5,18,15,0.96))",
+      borderColor: "rgba(47,245,200,0.60)",
+      boxShadow: "0 0 0 1px rgba(47,245,200,0.08), 0 18px 40px rgba(0,0,0,0.38)",
+    };
+  }
+  return {
+    background: "linear-gradient(180deg, rgba(16,29,26,0.96), rgba(5,14,12,0.96))",
+    borderColor: "rgba(220,235,228,0.22)",
+    boxShadow: "0 16px 36px rgba(0,0,0,0.34)",
+  };
+}
+
+function roiStateRows(serialRegion: IsoRegion, drawingRegion: IsoRegion, selectedPreview: boolean): GuideNodeData["rows"] {
+  return [
+    { label: "預覽", value: selectedPreview ? "已載入" : "點頁面載入", tone: selectedPreview ? "ready" : "idle" },
+    { label: "流水號 ROI", value: regionConfigured(serialRegion, DEFAULT_SERIAL_REGION) ? "已調校" : "預設區域", tone: regionConfigured(serialRegion, DEFAULT_SERIAL_REGION) ? "ready" : "idle" },
+    { label: "圖號 ROI", value: regionConfigured(drawingRegion, DEFAULT_DRAWING_REGION) ? "已調校" : "預設區域", tone: regionConfigured(drawingRegion, DEFAULT_DRAWING_REGION) ? "ready" : "idle" },
+  ];
+}
+
+function regionConfigured(region: IsoRegion, fallback: IsoRegion): boolean {
+  return (
+    Math.abs(region.left - fallback.left) > 0.005 ||
+    Math.abs(region.top - fallback.top) > 0.005 ||
+    Math.abs(region.width - fallback.width) > 0.005 ||
+    Math.abs(region.height - fallback.height) > 0.005
+  );
 }
 
 function isoPreviewRows(source: IsoWorkflowPlan["source"] | undefined): GuideNodeData["rows"] {
@@ -864,10 +1002,6 @@ function regionOrDefault(value: unknown, fallback: IsoRegion): IsoRegion {
   return Object.values(next).every(Number.isFinite) ? next : fallback;
 }
 
-function regionSummary(region: IsoRegion): string {
-  return `${region.left.toFixed(2)}, ${region.top.toFixed(2)}, ${region.width.toFixed(2)}, ${region.height.toFixed(2)}`;
-}
-
 function regionFieldLabel(field: keyof IsoRegion): string {
   if (field === "left") return "左距";
   if (field === "top") return "上距";
@@ -917,6 +1051,7 @@ const styles = {
     background: "#2ff5c8",
     border: "0",
     height: 9,
+    zIndex: 5,
     width: 9,
   },
   keyRow: {
@@ -943,15 +1078,14 @@ const styles = {
     fontSize: 12,
   },
   node: {
-    background: "linear-gradient(180deg, rgba(12,39,32,0.94), rgba(5,14,12,0.96))",
     border: "1px solid",
     borderRadius: 8,
-    boxShadow: "0 16px 36px rgba(0,0,0,0.34)",
     color: "#dffcf4",
     display: "grid",
     gap: 9,
     minHeight: 145,
     padding: 10,
+    position: "relative",
   },
   nodeBody: {
     display: "grid",
@@ -975,6 +1109,15 @@ const styles = {
     gap: 2,
     minWidth: 0,
   },
+  nodeSubtitle: {
+    color: "rgba(220,235,228,0.58)",
+    fontSize: 10,
+    fontWeight: 850,
+    lineHeight: 1.2,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
   pageBadge: {
     alignItems: "center",
     background: "rgba(47,245,200,0.10)",
@@ -994,6 +1137,40 @@ const styles = {
     gap: 8,
     gridTemplateColumns: "auto minmax(0, 1fr)",
     minWidth: 0,
+  },
+  portLabelLeft: {
+    background: "rgba(3,10,8,0.94)",
+    border: "1px solid rgba(47,245,200,0.22)",
+    borderRadius: 999,
+    color: "rgba(220,252,244,0.72)",
+    fontSize: 10,
+    fontWeight: 900,
+    left: -34,
+    lineHeight: 1,
+    padding: "4px 6px",
+    pointerEvents: "none",
+    position: "absolute",
+    top: "50%",
+    transform: "translateY(-50%)",
+    whiteSpace: "nowrap",
+    zIndex: 4,
+  },
+  portLabelRight: {
+    background: "rgba(3,10,8,0.94)",
+    border: "1px solid rgba(47,245,200,0.22)",
+    borderRadius: 999,
+    color: "rgba(220,252,244,0.72)",
+    fontSize: 10,
+    fontWeight: 900,
+    lineHeight: 1,
+    padding: "4px 6px",
+    pointerEvents: "none",
+    position: "absolute",
+    right: -34,
+    top: "50%",
+    transform: "translateY(-50%)",
+    whiteSpace: "nowrap",
+    zIndex: 4,
   },
   previewCanvas: {
     background: "rgba(0,0,0,0.22)",
