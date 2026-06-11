@@ -135,6 +135,20 @@ type GuideNodeData = {
 
 type GuideNode = Node<GuideNodeData, "guideNode">;
 
+type AreaNodeData = {
+  subtitle: string;
+  title: string;
+};
+
+type PageItemNodeData = {
+  meta: string;
+  title: string;
+};
+
+type AreaNode = Node<AreaNodeData, "areaNode">;
+type PageItemNode = Node<PageItemNodeData, "pageItemNode">;
+type GuideCanvasNode = AreaNode | GuideNode | PageItemNode;
+
 const PAGE_CHUNK_SIZE = 10;
 const DEFAULT_VIEWPORT = { x: 86, y: 54, zoom: 0.58 };
 const GUIDE_LAYOUT = {
@@ -313,11 +327,11 @@ export function WorkflowGuideCanvas({
         </div>
       </div>
       <div style={styles.canvasShell}>
-        <ReactFlow<GuideNode, Edge>
+        <ReactFlow<GuideCanvasNode, Edge>
           key={viewResetKey}
           nodes={graph.nodes}
           edges={graph.edges}
-          nodeTypes={{ guideNode: GuideNodeCard }}
+          nodeTypes={{ areaNode: AreaNodeCard, guideNode: GuideNodeCard, pageItemNode: PageItemNodeCard }}
           defaultViewport={DEFAULT_VIEWPORT}
           nodesConnectable={false}
           nodesDraggable
@@ -325,6 +339,9 @@ export function WorkflowGuideCanvas({
           onlyRenderVisibleElements
           deleteKeyCode={null}
           onNodeClick={(_event, node) => {
+            if (node.type !== "guideNode") {
+              return;
+            }
             node.data.onSelectNode?.(node.data.nodeId);
             if (node.data.row) {
               node.data.onSelectRow?.(node.data.row.id);
@@ -335,6 +352,24 @@ export function WorkflowGuideCanvas({
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>
+    </section>
+  );
+}
+
+function AreaNodeCard({ data }: NodeProps<AreaNode>) {
+  return (
+    <section style={styles.areaNode}>
+      <strong>{data.title}</strong>
+      <span>{data.subtitle}</span>
+    </section>
+  );
+}
+
+function PageItemNodeCard({ data }: NodeProps<PageItemNode>) {
+  return (
+    <section style={styles.pageItemNode}>
+      <strong>{data.title}</strong>
+      <span>{data.meta}</span>
     </section>
   );
 }
@@ -682,9 +717,15 @@ type BuildGuideGraphArgs = Pick<
   workFolder: string;
 };
 
-function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: GuideNode[] } {
-  const nodes: GuideNode[] = [];
+function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: GuideCanvasNode[] } {
+  const nodes: GuideCanvasNode[] = [];
   const edges: Edge[] = [];
+  const addAreaNode = (node: Omit<AreaNode, "type">) => {
+    nodes.push({ ...node, type: "areaNode" });
+  };
+  const addPageItemNode = (node: Omit<PageItemNode, "type">) => {
+    nodes.push({ ...node, type: "pageItemNode" });
+  };
   const addNode = (node: Omit<GuideNode, "type">) => {
     nodes.push({ ...node, type: "guideNode" });
   };
@@ -700,6 +741,8 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       style: edgeTone,
     });
   };
+
+  addWorkbenchAreas(args, addAreaNode);
 
   const common = (nodeId: string, kind: WorkflowNodeKind, title: string, icon: ReactNode, tone: GuideNodeData["tone"], rows: GuideNodeData["rows"] = []): GuideNodeData => ({
     active: args.selectedNodeId === nodeId,
@@ -926,6 +969,22 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     const roiId = `roi_${row.page}`;
     const resultId = `result_${row.page}`;
     const outputId = `output_${row.page}`;
+    addPageItemNode({
+      id: `page_item_${row.page}`,
+      position: { x: GUIDE_LAYOUT.pageX + 340, y: y - 150 },
+      selectable: false,
+      draggable: false,
+      zIndex: -2,
+      style: {
+        height: 760,
+        pointerEvents: "none",
+        width: 1780,
+      },
+      data: {
+        title: `Page Item ${row.page}`,
+        meta: `${row.source_name} · source → ROI → 判讀 → 命名`,
+      },
+    });
     const pageDraft = args.pageRoiDrafts?.[row.id] ?? {};
     const rowSerialRegion = pageDraft.serialRegion ?? args.serialRegion;
     const rowDrawingRegion = pageDraft.drawingRegion ?? args.drawingRegion;
@@ -1062,6 +1121,33 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   }
 
   return { edges, nodes };
+}
+
+function addWorkbenchAreas(args: BuildGuideGraphArgs, addAreaNode: (node: Omit<AreaNode, "type">) => void) {
+  const pageCount = Math.max(1, args.visibleRows.length);
+  const pageAreaHeight = Math.max(820, pageCount * GUIDE_LAYOUT.rowGapY + 120);
+  const areaStyle = (width: number, height: number): CSSProperties => ({
+    height,
+    pointerEvents: "none",
+    width,
+  });
+  const area = (id: string, title: string, subtitle: string, x: number, y: number, width: number, height: number) => {
+    addAreaNode({
+      id,
+      position: { x, y },
+      selectable: false,
+      draggable: false,
+      zIndex: -5,
+      style: areaStyle(width, height),
+      data: { subtitle, title },
+    });
+  };
+
+  area("area_source", "來源區", "選取工作區與來源狀態", -90, GUIDE_LAYOUT.sourceY - 95, 360, 360);
+  area("area_iso", "ISO 清單區", "清單、工作表、欄位、命名格式", GUIDE_LAYOUT.branchX - 70, -35, 1300, 390);
+  area("area_pdf", "PDF 分割區", "合併 PDF、拆頁與頁面預覽", GUIDE_LAYOUT.branchX - 70, GUIDE_LAYOUT.pdfY - 70, 1300, 330);
+  area("area_pages", "頁面處理區", "每頁 Page Item：source → ROI → 判讀 → 命名", GUIDE_LAYOUT.pageX + 300, GUIDE_LAYOUT.rowStartY - 210, 1860, pageAreaHeight);
+  area("area_output", "輸出/更名區", "Pilot、CSV、套用更名鎖定操作", GUIDE_LAYOUT.mergeX - 90, GUIDE_LAYOUT.sourceY - 70, 760, 760);
 }
 
 function nodeWidth(size: WorkflowNodeSize): number {
@@ -1319,6 +1405,17 @@ const styles = {
     gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     minWidth: 0,
   },
+  areaNode: {
+    background: "linear-gradient(180deg, rgba(47,245,200,0.045), rgba(47,245,200,0.018))",
+    border: "1px solid rgba(47,245,200,0.18)",
+    borderRadius: 12,
+    color: "rgba(220,252,244,0.78)",
+    display: "grid",
+    gap: 3,
+    minHeight: 80,
+    padding: "13px 15px",
+    position: "relative",
+  },
   canvasShell: {
     background: "rgba(3,10,8,0.82)",
     border: "1px solid rgba(47,245,200,0.18)",
@@ -1485,6 +1582,16 @@ const styles = {
     gap: 8,
     gridTemplateColumns: "auto minmax(0, 1fr)",
     minWidth: 0,
+  },
+  pageItemNode: {
+    background: "linear-gradient(180deg, rgba(47,245,200,0.060), rgba(3,10,8,0.18))",
+    border: "1px solid rgba(47,245,200,0.22)",
+    borderRadius: 14,
+    color: "rgba(220,252,244,0.70)",
+    display: "grid",
+    gap: 3,
+    padding: "12px 15px",
+    position: "relative",
   },
   portLabelLeft: {
     background: "rgba(3,10,8,0.94)",
