@@ -19,8 +19,10 @@ import {
   listIsoWorkflowNodes,
   listIsoWorkflowRuns,
   loadIsoOneClickEngine,
+  loadIsoPreview,
   loadIsoSwitchoverGate,
   loadIsoWorkflowJobStatus,
+  loadIsoWorkflowPlanFromRun,
   loadIsoNodeWorkflow,
   readIsoWorkflowArtifact,
   readIsoWorkflowRunLog,
@@ -39,12 +41,16 @@ import {
   type IsoNodeWorkflowSpec,
   type IsoNodeWorkflowValidationPayload,
   type IsoParityReportSummary,
+  type IsoPreviewPayload,
   type IsoSwitchoverGateVerdict,
+  type IsoWorkflowPlan,
 } from "../isoWorkflow";
-import { compactPath } from "./helpers";
+import { compactPath, DEFAULT_DRAWING_REGION, DEFAULT_SERIAL_REGION } from "./helpers";
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
+import { NodeDetailPanel } from "./workbench/NodeDetailPanel";
 import { NodeWorkbench } from "./workbench/NodeWorkbench";
+import { buildNodeCardSummaries } from "./workbench/nodeCards";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
 
@@ -80,6 +86,11 @@ export function WorkflowInspector({
   const [parityReports, setParityReports] = useState<IsoParityReportSummary[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
   const [runLog, setRunLog] = useState<IsoNodeWorkflowRunLog | null>(null);
+  const [projectedPlan, setProjectedPlan] = useState<IsoWorkflowPlan | null>(null);
+  const [projectionError, setProjectionError] = useState("");
+  const [nodePreview, setNodePreview] = useState<IsoPreviewPayload | null>(null);
+  const [nodePreviewBusy, setNodePreviewBusy] = useState(false);
+  const [nodePreviewError, setNodePreviewError] = useState("");
   const [safeRunConfirmOpen, setSafeRunConfirmOpen] = useState(false);
   const [safeRunBusy, setSafeRunBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -105,9 +116,17 @@ export function WorkflowInspector({
     return new Map(entries);
   }, [nodeCatalog]);
   const graphNodes = graph?.graph?.nodes ?? [];
-  const fallbackNodeId = graph?.topology?.find((nodeId) => graphNodes.some((node) => node.node_id === nodeId)) || graphNodes[0]?.node_id || "";
-  const activeCanvasNodeId = graphNodes.some((node) => node.node_id === selectedCanvasNodeId) ? selectedCanvasNodeId : fallbackNodeId;
-  const selectedCanvasNode = graphNodes.find((node) => node.node_id === activeCanvasNodeId) ?? null;
+  const syntheticCanvasNodes = useMemo<IsoNodeWorkflowInstance[]>(() => [
+    { node_id: "pdf_source", node_type: "ui.pdf_source", display_name: "PDF 來源", enabled: true, params: {}, side_effects: [] },
+    { node_id: "roi_calib", node_type: "ui.roi_calibration", display_name: "ROI 調校", enabled: true, params: {}, side_effects: [] },
+  ], []);
+  const canvasDetailNodes = useMemo(
+    () => graph?.graph ? [...syntheticCanvasNodes, ...graphNodes] : graphNodes,
+    [graph?.graph, graphNodes, syntheticCanvasNodes],
+  );
+  const fallbackNodeId = graph?.graph ? "pdf_source" : graph?.topology?.find((nodeId) => graphNodes.some((node) => node.node_id === nodeId)) || graphNodes[0]?.node_id || "";
+  const activeCanvasNodeId = canvasDetailNodes.some((node) => node.node_id === selectedCanvasNodeId) ? selectedCanvasNodeId : fallbackNodeId;
+  const selectedCanvasNode = canvasDetailNodes.find((node) => node.node_id === activeCanvasNodeId) ?? null;
   const selectedCanvasSpec = selectedCanvasNode ? specByType.get(selectedCanvasNode.node_type) : undefined;
   const selectedCanvasLog = selectedCanvasNode ? runLog?.nodes?.[selectedCanvasNode.node_id] : undefined;
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
@@ -115,6 +134,14 @@ export function WorkflowInspector({
   const blockedCount = summary?.blocked?.length ?? 0;
   const executedCount = summary?.executed?.length ?? 0;
   const safeInputs = useMemo(() => compactWorkflowInputs(workflowInputs), [workflowInputs]);
+  const selectedPreviewRow = useMemo(() => {
+    const rows = projectedPlan?.rows ?? [];
+    return rows.find((row) => row.status === "warn" || row.status === "blocked") ?? rows[0] ?? null;
+  }, [projectedPlan]);
+  const nodeSummaries = useMemo(
+    () => buildNodeCardSummaries({ job, plan: projectedPlan, preview: nodePreview, runLog, workflowInputs: safeInputs }),
+    [job, projectedPlan, nodePreview, runLog, safeInputs],
+  );
   const hasPdfSource = Boolean(safeInputs.work_folder || safeInputs.combine_pdf);
   const hasIsoSource = Boolean(safeInputs.iso_list || safeInputs.work_folder);
   const safeRunReady = Boolean(graph?.valid) && hasPdfSource && hasIsoSource;
@@ -194,6 +221,55 @@ export function WorkflowInspector({
   }, [runLog?.run_id, selectedStep?.node.node_id]);
 
   useEffect(() => {
+    const needsPreview = ["pdf_source", "split", "roi_calib"].includes(activeCanvasNodeId);
+    if (!needsPreview || !selectedPreviewRow?.source_path || !isTauri()) {
+      setNodePreview(null);
+      setNodePreviewBusy(false);
+      setNodePreviewError("");
+      return;
+    }
+    let cancelled = false;
+    const serialRegion = regionOrDefault(projectedPlan?.source.serial_region ?? safeInputs.serial_region, DEFAULT_SERIAL_REGION);
+    const drawingRegion = regionOrDefault(projectedPlan?.source.drawing_region ?? safeInputs.drawing_region, DEFAULT_DRAWING_REGION);
+    setNodePreviewBusy(true);
+    setNodePreviewError("");
+    loadIsoPreview({
+      source_path: selectedPreviewRow.source_path,
+      detect_serial: false,
+      serial_region: serialRegion,
+      drawing_region: drawingRegion,
+    })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setNodePreview(payload);
+      })
+      .catch((caught) => {
+        if (cancelled) {
+          return;
+        }
+        setNodePreview(null);
+        setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setNodePreviewBusy(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeCanvasNodeId,
+    projectedPlan?.source.drawing_region,
+    projectedPlan?.source.serial_region,
+    safeInputs.drawing_region,
+    safeInputs.serial_region,
+    selectedPreviewRow?.source_path,
+  ]);
+
+  useEffect(() => {
     if (!job?.workflow_job_id || !isWorkflowJobRunning(job)) {
       return;
     }
@@ -267,6 +343,8 @@ export function WorkflowInspector({
         await loadRunLog(runId);
       } else {
         setRunLog(null);
+        setProjectedPlan(null);
+        setProjectionError("");
       }
       return graphPayload;
     } catch (caught) {
@@ -285,6 +363,8 @@ export function WorkflowInspector({
       await loadRunLog(runId);
     } else {
       setRunLog(null);
+      setProjectedPlan(null);
+      setProjectionError("");
     }
   }
 
@@ -293,11 +373,20 @@ export function WorkflowInspector({
       return;
     }
     setSelectedRunId(runId);
+    setProjectionError("");
     try {
-      setRunLog(await readIsoWorkflowRunLog(runId));
+      const nextRunLog = await readIsoWorkflowRunLog(runId);
+      setRunLog(nextRunLog);
+      try {
+        setProjectedPlan(await loadIsoWorkflowPlanFromRun(runId));
+      } catch (caught) {
+        setProjectedPlan(null);
+        setProjectionError(caught instanceof Error ? caught.message : String(caught));
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
       setRunLog(null);
+      setProjectedPlan(null);
     }
   }
 
@@ -517,40 +606,18 @@ export function WorkflowInspector({
               <Metric icon={<ShieldCheck size={16} />} label="副作用" value={`${executedCount} / ${blockedCount}`} tone={blockedCount ? "warn" : "ready"} />
             </div>
           )}
-          canvas={<WorkflowCanvas payload={graph} runLog={runLog} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />}
-          detail={selectedCanvasNode ? (
-            <>
-              <div style={styles.canvasDetailHead}>
-                <strong>{selectedCanvasNode.display_name || selectedCanvasSpec?.display_name || selectedCanvasNode.node_id}</strong>
-                <code style={styles.code}>{selectedCanvasNode.node_type}</code>
-                <span>{selectedCanvasLog?.status ? statusLabel(selectedCanvasLog.status) : selectedCanvasNode.enabled === false ? "停用" : "尚無紀錄"}</span>
-              </div>
-              <div style={styles.canvasDetailGrid}>
-                <div>
-                  <small>參數</small>
-                  <pre style={styles.compactPre}>{JSON.stringify(selectedCanvasNode.params ?? {}, null, 2)}</pre>
-                </div>
-                <div>
-                  <small>副作用</small>
-                  <div style={styles.previewList}>
-                    {(selectedCanvasLog?.side_effects ?? []).length ? (selectedCanvasLog?.side_effects ?? []).map((record) => (
-                      <span style={styles.previewRow} key={`${record.kind}-${record.decision}`}>
-                        <em>{sideEffectLabel(record.kind)}</em>
-                        <code style={styles.code}>{decisionLabel(record.decision)}</code>
-                      </span>
-                    )) : (
-                      <span style={styles.previewRow}>
-                        <em>宣告</em>
-                        <code style={styles.code}>{(selectedCanvasNode.side_effects?.length ? selectedCanvasNode.side_effects : selectedCanvasSpec?.side_effects ?? []).map(sideEffectLabel).join(" / ") || "純讀"}</code>
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-              {selectedStep ? <StepArtifactPreview step={selectedStep} preview={activeArtifactPreview} /> : null}
-            </>
-          ) : (
-            <EmptyLine text="選取一個節點後顯示節點資料。" />
+          canvas={<WorkflowCanvas payload={graph} runLog={runLog} nodeSummaries={nodeSummaries} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />}
+          detail={(
+            <NodeDetailPanel
+              node={selectedCanvasNode}
+              nodeLog={selectedCanvasLog}
+              onSelectNode={setSelectedCanvasNodeId}
+              plan={projectedPlan}
+              preview={nodePreview}
+              previewBusy={nodePreviewBusy}
+              previewError={nodePreviewError || projectionError}
+              summary={selectedCanvasNode ? nodeSummaries[selectedCanvasNode.node_id] : undefined}
+            />
           )}
           drawerMeta={`${workflowSteps.length || graphNodes.length} 節點 · ${runs.length} 紀錄`}
           drawer={(
@@ -647,7 +714,7 @@ export function WorkflowInspector({
 
           <section style={styles.sectionWide}>
             <SectionHead icon={<Route size={16} />} title="工程 DAG" meta={graph?.workflow_id || graph?.graph?.workflow_id || "等待"} />
-            <WorkflowCanvas payload={graph} runLog={runLog} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />
+            <WorkflowCanvas payload={graph} runLog={runLog} nodeSummaries={nodeSummaries} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />
             {selectedCanvasNode ? (
               <div style={styles.canvasDetail}>
                 <div style={styles.canvasDetailHead}>
@@ -1274,6 +1341,20 @@ function formatInputPreview(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function regionOrDefault(value: unknown, fallback: typeof DEFAULT_SERIAL_REGION): typeof DEFAULT_SERIAL_REGION {
+  if (!value || typeof value !== "object") {
+    return fallback;
+  }
+  const region = value as Partial<typeof DEFAULT_SERIAL_REGION>;
+  const next = {
+    left: Number(region.left),
+    top: Number(region.top),
+    width: Number(region.width),
+    height: Number(region.height),
+  };
+  return Object.values(next).every(Number.isFinite) ? next : fallback;
 }
 
 function inputLabel(key: string) {

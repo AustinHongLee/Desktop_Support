@@ -5,10 +5,12 @@ import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import type { IsoNodeWorkflowRunLog, IsoNodeWorkflowValidationPayload } from "../isoWorkflow";
 import { buildWorkbenchGraph, type FlowNodeData, type FlowPort } from "./flowAdapter";
+import type { NodeCardSummary } from "./workbench/nodeCards";
 
 type CanvasNodeData = FlowNodeData & Record<string, unknown> & {
   decision: string;
   selected: boolean;
+  summary?: NodeCardSummary;
   status: string;
 };
 
@@ -17,13 +19,14 @@ type CanvasNode = Node<CanvasNodeData, "isoNode">;
 type WorkflowCanvasProps = {
   payload: IsoNodeWorkflowValidationPayload | null;
   runLog: IsoNodeWorkflowRunLog | null;
+  nodeSummaries?: Record<string, NodeCardSummary>;
   selectedNodeId?: string;
   onSelectNode?: (nodeId: string) => void;
 };
 
 const guardedTitle = "guarded：需 CLI 三因子授權（--allow + --confirm + enabled）";
 
-export function WorkflowCanvas({ payload, runLog, selectedNodeId = "", onSelectNode }: WorkflowCanvasProps) {
+export function WorkflowCanvas({ payload, runLog, nodeSummaries = {}, selectedNodeId = "", onSelectNode }: WorkflowCanvasProps) {
   const flow = useMemo(() => {
     if (!payload?.graph) {
       return { nodes: [] as CanvasNode[], edges: [] as Edge[] };
@@ -39,6 +42,7 @@ export function WorkflowCanvas({ payload, runLog, selectedNodeId = "", onSelectN
           ...node.data,
           decision: firstDecision(logNode?.side_effects ?? []),
           selected: selectedNodeId === node.id,
+          summary: nodeSummaries[node.id],
           status: logNode?.status ?? "",
         },
       };
@@ -53,7 +57,7 @@ export function WorkflowCanvas({ payload, runLog, selectedNodeId = "", onSelectN
       style: { stroke: "rgba(47,245,200,0.36)", strokeWidth: 1.4 },
     }));
     return { nodes, edges };
-  }, [payload, runLog, selectedNodeId]);
+  }, [payload, runLog, nodeSummaries, selectedNodeId]);
 
   if (!payload?.graph) {
     return <div style={styles.empty}>尚未載入 graph。</div>;
@@ -114,6 +118,7 @@ function IsoNode({ data, selected }: NodeProps<CanvasNode>) {
         <strong>{data.displayName}</strong>
       </div>
       <code style={styles.nodeType}>{data.nodeType}</code>
+      <NodeSummary summary={data.summary} />
       <div style={styles.portGrid}>
         <PortList ports={inputPorts} align="left" />
         <PortList ports={outputPorts} align="right" />
@@ -124,6 +129,54 @@ function IsoNode({ data, selected }: NodeProps<CanvasNode>) {
         {data.status ? <span style={styles.statusChip}>{statusLabel(data.status)}</span> : null}
         {data.decision ? <span style={styles.statusChip}>{decisionLabel(data.decision)}</span> : null}
       </div>
+    </div>
+  );
+}
+
+function NodeSummary({ summary }: { summary?: NodeCardSummary }) {
+  if (!summary) {
+    return (
+      <div style={styles.summaryBox}>
+        <span style={styles.summaryPreview}>尚未執行</span>
+      </div>
+    );
+  }
+  const metrics = summary.metrics.slice(0, 4);
+  return (
+    <div style={styles.summaryBox}>
+      <div style={styles.summaryBadges}>
+        {summary.badges.slice(0, 3).map((badge) => (
+          <span style={{ ...styles.summaryBadge, borderColor: toneColor(badge.tone), color: toneColor(badge.tone) }} key={`${badge.label}-${badge.tone ?? "idle"}`}>
+            {badge.label}
+          </span>
+        ))}
+      </div>
+      {summary.preview ? <span style={styles.summaryPreview} title={summary.preview}>{summary.preview}</span> : null}
+      {metrics.length ? (
+        <div style={styles.summaryMetrics}>
+          {metrics.map((metric) => (
+            <span style={styles.summaryMetric} key={`${metric.label}-${metric.value}`}>
+              <em>{metric.label}</em>
+              <strong style={{ color: toneColor(metric.tone) }}>{metric.value}</strong>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {summary.rows.length ? (
+        <div style={styles.summaryRows}>
+          {summary.rows.slice(0, 2).map((row) => (
+            <span key={`${row.label}-${row.value}`}>
+              <em>{row.label}</em>
+              <strong title={row.value}>{row.value}</strong>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {typeof summary.progress === "number" ? (
+        <div style={styles.summaryProgressTrack}>
+          <span style={{ ...styles.summaryProgressFill, width: `${Math.max(0, Math.min(100, summary.progress))}%` }} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -142,7 +195,7 @@ function PortList({ align, ports }: { align: "left" | "right"; ports: FlowPort[]
 }
 
 function portTop(index: number, count: number): string {
-  const start = count > 4 ? 58 : 66;
+  const start = count > 4 ? 152 : 166;
   return `${start + index * 20}px`;
 }
 
@@ -180,6 +233,14 @@ function nodeToneStyle(tone: "auto" | "disabled" | "guarded" | "read") {
     return { background: "rgba(54,43,18,0.84)", borderColor: "rgba(255,209,102,0.42)", color: "#fff4cf" };
   }
   return { background: "rgba(14,42,35,0.86)", borderColor: "rgba(47,245,200,0.42)", color: "#dffcf4" };
+}
+
+function toneColor(tone: NodeCardSummary["tone"]): string {
+  if (tone === "danger") return "#ff9b9b";
+  if (tone === "warn") return "#ffd166";
+  if (tone === "ready") return "#2ff5c8";
+  if (tone === "run") return "#7fd7ff";
+  return "rgba(220,235,228,0.62)";
 }
 
 const styles = {
@@ -230,10 +291,10 @@ const styles = {
     border: "1px solid",
     borderRadius: 8,
     boxShadow: "0 14px 30px rgba(0,0,0,0.28)",
-    minHeight: 150,
+    minHeight: 245,
     padding: 10,
     position: "relative",
-    width: 260,
+    width: 300,
   },
   nodeChips: {
     display: "flex",
@@ -263,7 +324,7 @@ const styles = {
     display: "grid",
     gap: 10,
     gridTemplateColumns: "1fr 1fr",
-    marginTop: 10,
+    marginTop: 8,
     minHeight: 54,
     minWidth: 0,
   },
@@ -298,5 +359,67 @@ const styles = {
     color: "#7fd7ff",
     fontSize: 10,
     padding: "2px 6px",
+  },
+  summaryBadge: {
+    border: "1px solid",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 800,
+    padding: "2px 6px",
+    whiteSpace: "nowrap",
+  },
+  summaryBadges: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 4,
+  },
+  summaryBox: {
+    background: "rgba(0,0,0,0.16)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    display: "grid",
+    gap: 6,
+    marginTop: 8,
+    minWidth: 0,
+    padding: 8,
+  },
+  summaryMetric: {
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 7,
+    display: "grid",
+    gap: 2,
+    minWidth: 0,
+    padding: "5px 6px",
+  },
+  summaryMetrics: {
+    display: "grid",
+    gap: 5,
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+    minWidth: 0,
+  },
+  summaryPreview: {
+    color: "rgba(220,235,228,0.82)",
+    fontSize: 11,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  summaryProgressFill: {
+    background: "#2ff5c8",
+    borderRadius: 999,
+    display: "block",
+    height: "100%",
+  },
+  summaryProgressTrack: {
+    background: "rgba(255,255,255,0.14)",
+    borderRadius: 999,
+    height: 5,
+    overflow: "hidden",
+  },
+  summaryRows: {
+    display: "grid",
+    gap: 4,
+    minWidth: 0,
   },
 } satisfies Record<string, CSSProperties>;
