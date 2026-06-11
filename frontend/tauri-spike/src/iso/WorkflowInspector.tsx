@@ -742,6 +742,7 @@ export function WorkflowInspector({
               onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
               onSelectNode={setSelectedCanvasNodeId}
               onSelectRow={setSelectedGuideRowId}
+              onWorkflowInputChange={handleWorkflowInputChange}
               plan={projectedPlan}
               preview={nodePreview}
               previewBusy={nodePreviewBusy}
