@@ -609,6 +609,12 @@ function ResultBody({ data }: { data: GuideNodeData }) {
           <span>{Math.round(data.preview.vision.confidence * 100)}%</span>
         </div>
       ) : null}
+      {data.active && data.preview ? (
+        <div style={styles.resultEvidence}>
+          <Crop title="判讀時流水號" image={data.preview.serial_crop.image} />
+          <Crop title="判讀時圖號" image={data.preview.drawing_crop.image} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -691,7 +697,7 @@ function Crop({ children, image, title }: { children?: ReactNode; image?: string
   return (
     <div style={styles.crop}>
       <span>{title}</span>
-      {children ?? (image ? <img src={image} alt={title} /> : <div />)}
+      {children ?? (image ? <img src={image} alt={title} style={styles.cropImage} /> : <div />)}
     </div>
   );
 }
@@ -1442,6 +1448,12 @@ const styles = {
     gridTemplateColumns: "1fr 1fr",
     minWidth: 0,
   },
+  cropImage: {
+    display: "block",
+    maxHeight: 120,
+    objectFit: "contain",
+    width: "100%",
+  },
   edgeDot: {
     borderRadius: 999,
     display: "inline-block",
@@ -1697,6 +1709,12 @@ const styles = {
     gridTemplateColumns: "auto auto minmax(0, 1fr)",
     minWidth: 0,
     padding: "7px 8px",
+  },
+  resultEvidence: {
+    display: "grid",
+    gap: 6,
+    gridTemplateColumns: "1fr 1fr",
+    minWidth: 0,
   },
   segment: {
     background: "rgba(255,255,255,0.035)",
