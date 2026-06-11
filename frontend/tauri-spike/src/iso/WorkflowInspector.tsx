@@ -56,6 +56,7 @@ import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
 import { NodeDetailPanel } from "./workbench/NodeDetailPanel";
 import { NodeWorkbench } from "./workbench/NodeWorkbench";
+import { WorkflowGuideCanvas } from "./workbench/WorkflowGuideCanvas";
 import { buildNodeCardSummaries } from "./workbench/nodeCards";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
@@ -81,7 +82,7 @@ export function WorkflowInspector({
   shadowFlagEnabled,
   setShadowFlagEnabled,
 }: WorkflowInspectorProps) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -110,6 +111,7 @@ export function WorkflowInspector({
   const [projectionRunId, setProjectionRunId] = useState("");
   const [graphCopied, setGraphCopied] = useState(false);
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState("");
+  const [selectedGuideRowId, setSelectedGuideRowId] = useState("");
   const [artifactPreview, setArtifactPreview] = useState<Record<string, ArtifactPreviewEntry>>({});
   const [shadowFlagBusy, setShadowFlagBusy] = useState(false);
   const [oneClickEngine, setOneClickEngineState] = useState<IsoOneClickEnginePayload | null>(null);
@@ -148,8 +150,11 @@ export function WorkflowInspector({
   const safeInputs = useMemo(() => compactWorkflowInputs({ ...baseInputs, ...overlayInputs }), [baseInputs, overlayInputs]);
   const selectedPreviewRow = useMemo(() => {
     const rows = projectedPlan?.rows ?? [];
-    return rows.find((row) => row.status === "warn" || row.status === "blocked") ?? rows[0] ?? null;
-  }, [projectedPlan]);
+    return rows.find((row) => row.id === selectedGuideRowId)
+      ?? rows.find((row) => row.status === "warn" || row.status === "blocked")
+      ?? rows[0]
+      ?? null;
+  }, [projectedPlan, selectedGuideRowId]);
   const nodeSummaries = useMemo(
     () => buildNodeCardSummaries({ dirtyNodeIds, job, plan: projectedPlan, preview: nodePreview, runLog, workflowInputs: safeInputs }),
     [dirtyNodeIds, job, projectedPlan, nodePreview, runLog, safeInputs],
@@ -179,7 +184,18 @@ export function WorkflowInspector({
   useEffect(() => {
     setOverlayInputs({});
     setDirtyNodeIds([]);
+    setSelectedGuideRowId("");
   }, [baseInputsKey]);
+
+  useEffect(() => {
+    if (!selectedGuideRowId) {
+      return;
+    }
+    const exists = projectedPlan?.rows.some((row) => row.id === selectedGuideRowId);
+    if (!exists) {
+      setSelectedGuideRowId("");
+    }
+  }, [projectedPlan?.rows, selectedGuideRowId]);
 
   useEffect(() => {
     if (!selectedStep || !runLog?.run_id || !isTauri()) {
@@ -719,15 +735,22 @@ export function WorkflowInspector({
             </div>
           )}
           canvas={(
-            <WorkflowCanvas
-              payload={graph}
-              runLog={runLog}
-              nodeSummaries={nodeSummaries}
-              selectedNodeId={activeCanvasNodeId}
-              onSelectNode={setSelectedCanvasNodeId}
+            <WorkflowGuideCanvas
+              dirtyNodeIds={dirtyNodeIds}
+              job={job}
               onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
               onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
+              onSelectNode={setSelectedCanvasNodeId}
+              onSelectRow={setSelectedGuideRowId}
+              plan={projectedPlan}
+              preview={nodePreview}
+              previewBusy={nodePreviewBusy}
+              previewError={nodePreviewError || projectionError}
               rerunEnabled={canRerun}
+              runLog={runLog}
+              selectedNodeId={activeCanvasNodeId}
+              selectedRowId={selectedGuideRowId}
+              workflowInputs={safeInputs}
             />
           )}
           detail={(
