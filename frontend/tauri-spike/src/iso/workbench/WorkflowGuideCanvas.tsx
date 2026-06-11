@@ -27,6 +27,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import type { IsoNodeWorkflowJobPayload, IsoNodeWorkflowRunLog, IsoPlanRow, IsoPreviewPayload, IsoRegion, IsoWorkflowPlan } from "../../isoWorkflow";
 import { compactPath, DEFAULT_DRAWING_REGION, DEFAULT_SERIAL_REGION } from "../helpers";
 import { RoiOverlay } from "../components/RoiOverlay";
+import { LiveCrop } from "./LiveCrop";
 
 type WorkflowGuideCanvasProps = {
   dataOriginLabel?: string;
@@ -148,7 +149,7 @@ const GUIDE_LAYOUT = {
   sourceX: 0,
   isoY: 30,
   pdfY: 430,
-  rowGapY: 640,
+  rowGapY: 820,
   rowStartY: 300,
   sourceY: 270,
 } as const;
@@ -517,8 +518,12 @@ function RoiBody({ data }: { data: GuideNodeData }) {
           <span>{data.pageTrialBusy ? "判讀中" : trial ? `${trial.serial || "未取得"} (${Math.round(trial.confidence * 100)}%)` : "尚未執行"}</span>
         </div>
         <div style={styles.cropGrid}>
-          <Crop title="流水號裁切" image={selected ? data.preview?.serial_crop.image : ""} />
-          <Crop title="圖號裁切" image={selected ? data.preview?.drawing_crop.image : ""} />
+          <Crop title="流水號裁切">
+            <LiveCrop image={selected?.page.image} region={data.serialRegion} />
+          </Crop>
+          <Crop title="圖號裁切">
+            <LiveCrop image={selected?.page.image} region={data.drawingRegion} />
+          </Crop>
         </div>
         <button
           className="action-button"
@@ -529,14 +534,6 @@ function RoiBody({ data }: { data: GuideNodeData }) {
           <span>重設目前 ROI</span>
         </button>
         <div style={styles.actionGrid}>
-          <button className="action-button" type="button" disabled={!row || !data.onRefreshPreview} title="只重新整理本頁預覽與裁切，不執行文字判讀。" onClick={() => {
-            if (row) {
-              data.onRefreshPreview?.(row.id);
-            }
-          }}>
-            <Eye size={13} />
-            <span>只更新預覽</span>
-          </button>
           <button className="action-button" type="button" disabled={!row || data.pageTrialBusy || !data.onRunPageTrial} title="只對目前頁做一次判讀，結果先留在畫面上，不改批次結果。" onClick={() => {
             if (row) {
               data.onRunPageTrial?.(row.id);
@@ -655,11 +652,11 @@ function Notice({ notice }: { notice?: GuideNodeData["notice"] }) {
   );
 }
 
-function Crop({ image, title }: { image?: string; title: string }) {
+function Crop({ children, image, title }: { children?: ReactNode; image?: string; title: string }) {
   return (
     <div style={styles.crop}>
       <span>{title}</span>
-      {image ? <img src={image} alt={title} /> : <div />}
+      {children ?? (image ? <img src={image} alt={title} /> : <div />)}
     </div>
   );
 }
@@ -1319,7 +1316,7 @@ const styles = {
   actionGrid: {
     display: "grid",
     gap: 6,
-    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     minWidth: 0,
   },
   canvasShell: {
