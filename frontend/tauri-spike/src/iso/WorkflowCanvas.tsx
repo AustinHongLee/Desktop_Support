@@ -4,7 +4,7 @@ import { Lock, ShieldCheck } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useMemo } from "react";
 import type { IsoNodeWorkflowRunLog, IsoNodeWorkflowValidationPayload } from "../isoWorkflow";
-import { buildWorkbenchGraph, type FlowNodeData, type FlowPort } from "./flowAdapter";
+import { buildWorkbenchGraph, type FlowNodeData } from "./flowAdapter";
 import type { NodeCardSummary } from "./workbench/nodeCards";
 
 type CanvasNodeData = FlowNodeData & Record<string, unknown> & {
@@ -65,7 +65,8 @@ export function WorkflowCanvas({ payload, runLog, nodeSummaries = {}, selectedNo
       sourceHandle: edge.sourceHandle,
       targetHandle: edge.targetHandle,
       markerEnd: { type: MarkerType.ArrowClosed },
-      style: { stroke: "rgba(47,245,200,0.36)", strokeWidth: 1.4 },
+      type: "smoothstep",
+      style: { stroke: "rgba(47,245,200,0.24)", strokeWidth: 1.15 },
     }));
     return { nodes, edges };
   }, [payload, runLog, nodeSummaries, onRunFrom, onRunNode, rerunEnabled, selectedNodeId]);
@@ -103,10 +104,11 @@ function IsoNode({ data, selected }: NodeProps<CanvasNode>) {
   const guarded = data.guarded;
   const tone = disabled ? "disabled" : guarded ? "guarded" : data.sideEffects.length ? "auto" : "read";
   const dirty = data.summary?.badges.some((badge) => badge.label === "參數已變更") ?? false;
+  const active = data.selected || selected;
   const inputPorts = data.inputPorts ?? [];
   const outputPorts = data.outputPorts ?? [];
   return (
-    <div style={{ ...styles.node, ...nodeToneStyle(tone), ...(dirty ? styles.dirtyNode : {}), outline: data.selected || selected ? "2px solid rgba(47,245,200,0.75)" : "0" }}>
+    <div style={{ ...styles.node, ...nodeToneStyle(tone), ...(dirty ? styles.dirtyNode : {}), outline: active ? "2px solid rgba(47,245,200,0.75)" : "0" }}>
       {inputPorts.map((port, index) => (
         <Handle
           id={port.name}
@@ -126,29 +128,28 @@ function IsoNode({ data, selected }: NodeProps<CanvasNode>) {
         />
       ))}
       <div style={styles.nodeHead}>
+        <span style={styles.stepBadge}>{stepNumber(data.nodeId)}</span>
+        <span style={styles.nodeTitle}>
+          <strong style={styles.nodeName}>{data.displayName}</strong>
+          <em style={styles.nodeHint}>{stageHint(data.nodeId)}</em>
+        </span>
         <span style={styles.nodeIcon}>{guarded ? <Lock size={13} /> : <ShieldCheck size={13} />}</span>
-        <strong>{data.displayName}</strong>
       </div>
-      <code style={styles.nodeType}>{data.nodeType}</code>
       <NodeSummary summary={data.summary} />
-      <div style={styles.portGrid}>
-        <PortList ports={inputPorts} align="left" />
-        <PortList ports={outputPorts} align="right" />
-      </div>
       <div style={styles.nodeChips}>
         {disabled ? <span style={styles.disabledChip}>停用</span> : null}
         {guarded ? <span style={styles.guardedChip} title={guardedTitle}>需授權</span> : data.sideEffects.length ? <span style={styles.autoChip}>自動允許</span> : <span style={styles.readChip}>純讀</span>}
         {data.status ? <span style={styles.statusChip}>{statusLabel(data.status)}</span> : null}
         {data.decision ? <span style={styles.statusChip}>{decisionLabel(data.decision)}</span> : null}
       </div>
-      <div style={styles.nodeActions}>
+      {active ? <div style={styles.nodeActions}>
         <button disabled={!data.rerunEnabled || data.nodeType.startsWith("ui.")} onClick={(event) => { event.stopPropagation(); data.onRunNode?.(data.nodeId); }} style={styles.nodeActionButton} type="button">
           重跑此節點
         </button>
         <button disabled={!data.rerunEnabled} onClick={(event) => { event.stopPropagation(); data.onRunFrom?.(data.nodeId); }} style={styles.nodeActionButton} type="button">
           重跑下游
         </button>
-      </div>
+      </div> : null}
     </div>
   );
 }
@@ -161,7 +162,7 @@ function NodeSummary({ summary }: { summary?: NodeCardSummary }) {
       </div>
     );
   }
-  const metrics = summary.metrics.slice(0, 4);
+  const metrics = summary.metrics.slice(0, 2);
   return (
     <div style={styles.summaryBox}>
       <div style={styles.summaryBadges}>
@@ -182,16 +183,6 @@ function NodeSummary({ summary }: { summary?: NodeCardSummary }) {
           ))}
         </div>
       ) : null}
-      {summary.rows.length ? (
-        <div style={styles.summaryRows}>
-          {summary.rows.slice(0, 2).map((row) => (
-            <span key={`${row.label}-${row.value}`}>
-              <em>{row.label}</em>
-              <strong title={row.value}>{row.value}</strong>
-            </span>
-          ))}
-        </div>
-      ) : null}
       {typeof summary.progress === "number" ? (
         <div style={styles.summaryProgressTrack}>
           <span style={{ ...styles.summaryProgressFill, width: `${Math.max(0, Math.min(100, summary.progress))}%` }} />
@@ -201,22 +192,9 @@ function NodeSummary({ summary }: { summary?: NodeCardSummary }) {
   );
 }
 
-function PortList({ align, ports }: { align: "left" | "right"; ports: FlowPort[] }) {
-  if (!ports.length) {
-    return <div style={styles.portList} />;
-  }
-  return (
-    <div style={{ ...styles.portList, textAlign: align }}>
-      {ports.map((port) => (
-        <span style={styles.portLabel} key={port.name}>{port.label}</span>
-      ))}
-    </div>
-  );
-}
-
 function portTop(index: number, count: number): string {
-  const start = count > 4 ? 152 : 166;
-  return `${start + index * 20}px`;
+  const start = count > 4 ? 76 : 92;
+  return `${start + index * 18}px`;
 }
 
 function firstDecision(records: Array<{ decision?: string }>): string {
@@ -240,6 +218,38 @@ function decisionLabel(decision: string) {
   if (decision === "skipped_dry_run") return "試算略過";
   if (decision === "simulated") return "模擬";
   return decision;
+}
+
+function stepNumber(nodeId: string): string {
+  const order: Record<string, string> = {
+    pdf_source: "1",
+    discover: "2",
+    split: "3",
+    load_table: "4",
+    roi_calib: "5",
+    batch_detect: "6",
+    pilot: "7",
+    roi_dist: "8",
+    export_csv: "9",
+    apply_rename: "10",
+  };
+  return order[nodeId] ?? "";
+}
+
+function stageHint(nodeId: string): string {
+  const hints: Record<string, string> = {
+    pdf_source: "選擇 PDF / 資料夾",
+    discover: "探索工作區",
+    split: "拆成單頁",
+    load_table: "讀取 ISO 清單",
+    roi_calib: "調整 ROI / 門檻",
+    batch_detect: "批次判讀",
+    pilot: "檢查問題",
+    roi_dist: "信心統計",
+    export_csv: "匯出草稿",
+    apply_rename: "套用前確認",
+  };
+  return hints[nodeId] ?? "節點";
 }
 
 function nodeToneStyle(tone: "auto" | "disabled" | "guarded" | "read") {
@@ -274,9 +284,9 @@ const styles = {
   canvasShell: {
     border: "1px solid rgba(47,245,200,0.22)",
     borderRadius: 8,
-    height: "clamp(620px, 70vh, 860px)",
+    height: "clamp(680px, 72vh, 900px)",
     marginBottom: 10,
-    minHeight: 560,
+    minHeight: 620,
     overflow: "hidden",
     background: "rgba(3,10,8,0.74)",
     width: "100%",
@@ -311,10 +321,10 @@ const styles = {
     border: "1px solid",
     borderRadius: 8,
     boxShadow: "0 14px 30px rgba(0,0,0,0.28)",
-    minHeight: 245,
-    padding: 10,
+    minHeight: 192,
+    padding: 11,
     position: "relative",
-    width: 300,
+    width: 250,
   },
   nodeChips: {
     display: "flex",
@@ -342,19 +352,35 @@ const styles = {
     alignItems: "center",
     display: "flex",
     gap: 7,
+    justifyContent: "space-between",
     minWidth: 0,
   },
   nodeIcon: {
     display: "inline-flex",
+    opacity: 0.78,
   },
-  nodeType: {
-    color: "rgba(220,235,228,0.64)",
-    display: "block",
+  nodeHint: {
+    color: "rgba(220,235,228,0.58)",
     fontSize: 10,
-    marginTop: 6,
+    fontStyle: "normal",
+    fontWeight: 800,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
+  },
+  nodeName: {
+    color: "inherit",
+    fontSize: 14,
+    lineHeight: 1.15,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  nodeTitle: {
+    display: "grid",
+    flex: 1,
+    gap: 3,
+    minWidth: 0,
   },
   portGrid: {
     display: "grid",
@@ -418,10 +444,10 @@ const styles = {
     border: "1px solid rgba(255,255,255,0.08)",
     borderRadius: 8,
     display: "grid",
-    gap: 6,
+    gap: 5,
     marginTop: 8,
     minWidth: 0,
-    padding: 8,
+    padding: 7,
   },
   summaryMetric: {
     background: "rgba(255,255,255,0.035)",
@@ -461,5 +487,19 @@ const styles = {
     display: "grid",
     gap: 4,
     minWidth: 0,
+  },
+  stepBadge: {
+    alignItems: "center",
+    background: "rgba(47,245,200,0.10)",
+    border: "1px solid rgba(47,245,200,0.42)",
+    borderRadius: 999,
+    color: "#2ff5c8",
+    display: "inline-flex",
+    flex: "0 0 auto",
+    fontSize: 12,
+    fontWeight: 950,
+    height: 26,
+    justifyContent: "center",
+    width: 26,
   },
 } satisfies Record<string, CSSProperties>;

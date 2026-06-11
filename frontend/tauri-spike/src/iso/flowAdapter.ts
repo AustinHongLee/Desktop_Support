@@ -78,13 +78,13 @@ export function buildWorkbenchGraph(payload: IsoNodeWorkflowValidationPayload): 
   const engineNodes = payload.graph?.nodes ?? [];
   const nodeById = new Map(engineNodes.map((node) => [node.node_id, node] as const));
   const nodes: FlowNode[] = [
-    syntheticNode("pdf_source", "ui.pdf_source", "PDF 來源", { x: 0, y: 170 }, [], ["combine_pdf", "work_folder", "page_folder_hint"]),
+    syntheticNode("pdf_source", "ui.pdf_source", "PDF 來源", { x: 0, y: 350 }, [], ["combine_pdf", "work_folder", "page_folder_hint"]),
     ...engineNodes.map((node) => flowNodeForWorkbench(node, workbenchPosition(node))),
     syntheticNode(
       "roi_calib",
       "ui.roi_calibration",
       "ROI 調校",
-      { x: 360, y: 500 },
+      { x: 420, y: 690 },
       ["page_sample"],
       ["serial_region", "drawing_region", "confidence_threshold", "detect_serials", "pattern"],
     ),
@@ -191,16 +191,16 @@ function syntheticNode(
 
 function workbenchPosition(node: IsoNodeWorkflowInstance): { x: number; y: number } {
   const positions: Record<string, { x: number; y: number }> = {
-    discover: { x: 360, y: 40 },
-    split: { x: 360, y: 190 },
-    load_table: { x: 360, y: 340 },
-    batch_detect: { x: 760, y: 240 },
-    pilot: { x: 1160, y: 60 },
-    roi_dist: { x: 1160, y: 220 },
-    export_csv: { x: 1160, y: 380 },
-    apply_rename: { x: 1160, y: 540 },
+    discover: { x: 420, y: 30 },
+    split: { x: 420, y: 250 },
+    load_table: { x: 420, y: 470 },
+    batch_detect: { x: 840, y: 350 },
+    pilot: { x: 1260, y: 30 },
+    roi_dist: { x: 1260, y: 250 },
+    export_csv: { x: 1260, y: 470 },
+    apply_rename: { x: 1260, y: 690 },
   };
-  return positions[node.node_id] ?? { x: 760, y: 620 };
+  return positions[node.node_id] ?? { x: 840, y: 690 };
 }
 
 function edge(
