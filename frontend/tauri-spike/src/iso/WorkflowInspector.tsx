@@ -44,6 +44,7 @@ import {
 import { compactPath } from "./helpers";
 import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
+import { NodeWorkbench } from "./workbench/NodeWorkbench";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
 
@@ -502,19 +503,58 @@ export function WorkflowInspector({
           </div>
         ) : null}
 
-        <div style={styles.metrics}>
-          <Metric icon={<Braces size={16} />} label="型錄" value={nodeCatalog ? `${nodeCatalog.node_count}` : "-"} />
-          <Metric
-            icon={graph?.valid ? <CircleCheck size={16} /> : <CircleAlert size={16} />}
-            label="驗證"
-            value={graph ? (graph.valid ? "通過" : `${graph.issues.length}`) : "-"}
-            tone={graph?.valid === false ? "warn" : "ready"}
-          />
-          <Metric icon={<Route size={16} />} label="拓撲" value={graph?.topology?.length ? `${graph.topology.length}` : "-"} />
-          <Metric icon={<ShieldCheck size={16} />} label="副作用" value={`${executedCount} / ${blockedCount}`} tone={blockedCount ? "warn" : "ready"} />
-        </div>
-
-        <div style={styles.grid}>
+        <NodeWorkbench
+          header={(
+            <div style={styles.metrics}>
+              <Metric icon={<Braces size={16} />} label="型錄" value={nodeCatalog ? `${nodeCatalog.node_count}` : "-"} />
+              <Metric
+                icon={graph?.valid ? <CircleCheck size={16} /> : <CircleAlert size={16} />}
+                label="驗證"
+                value={graph ? (graph.valid ? "通過" : `${graph.issues.length}`) : "-"}
+                tone={graph?.valid === false ? "warn" : "ready"}
+              />
+              <Metric icon={<Route size={16} />} label="拓撲" value={graph?.topology?.length ? `${graph.topology.length}` : "-"} />
+              <Metric icon={<ShieldCheck size={16} />} label="副作用" value={`${executedCount} / ${blockedCount}`} tone={blockedCount ? "warn" : "ready"} />
+            </div>
+          )}
+          canvas={<WorkflowCanvas payload={graph} runLog={runLog} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />}
+          detail={selectedCanvasNode ? (
+            <>
+              <div style={styles.canvasDetailHead}>
+                <strong>{selectedCanvasNode.display_name || selectedCanvasSpec?.display_name || selectedCanvasNode.node_id}</strong>
+                <code style={styles.code}>{selectedCanvasNode.node_type}</code>
+                <span>{selectedCanvasLog?.status ? statusLabel(selectedCanvasLog.status) : selectedCanvasNode.enabled === false ? "停用" : "尚無紀錄"}</span>
+              </div>
+              <div style={styles.canvasDetailGrid}>
+                <div>
+                  <small>參數</small>
+                  <pre style={styles.compactPre}>{JSON.stringify(selectedCanvasNode.params ?? {}, null, 2)}</pre>
+                </div>
+                <div>
+                  <small>副作用</small>
+                  <div style={styles.previewList}>
+                    {(selectedCanvasLog?.side_effects ?? []).length ? (selectedCanvasLog?.side_effects ?? []).map((record) => (
+                      <span style={styles.previewRow} key={`${record.kind}-${record.decision}`}>
+                        <em>{sideEffectLabel(record.kind)}</em>
+                        <code style={styles.code}>{decisionLabel(record.decision)}</code>
+                      </span>
+                    )) : (
+                      <span style={styles.previewRow}>
+                        <em>宣告</em>
+                        <code style={styles.code}>{(selectedCanvasNode.side_effects?.length ? selectedCanvasNode.side_effects : selectedCanvasSpec?.side_effects ?? []).map(sideEffectLabel).join(" / ") || "純讀"}</code>
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {selectedStep ? <StepArtifactPreview step={selectedStep} preview={activeArtifactPreview} /> : null}
+            </>
+          ) : (
+            <EmptyLine text="選取一個節點後顯示節點資料。" />
+          )}
+          drawerMeta={`${workflowSteps.length || graphNodes.length} 節點 · ${runs.length} 紀錄`}
+          drawer={(
+            <div style={styles.grid}>
           <section style={styles.sectionFlowTree}>
             <SectionHead icon={<Route size={16} />} title="流程樹" meta={selectedRun ? `${statusLabel(selectedRun.status)} · ${compactPath(selectedRun.run_id)}` : "等待紀錄"} />
             <div style={styles.flowTreeLayout}>
@@ -787,7 +827,9 @@ export function WorkflowInspector({
               {loaded && !parityReports.length ? <EmptyLine text="尚無 parity 報告。請用 CLI 產生證據，不在 UI 直接觸發比對。" /> : null}
             </div>
           </section>
-        </div>
+            </div>
+          )}
+        />
         {safeRunConfirmOpen ? (
           <div style={styles.modalBackdrop}>
             <div style={styles.modal}>
