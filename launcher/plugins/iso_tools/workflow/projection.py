@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from launcher.plugins.iso_tools.workflow.one_click_guard import validate_one_click_plan
+
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 
 
@@ -22,7 +24,7 @@ def read_artifact(run_dir: Path, node_id: str, port: str) -> tuple[dict[str, Any
     return ref_meta, payload
 
 
-def plan_from_run(run_dir: Path) -> dict[str, Any]:
+def plan_from_run(run_dir: Path, *, one_click_guard: bool = False) -> dict[str, Any]:
     run_dir = run_dir.resolve()
     run_log = _read_run_log(run_dir)
     rows_node_id, base = _base_plan(run_dir, run_log)
@@ -49,6 +51,10 @@ def plan_from_run(run_dir: Path) -> dict[str, Any]:
     projected.setdefault("issues", [])
     projected.setdefault("steps", [])
     projected["provenance"] = _provenance(run_dir, run_log, rows_node_id, pilot_node_id)
+    if one_click_guard:
+        errors = validate_one_click_plan(run_log, projected)
+        if errors:
+            raise ValueError("one-click workflow projection failed sanity guard: " + "; ".join(errors))
     return projected
 
 
