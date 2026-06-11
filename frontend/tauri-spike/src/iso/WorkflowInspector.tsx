@@ -56,7 +56,7 @@ import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
 import { NodeDetailPanel } from "./workbench/NodeDetailPanel";
 import { NodeWorkbench } from "./workbench/NodeWorkbench";
-import { WorkflowGuideCanvas } from "./workbench/WorkflowGuideCanvas";
+import { WorkflowGuideCanvas, type IsoPageTrial } from "./workbench/WorkflowGuideCanvas";
 import { buildNodeCardSummaries } from "./workbench/nodeCards";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
@@ -98,6 +98,9 @@ export function WorkflowInspector({
   const [nodePreview, setNodePreview] = useState<IsoPreviewPayload | null>(null);
   const [nodePreviewBusy, setNodePreviewBusy] = useState(false);
   const [nodePreviewError, setNodePreviewError] = useState("");
+  const [nodePreviewReloadKey, setNodePreviewReloadKey] = useState(0);
+  const [pageTrials, setPageTrials] = useState<Record<string, IsoPageTrial>>({});
+  const [pageTrialBusyId, setPageTrialBusyId] = useState("");
   const [overlayInputs, setOverlayInputs] = useState<Record<string, unknown>>({});
   const [dirtyNodeIds, setDirtyNodeIds] = useState<string[]>([]);
   const [workbenchActionBusy, setWorkbenchActionBusy] = useState<"" | "apply" | "export">("");
@@ -185,6 +188,8 @@ export function WorkflowInspector({
     setOverlayInputs({});
     setDirtyNodeIds([]);
     setSelectedGuideRowId("");
+    setPageTrials({});
+    setPageTrialBusyId("");
   }, [baseInputsKey]);
 
   useEffect(() => {
@@ -264,8 +269,8 @@ export function WorkflowInspector({
       return;
     }
     let cancelled = false;
-    const serialRegion = regionOrDefault(projectedPlan?.source.serial_region ?? safeInputs.serial_region, DEFAULT_SERIAL_REGION);
-    const drawingRegion = regionOrDefault(projectedPlan?.source.drawing_region ?? safeInputs.drawing_region, DEFAULT_DRAWING_REGION);
+    const serialRegion = regionOrDefault(safeInputs.serial_region ?? projectedPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
+    const drawingRegion = regionOrDefault(safeInputs.drawing_region ?? projectedPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
     setNodePreviewBusy(true);
     setNodePreviewError("");
     loadIsoPreview({
@@ -299,6 +304,7 @@ export function WorkflowInspector({
     activeCanvasNodeId,
     projectedPlan?.source.drawing_region,
     projectedPlan?.source.serial_region,
+    nodePreviewReloadKey,
     safeInputs.drawing_region,
     safeInputs.serial_region,
     selectedPreviewRow?.source_path,
@@ -452,6 +458,53 @@ export function WorkflowInspector({
   function handleWorkflowInputChange(nodeId: string, field: string, value: unknown) {
     setOverlayInputs((previous) => ({ ...previous, [field]: value }));
     setDirtyNodeIds((previous) => mergeUnique(previous, dirtyNodesFrom(nodeId)));
+  }
+
+  function refreshGuidePreview(rowId: string) {
+    setSelectedGuideRowId(rowId);
+    setSelectedCanvasNodeId("roi_calib");
+    setNodePreviewReloadKey((current) => current + 1);
+  }
+
+  async function runPageTrial(rowId: string) {
+    const row = projectedPlan?.rows.find((candidate) => candidate.id === rowId);
+    if (!row?.source_path) {
+      setNodePreviewError("找不到目前頁面的 PDF 來源。");
+      return;
+    }
+    if (!isTauri()) {
+      setNodePreviewError("請用 Tauri 桌面版判讀單頁。");
+      return;
+    }
+    setSelectedGuideRowId(rowId);
+    setSelectedCanvasNodeId("roi_calib");
+    setPageTrialBusyId(rowId);
+    setNodePreviewBusy(true);
+    setNodePreviewError("");
+    try {
+      const payload = await loadIsoPreview({
+        source_path: row.source_path,
+        detect_serial: true,
+        serial_region: regionOrDefault(safeInputs.serial_region ?? projectedPlan?.source.serial_region, DEFAULT_SERIAL_REGION),
+        drawing_region: regionOrDefault(safeInputs.drawing_region ?? projectedPlan?.source.drawing_region, DEFAULT_DRAWING_REGION),
+      });
+      setNodePreview(payload);
+      setPageTrials((previous) => ({
+        ...previous,
+        [rowId]: {
+          confidence: payload.vision?.confidence ?? 0,
+          page: row.page,
+          serial: payload.vision?.text ?? "",
+          sourcePath: row.source_path,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+    } catch (caught) {
+      setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setNodePreviewBusy(false);
+      setPageTrialBusyId("");
+    }
   }
 
   async function rerunWorkflowNode(nodeId: string) {
@@ -738,11 +791,15 @@ export function WorkflowInspector({
             <WorkflowGuideCanvas
               dirtyNodeIds={dirtyNodeIds}
               job={job}
+              onRefreshPreview={refreshGuidePreview}
               onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
               onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
+              onRunPageTrial={(rowId) => void runPageTrial(rowId)}
               onSelectNode={setSelectedCanvasNodeId}
               onSelectRow={setSelectedGuideRowId}
               onWorkflowInputChange={handleWorkflowInputChange}
+              pageTrialBusyId={pageTrialBusyId}
+              pageTrials={pageTrials}
               plan={projectedPlan}
               preview={nodePreview}
               previewBusy={nodePreviewBusy}

@@ -31,11 +31,15 @@ import { RoiOverlay } from "../components/RoiOverlay";
 type WorkflowGuideCanvasProps = {
   dirtyNodeIds?: string[];
   job: IsoNodeWorkflowJobPayload | null;
+  onRefreshPreview?: (rowId: string) => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
+  onRunPageTrial?: (rowId: string) => void;
   onSelectNode?: (nodeId: string) => void;
   onSelectRow?: (rowId: string) => void;
   onWorkflowInputChange?: (nodeId: string, field: string, value: unknown) => void;
+  pageTrialBusyId?: string;
+  pageTrials?: Record<string, IsoPageTrial>;
   plan: IsoWorkflowPlan | null;
   preview: IsoPreviewPayload | null;
   previewBusy?: boolean;
@@ -45,6 +49,14 @@ type WorkflowGuideCanvasProps = {
   selectedNodeId?: string;
   selectedRowId?: string;
   workflowInputs: Record<string, unknown>;
+};
+
+export type IsoPageTrial = {
+  confidence: number;
+  page: number;
+  serial: string;
+  sourcePath: string;
+  updatedAt: string;
 };
 
 type WorkflowNodeKind =
@@ -80,11 +92,16 @@ type GuideNodeData = {
   nodeId: string;
   notice?: { text: string; tone: "idle" | "ready" | "warn" | "danger"; title?: string };
   onLoadMore?: () => void;
+  onRefreshPreview?: (rowId: string) => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
+  onRunPageTrial?: (rowId: string) => void;
   onSelectNode?: (nodeId: string) => void;
   onSelectRow?: (rowId: string) => void;
   onWorkflowInputChange?: (nodeId: string, field: string, value: unknown) => void;
+  pageCount?: number;
+  pageTrial?: IsoPageTrial;
+  pageTrialBusy?: boolean;
   preview: IsoPreviewPayload | null;
   previewBusy: boolean;
   previewError: string;
@@ -127,11 +144,15 @@ const GUIDE_LAYOUT = {
 export function WorkflowGuideCanvas({
   dirtyNodeIds = [],
   job,
+  onRefreshPreview,
   onRunFrom,
   onRunNode,
+  onRunPageTrial,
   onSelectNode,
   onSelectRow,
   onWorkflowInputChange,
+  pageTrialBusyId = "",
+  pageTrials = {},
   plan,
   preview,
   previewBusy = false,
@@ -168,11 +189,15 @@ export function WorkflowGuideCanvas({
     isoPath,
     jobRunning,
     onLoadMore: () => setVisibleLimit((current) => Math.min(rows.length, current + PAGE_CHUNK_SIZE)),
+    onRefreshPreview,
     onRunFrom,
     onRunNode,
+    onRunPageTrial,
     onSelectNode,
     onSelectRow,
     onWorkflowInputChange,
+    pageTrialBusyId,
+    pageTrials,
     pageFolder,
     pattern,
     pdfPath,
@@ -197,11 +222,15 @@ export function WorkflowGuideCanvas({
     drawingRegion,
     isoPath,
     jobRunning,
+    onRefreshPreview,
     onRunFrom,
     onRunNode,
+    onRunPageTrial,
     onSelectNode,
     onSelectRow,
     onWorkflowInputChange,
+    pageTrialBusyId,
+    pageTrials,
     pageFolder,
     pattern,
     pdfPath,
@@ -379,13 +408,22 @@ function RoiBody({ data }: { data: GuideNodeData }) {
   const [activeRoi, setActiveRoi] = useState<"drawing" | "serial">("serial");
   const row = data.row;
   const region = activeRoi === "serial" ? data.serialRegion : data.drawingRegion;
-  const selected = data.selectedPreview && data.preview;
+  const selected = data.selectedPreview ? data.preview : null;
+  const lowConfidence = Boolean(row?.confidence && row.confidence < data.threshold);
+  const trial = data.pageTrial;
   const setRegion = (next: IsoRegion) => {
     data.onWorkflowInputChange?.("roi_calib", activeRoi === "serial" ? "serial_region" : "drawing_region", next);
   };
   const updateField = (field: keyof IsoRegion, value: number) => setRegion({ ...region, [field]: clampRegion(value) });
   return (
     <div style={styles.roiBody}>
+      <div style={styles.roiStatusBar}>
+        <span>頁 {row?.page ?? "-"} / {data.pageCount || "-"}</span>
+        <strong title={row?.source_name}>{row?.source_name ?? "等待頁面"}</strong>
+        <em style={{ ...styles.roiStateChip, color: toneColor(lowConfidence ? "warn" : trial ? "ready" : "idle"), borderColor: toneColor(lowConfidence ? "warn" : trial ? "ready" : "idle") }}>
+          {lowConfidence ? "低信心" : trial ? "已有試判" : "待試判"}
+        </em>
+      </div>
       <div
         className="nodrag"
         style={styles.roiPreview}
@@ -440,31 +478,43 @@ function RoiBody({ data }: { data: GuideNodeData }) {
           />
           <strong>{Math.round(data.threshold * 100)}%</strong>
         </label>
+        <div style={styles.roiTrialBox}>
+          <SearchCheck size={13} />
+          <strong>試判</strong>
+          <span>{data.pageTrialBusy ? "判讀中" : trial ? `${trial.serial || "未取得"} (${Math.round(trial.confidence * 100)}%)` : "尚未執行"}</span>
+        </div>
         <div style={styles.cropGrid}>
           <Crop title="流水號裁切" image={selected ? data.preview?.serial_crop.image : ""} />
           <Crop title="圖號裁切" image={selected ? data.preview?.drawing_crop.image : ""} />
         </div>
+        <button
+          className="action-button"
+          type="button"
+          onClick={() => data.onWorkflowInputChange?.("roi_calib", activeRoi === "serial" ? "serial_region" : "drawing_region", activeRoi === "serial" ? DEFAULT_SERIAL_REGION : DEFAULT_DRAWING_REGION)}
+        >
+          <RefreshCcw size={13} />
+          <span>重設目前 ROI</span>
+        </button>
         <div style={styles.actionGrid}>
-          <button className="action-button" type="button" onClick={() => data.onWorkflowInputChange?.("roi_calib", activeRoi === "serial" ? "serial_region" : "drawing_region", activeRoi === "serial" ? DEFAULT_SERIAL_REGION : DEFAULT_DRAWING_REGION)}>
-            <RefreshCcw size={13} />
-            <span>重設 ROI</span>
-          </button>
-          <button className="action-button" type="button" disabled={!row} onClick={() => {
+          <button className="action-button" type="button" disabled={!row || !data.onRefreshPreview} title="只重新整理本頁預覽與裁切，不執行文字判讀。" onClick={() => {
             if (row) {
-              data.onSelectRow?.(row.id);
+              data.onRefreshPreview?.(row.id);
             }
           }}>
             <Eye size={13} />
             <span>只更新預覽</span>
           </button>
-          <button className="action-button" type="button" disabled={!row} onClick={() => {
+          <button className="action-button" type="button" disabled={!row || data.pageTrialBusy || !data.onRunPageTrial} title="只對目前頁做一次判讀，結果先留在畫面上，不改批次結果。" onClick={() => {
             if (row) {
-              data.onSelectRow?.(row.id);
+              data.onRunPageTrial?.(row.id);
             }
-            data.onRunFrom?.("roi_calib");
           }}>
             <SearchCheck size={13} />
             <span>判讀此頁</span>
+          </button>
+          <button className="action-button" type="button" disabled={!row || !data.onRunFrom} title={`用目前 ROI 與門檻重跑下游，會重新處理 ${data.pageCount ?? 0} 頁。`} onClick={() => data.onRunFrom?.("batch_detect")}>
+            <RefreshCcw size={13} />
+            <span>重跑下游</span>
           </button>
         </div>
       </div>
@@ -473,10 +523,20 @@ function RoiBody({ data }: { data: GuideNodeData }) {
 }
 
 function ResultBody({ data }: { data: GuideNodeData }) {
+  const row = data.row;
+  const trial = data.pageTrial;
+  const trialDiffers = Boolean(trial && row && trial.serial && trial.serial !== row.serial);
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
+      {trial ? (
+        <div style={trialDiffers ? styles.trialWarnBox : styles.trialReadyBox}>
+          <SearchCheck size={14} />
+          <strong>頁 {trial.page} 試判：{trial.serial || "未取得"}</strong>
+          <span>{trialDiffers ? "建議重跑下游" : "與批次一致"}</span>
+        </div>
+      ) : null}
       {data.selectedPreview && data.preview?.vision ? (
         <div style={styles.visionBox}>
           <SearchCheck size={14} />
@@ -573,7 +633,7 @@ function Crop({ image, title }: { image?: string; title: string }) {
 
 type BuildGuideGraphArgs = Pick<
   WorkflowGuideCanvasProps,
-  "onRunFrom" | "onRunNode" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "plan" | "preview" | "previewBusy" | "previewError" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
+  "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
 > & {
   dirty: Set<string>;
   drawingRegion: IsoRegion;
@@ -619,11 +679,14 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     kind,
     nodeId,
     onLoadMore: args.onLoadMore,
+    onRefreshPreview: args.onRefreshPreview,
     onRunFrom: args.rerunEnabled && !args.jobRunning ? args.onRunFrom : undefined,
     onRunNode: args.rerunEnabled && !args.jobRunning ? args.onRunNode : undefined,
+    onRunPageTrial: args.jobRunning ? undefined : args.onRunPageTrial,
     onSelectNode: args.onSelectNode,
     onSelectRow: args.onSelectRow,
     onWorkflowInputChange: args.onWorkflowInputChange,
+    pageCount: args.rows.length || args.source?.pdf_count || 0,
     preview: args.preview,
     previewBusy: Boolean(args.previewBusy),
     previewError: args.previewError || "",
@@ -839,6 +902,8 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       ...common(nodeId, kind, title, icon, tone, rows),
       active: args.selectedRowId === row.id || args.selectedNodeId === nodeId,
       dirty: args.dirty.has(nodeId) || args.dirty.has("roi_calib"),
+      pageTrial: args.pageTrials?.[row.id],
+      pageTrialBusy: args.pageTrialBusyId === row.id,
       row,
       selectedPreview,
     });
@@ -861,11 +926,14 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     addNode({
       id: resultId,
       position: { x: GUIDE_LAYOUT.resultX, y },
-      data: commonRow("batch_detect", "result", `P${row.page} 判讀結果`, <SearchCheck size={17} />, rowTone, [
-        { label: "流水號", value: row.serial || "未判讀", tone: row.serial ? "ready" : "warn" },
-        { label: "信心", value: row.confidence ? `${Math.round(row.confidence * 100)}%` : "未判讀", tone: lowConfidence ? "warn" : row.confidence ? "ready" : "idle" },
-        { label: "訊息", value: row.vision_message || "-" },
-      ]),
+      data: {
+        ...commonRow("batch_detect", "result", `P${row.page} 判讀結果`, <SearchCheck size={17} />, rowTone, [
+          { label: "流水號", value: row.serial || "未判讀", tone: row.serial ? "ready" : "warn" },
+          { label: "信心", value: row.confidence ? `${Math.round(row.confidence * 100)}%` : "未判讀", tone: lowConfidence ? "warn" : row.confidence ? "ready" : "idle" },
+          { label: "訊息", value: row.vision_message || "-" },
+        ]),
+        notice: trialNotice(args.pageTrials?.[row.id], row),
+      },
     });
     addNode({
       id: outputId,
@@ -1088,6 +1156,22 @@ function roiStateRows(serialRegion: IsoRegion, drawingRegion: IsoRegion, selecte
     { label: "流水號 ROI", value: regionConfigured(serialRegion, DEFAULT_SERIAL_REGION) ? "已調校" : "預設區域", tone: regionConfigured(serialRegion, DEFAULT_SERIAL_REGION) ? "ready" : "idle" },
     { label: "圖號 ROI", value: regionConfigured(drawingRegion, DEFAULT_DRAWING_REGION) ? "已調校" : "預設區域", tone: regionConfigured(drawingRegion, DEFAULT_DRAWING_REGION) ? "ready" : "idle" },
   ];
+}
+
+function trialNotice(trial: IsoPageTrial | undefined, row: IsoPlanRow): GuideNodeData["notice"] | undefined {
+  if (!trial) {
+    return undefined;
+  }
+  if (trial.serial && trial.serial !== row.serial) {
+    return {
+      text: `頁 ${trial.page} 有新試判，與上次批次結果不同，建議重跑下游。`,
+      tone: "warn",
+    };
+  }
+  return {
+    text: "本頁試判與批次結果一致。",
+    tone: "ready",
+  };
 }
 
 function regionConfigured(region: IsoRegion, fallback: IsoRegion): boolean {
@@ -1428,6 +1512,41 @@ const styles = {
   roiPreview: {
     minWidth: 0,
   },
+  roiStateChip: {
+    border: "1px solid",
+    borderRadius: 999,
+    fontSize: 10,
+    fontStyle: "normal",
+    fontWeight: 950,
+    padding: "3px 7px",
+    whiteSpace: "nowrap",
+  },
+  roiStatusBar: {
+    alignItems: "center",
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 7,
+    display: "grid",
+    gap: 7,
+    gridColumn: "1 / -1",
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    minWidth: 0,
+    padding: "7px 8px",
+  },
+  roiTrialBox: {
+    alignItems: "center",
+    background: "rgba(47,245,200,0.07)",
+    border: "1px solid rgba(47,245,200,0.18)",
+    borderRadius: 7,
+    color: "#dffcf4",
+    display: "grid",
+    fontSize: 11,
+    fontWeight: 900,
+    gap: 7,
+    gridTemplateColumns: "auto auto minmax(0, 1fr)",
+    minWidth: 0,
+    padding: "7px 8px",
+  },
   segment: {
     background: "rgba(255,255,255,0.035)",
     border: "1px solid rgba(255,255,255,0.08)",
@@ -1508,6 +1627,30 @@ const styles = {
     display: "grid",
     gap: 2,
     minWidth: 0,
+  },
+  trialReadyBox: {
+    alignItems: "center",
+    background: "rgba(47,245,200,0.07)",
+    border: "1px solid rgba(47,245,200,0.20)",
+    borderRadius: 8,
+    color: "#2ff5c8",
+    display: "grid",
+    gap: 7,
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    minWidth: 0,
+    padding: 8,
+  },
+  trialWarnBox: {
+    alignItems: "center",
+    background: "rgba(255,209,102,0.08)",
+    border: "1px solid rgba(255,209,102,0.24)",
+    borderRadius: 8,
+    color: "#ffd166",
+    display: "grid",
+    gap: 7,
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    minWidth: 0,
+    padding: 8,
   },
   visionBox: {
     alignItems: "center",
