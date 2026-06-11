@@ -22,15 +22,21 @@ import {
   loadIsoSwitchoverGate,
   loadIsoWorkflowJobStatus,
   loadIsoNodeWorkflow,
+  readIsoWorkflowArtifact,
   readIsoWorkflowRunLog,
   runIsoNodeWorkflowSafe,
   setIsoOneClickEngine,
   setIsoShadowFlag,
+  type IsoNodeWorkflowArtifactPayload,
+  type IsoNodeWorkflowEdge,
+  type IsoNodeWorkflowInstance,
   type IsoNodeWorkflowJobPayload,
   type IsoNodeWorkflowListPayload,
+  type IsoNodeWorkflowNodeRunLog,
   type IsoOneClickEnginePayload,
   type IsoNodeWorkflowRunLog,
   type IsoNodeWorkflowRunSummary,
+  type IsoNodeWorkflowSpec,
   type IsoNodeWorkflowValidationPayload,
   type IsoParityReportSummary,
   type IsoSwitchoverGateVerdict,
@@ -82,6 +88,7 @@ export function WorkflowInspector({
   const [projectionRunId, setProjectionRunId] = useState("");
   const [graphCopied, setGraphCopied] = useState(false);
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState("");
+  const [artifactPreview, setArtifactPreview] = useState<Record<string, ArtifactPreviewEntry>>({});
   const [shadowFlagBusy, setShadowFlagBusy] = useState(false);
   const [oneClickEngine, setOneClickEngineState] = useState<IsoOneClickEnginePayload | null>(null);
   const [engineBusy, setEngineBusy] = useState(false);
@@ -97,7 +104,9 @@ export function WorkflowInspector({
     return new Map(entries);
   }, [nodeCatalog]);
   const graphNodes = graph?.graph?.nodes ?? [];
-  const selectedCanvasNode = graphNodes.find((node) => node.node_id === selectedCanvasNodeId) ?? null;
+  const fallbackNodeId = graph?.topology?.find((nodeId) => graphNodes.some((node) => node.node_id === nodeId)) || graphNodes[0]?.node_id || "";
+  const activeCanvasNodeId = graphNodes.some((node) => node.node_id === selectedCanvasNodeId) ? selectedCanvasNodeId : fallbackNodeId;
+  const selectedCanvasNode = graphNodes.find((node) => node.node_id === activeCanvasNodeId) ?? null;
   const selectedCanvasSpec = selectedCanvasNode ? specByType.get(selectedCanvasNode.node_type) : undefined;
   const selectedCanvasLog = selectedCanvasNode ? runLog?.nodes?.[selectedCanvasNode.node_id] : undefined;
   const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
@@ -110,6 +119,13 @@ export function WorkflowInspector({
   const safeRunReady = Boolean(graph?.valid) && hasPdfSource && hasIsoSource;
   const canRunSafe = safeRunReady && !safeRunBusy && !isWorkflowJobRunning(job);
   const sideEffectPreview = useMemo(() => buildSideEffectPreview(graphNodes, specByType), [graphNodes, specByType]);
+  const workflowSteps = useMemo(
+    () => buildWorkflowSteps(graphNodes, graph?.topology ?? [], graph?.edges ?? [], specByType, runLog, job),
+    [graphNodes, graph?.topology, graph?.edges, specByType, runLog, job],
+  );
+  const selectedStep = workflowSteps.find((step) => step.node.node_id === activeCanvasNodeId) ?? workflowSteps[0] ?? null;
+  const activeArtifactKey = selectedStep && runLog?.run_id ? artifactKey(runLog.run_id, selectedStep.node.node_id) : "";
+  const activeArtifactPreview = activeArtifactKey ? artifactPreview[activeArtifactKey] : undefined;
   const terminalJob = Boolean(job && !isWorkflowJobRunning(job));
   const graphJson = useMemo(() => graph?.graph ? JSON.stringify(graph.graph, null, 2) : "", [graph]);
   const oneClickEngineLabel = oneClickEngine?.flag_exists
@@ -117,6 +133,64 @@ export function WorkflowInspector({
       ? "節點路徑（驗證中）"
       : "傳統路徑"
     : "傳統路徑（未設旗標）";
+
+  useEffect(() => {
+    if (!selectedStep || !runLog?.run_id || !isTauri()) {
+      return;
+    }
+    const nodeLog = selectedStep.nodeLog;
+    const ports = nodeLog ? artifactPortsFromLog(nodeLog) : [];
+    if (!ports.length) {
+      return;
+    }
+    const key = artifactKey(runLog.run_id, selectedStep.node.node_id);
+    const cached = artifactPreview[key];
+    if (cached?.loaded || cached?.loading) {
+      return;
+    }
+    let cancelled = false;
+    setArtifactPreview((previous) => ({
+      ...previous,
+      [key]: { loading: true, loaded: false, payloads: {}, error: "" },
+    }));
+    Promise.all(
+      ports.map(async (port) => {
+        const payload = await readIsoWorkflowArtifact(runLog.run_id, selectedStep.node.node_id, port);
+        return [port, payload] as const;
+      }),
+    )
+      .then((entries) => {
+        if (cancelled) {
+          return;
+        }
+        setArtifactPreview((previous) => ({
+          ...previous,
+          [key]: {
+            loading: false,
+            loaded: true,
+            payloads: Object.fromEntries(entries),
+            error: "",
+          },
+        }));
+      })
+      .catch((caught) => {
+        if (cancelled) {
+          return;
+        }
+        setArtifactPreview((previous) => ({
+          ...previous,
+          [key]: {
+            loading: false,
+            loaded: false,
+            payloads: {},
+            error: caught instanceof Error ? caught.message : String(caught),
+          },
+        }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runLog?.run_id, selectedStep?.node.node_id]);
 
   useEffect(() => {
     if (!job?.workflow_job_id || !isWorkflowJobRunning(job)) {
@@ -441,6 +515,73 @@ export function WorkflowInspector({
         </div>
 
         <div style={styles.grid}>
+          <section style={styles.sectionFlowTree}>
+            <SectionHead icon={<Route size={16} />} title="流程樹" meta={selectedRun ? `${statusLabel(selectedRun.status)} · ${compactPath(selectedRun.run_id)}` : "等待紀錄"} />
+            <div style={styles.flowTreeLayout}>
+              <div style={styles.flowStepRail}>
+                {workflowSteps.map((step) => (
+                  <button
+                    style={{
+                      ...styles.flowStep,
+                      borderColor: step.node.node_id === activeCanvasNodeId ? "rgba(47,245,200,0.78)" : step.borderColor,
+                      opacity: step.disabled ? 0.56 : 1,
+                    }}
+                    key={step.node.node_id}
+                    type="button"
+                    onClick={() => setSelectedCanvasNodeId(step.node.node_id)}
+                  >
+                    <span style={{ ...styles.flowStepIndex, borderColor: step.borderColor, color: step.borderColor }}>
+                      {step.index + 1}
+                    </span>
+                    <span style={styles.flowStepText}>
+                      <strong>{step.displayName}</strong>
+                      <code style={styles.code}>{step.node.node_type}</code>
+                    </span>
+                    <span style={{ ...styles.flowStepStatus, color: step.statusColor }}>{step.statusLabel}</span>
+                  </button>
+                ))}
+                {loaded && !workflowSteps.length ? <EmptyLine text="尚無流程節點。" /> : null}
+              </div>
+
+              <div style={styles.flowStepDetail}>
+                {selectedStep ? (
+                  <>
+                    <div style={styles.stepDetailHead}>
+                      <span style={{ ...styles.flowStepIndex, borderColor: selectedStep.borderColor, color: selectedStep.borderColor }}>
+                        {selectedStep.index + 1}
+                      </span>
+                      <div style={styles.stepDetailTitle}>
+                        <strong>{selectedStep.displayName}</strong>
+                        <code style={styles.code}>{selectedStep.node.node_id} · {selectedStep.node.node_type}</code>
+                      </div>
+                      <span style={{ ...styles.stepStatePill, color: selectedStep.statusColor, borderColor: selectedStep.statusColor }}>
+                        {selectedStep.statusLabel}
+                      </span>
+                    </div>
+
+                    <div style={styles.stepMetricGrid}>
+                      <Metric icon={<Braces size={16} />} label="輸入" value={`${selectedStep.inputCount}`} />
+                      <Metric icon={<Route size={16} />} label="輸出" value={`${selectedStep.outputCount}`} />
+                      <Metric icon={<ShieldCheck size={16} />} label="副作用" value={selectedStep.effectLabel} tone={selectedStep.guarded ? "warn" : "ready"} />
+                      <Metric icon={<FileSearch size={16} />} label="耗時" value={selectedStep.nodeLog ? `${selectedStep.nodeLog.duration_ms} ms` : "-"} />
+                    </div>
+
+                    <div style={styles.evidenceGrid}>
+                      <EvidenceCard title="輸入" rows={stepInputRows(selectedStep)} />
+                      <EvidenceCard title="輸出" rows={stepOutputRows(selectedStep)} />
+                      <EvidenceCard title="收集資料" rows={stepArtifactRows(selectedStep, activeArtifactPreview)} />
+                      <EvidenceCard title="副作用 / 紀錄" rows={stepSideEffectRows(selectedStep)} />
+                    </div>
+
+                    <StepArtifactPreview step={selectedStep} preview={activeArtifactPreview} />
+                  </>
+                ) : (
+                  <EmptyLine text="選取一個節點後顯示步驟資料。" />
+                )}
+              </div>
+            </div>
+          </section>
+
           <section style={styles.section}>
             <SectionHead icon={<Braces size={16} />} title="節點型錄" meta={nodeCatalog ? `${nodeCatalog.node_count} 類型` : "等待"} />
             <div style={styles.scrollList}>
@@ -465,8 +606,8 @@ export function WorkflowInspector({
           </section>
 
           <section style={styles.sectionWide}>
-            <SectionHead icon={<Route size={16} />} title="Safe POC Graph" meta={graph?.workflow_id || graph?.graph?.workflow_id || "等待"} />
-            <WorkflowCanvas payload={graph} runLog={runLog} selectedNodeId={selectedCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />
+            <SectionHead icon={<Route size={16} />} title="工程 DAG" meta={graph?.workflow_id || graph?.graph?.workflow_id || "等待"} />
+            <WorkflowCanvas payload={graph} runLog={runLog} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />
             {selectedCanvasNode ? (
               <div style={styles.canvasDetail}>
                 <div style={styles.canvasDetailHead}>
@@ -702,6 +843,36 @@ export function WorkflowInspector({
   );
 }
 
+type ArtifactPreviewEntry = {
+  error: string;
+  loaded: boolean;
+  loading: boolean;
+  payloads: Record<string, IsoNodeWorkflowArtifactPayload>;
+};
+
+type FieldRow = {
+  label: string;
+  value: string;
+  tone?: "idle" | "ready" | "warn";
+};
+
+type WorkflowStep = {
+  borderColor: string;
+  disabled: boolean;
+  displayName: string;
+  effectLabel: string;
+  effects: string[];
+  guarded: boolean;
+  index: number;
+  inputCount: number;
+  node: IsoNodeWorkflowInstance;
+  nodeLog?: IsoNodeWorkflowNodeRunLog;
+  outputCount: number;
+  spec?: IsoNodeWorkflowSpec;
+  statusColor: string;
+  statusLabel: string;
+};
+
 type SideEffectPreviewItem = {
   effect: string;
   enabled: boolean;
@@ -709,6 +880,320 @@ type SideEffectPreviewItem = {
   nodeId: string;
   nodeLabel: string;
 };
+
+function buildWorkflowSteps(
+  nodes: IsoNodeWorkflowInstance[],
+  topology: string[],
+  edges: IsoNodeWorkflowEdge[],
+  specByType: Map<string, IsoNodeWorkflowSpec>,
+  runLog: IsoNodeWorkflowRunLog | null,
+  job: IsoNodeWorkflowJobPayload | null,
+): WorkflowStep[] {
+  const nodeById = new Map(nodes.map((node) => [node.node_id, node] as const));
+  const orderedIds = [
+    ...topology.filter((nodeId) => nodeById.has(nodeId)),
+    ...nodes.map((node) => node.node_id).filter((nodeId) => !topology.includes(nodeId)),
+  ];
+  return orderedIds.map((nodeId, index) => {
+    const node = nodeById.get(nodeId)!;
+    const spec = specByType.get(node.node_type);
+    const nodeLog = runLog?.nodes?.[node.node_id];
+    const jobNode = job?.nodes?.[node.node_id] ?? job?.result?.nodes?.[node.node_id];
+    const effects = node.side_effects?.length ? node.side_effects : spec?.side_effects ?? [];
+    const guarded = Boolean(spec?.guarded || node.requires_confirm || effects.some(isGuardedEffect));
+    const disabled = node.enabled === false;
+    const status = nodeLog?.status || (typeof jobNode?.status === "string" ? jobNode.status : "") || (disabled ? "skipped_disabled" : "");
+    const tone = stepStatusTone(status, guarded, disabled);
+    const incoming = edges.filter((edge) => edge.to_node === node.node_id).length;
+    const outgoing = edges.filter((edge) => edge.from_node === node.node_id).length;
+    return {
+      borderColor: tone.color,
+      disabled,
+      displayName: node.display_name || spec?.display_name || node.node_id,
+      effectLabel: effects.length ? effects.map(sideEffectLabel).join(" / ") : "純讀",
+      effects,
+      guarded,
+      index,
+      inputCount: Math.max(Object.keys(node.inputs ?? {}).length, spec?.inputs.length ?? 0, incoming),
+      node,
+      nodeLog,
+      outputCount: Math.max(Object.keys(node.outputs ?? {}).length, spec?.outputs.length ?? 0, outgoing),
+      spec,
+      statusColor: tone.color,
+      statusLabel: tone.label,
+    };
+  });
+}
+
+function artifactKey(runId: string, nodeId: string) {
+  return `${runId}:${nodeId}`;
+}
+
+function artifactPortsFromLog(nodeLog: IsoNodeWorkflowNodeRunLog): string[] {
+  return Object.entries(nodeLog.outputs ?? {})
+    .filter(([, value]) => Boolean(value && typeof value === "object" && "artifact_ref" in value))
+    .map(([port]) => port);
+}
+
+function stepStatusTone(status: string, guarded: boolean, disabled: boolean): { color: string; label: string } {
+  if (disabled || status === "skipped_disabled") {
+    return { color: "rgba(220,235,228,0.5)", label: "停用" };
+  }
+  if (status === "success") {
+    return { color: "#2ff5c8", label: "成功" };
+  }
+  if (status === "running") {
+    return { color: "#7fd7ff", label: "執行中" };
+  }
+  if (status === "blocked") {
+    return { color: "#ffd166", label: "已阻擋" };
+  }
+  if (status === "failed") {
+    return { color: "#ff9b9b", label: "失敗" };
+  }
+  if (status === "cancelled") {
+    return { color: "#ff9b9b", label: "已取消" };
+  }
+  if (status === "not_run") {
+    return { color: "rgba(220,235,228,0.52)", label: "未執行" };
+  }
+  if (guarded) {
+    return { color: "#ffd166", label: "需授權" };
+  }
+  return { color: "#7fd7ff", label: "待執行" };
+}
+
+function stepInputRows(step: WorkflowStep): FieldRow[] {
+  const rows = [
+    ...Object.entries(step.node.inputs ?? {}).map(([key, value]) => ({
+      label: inputLabel(key),
+      value: formatInputPreview(value),
+    })),
+  ];
+  if (step.nodeLog?.resolved_inputs_digest) {
+    rows.push(
+      ...Object.entries(step.nodeLog.resolved_inputs_digest).map(([key, value]) => ({
+        label: `${inputLabel(key)} 解析值`,
+        value: summarizeUnknown(value),
+      })),
+    );
+  }
+  return rows.length ? rows : [{ label: "輸入", value: "無" }];
+}
+
+function stepOutputRows(step: WorkflowStep): FieldRow[] {
+  const declared = step.spec?.outputs.map((port) => port.name) ?? [];
+  const refs = Object.entries(step.nodeLog?.outputs ?? {}).map(([key, value]) => ({
+    label: outputLabel(key),
+    value: outputRefSummary(value),
+  }));
+  const missing = declared
+    .filter((port) => !refs.some((row) => row.label === outputLabel(port)))
+    .map((port) => ({ label: outputLabel(port), value: "尚無輸出" }));
+  return [...refs, ...missing].length ? [...refs, ...missing] : [{ label: "輸出", value: "無" }];
+}
+
+function stepArtifactRows(step: WorkflowStep, preview?: ArtifactPreviewEntry): FieldRow[] {
+  if (!step.nodeLog) {
+    return [{ label: "資料", value: "尚無執行紀錄" }];
+  }
+  if (preview?.loading) {
+    return [{ label: "資料", value: "讀取中" }];
+  }
+  if (preview?.error) {
+    return [{ label: "資料", value: preview.error, tone: "warn" }];
+  }
+  const payloads = preview?.payloads ?? {};
+  const rows = Object.entries(payloads).flatMap(([port, artifact]) => summarizeArtifact(port, artifact.payload).slice(0, 4));
+  return rows.length ? rows : artifactPortsFromLog(step.nodeLog).map((port) => ({ label: outputLabel(port), value: "可讀取" }));
+}
+
+function stepSideEffectRows(step: WorkflowStep): FieldRow[] {
+  const records = step.nodeLog?.side_effects ?? [];
+  if (records.length) {
+    return records.map((record) => ({
+      label: sideEffectLabel(record.kind),
+      value: decisionLabel(record.decision),
+      tone: record.decision === "executed" ? "ready" : "warn",
+    }));
+  }
+  if (step.effects.length) {
+    return step.effects.map((effect) => ({
+      label: sideEffectLabel(effect),
+      value: step.guarded ? "需授權" : "自動允許",
+      tone: step.guarded ? "warn" : "ready",
+    }));
+  }
+  return [{ label: "副作用", value: "無" }];
+}
+
+function EvidenceCard({ title, rows }: { title: string; rows: FieldRow[] }) {
+  return (
+    <div style={styles.evidenceCard}>
+      <strong>{title}</strong>
+      <div style={styles.evidenceRows}>
+        {rows.map((row, index) => (
+          <span style={styles.evidenceRow} key={`${row.label}-${index}`}>
+            <em>{row.label}</em>
+            <code style={{ ...styles.code, color: row.tone === "warn" ? "#ffd166" : row.tone === "ready" ? "#2ff5c8" : styles.code.color }}>
+              {row.value}
+            </code>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function StepArtifactPreview({ step, preview }: { step: WorkflowStep; preview?: ArtifactPreviewEntry }) {
+  const cards = artifactPreviewCards(step, preview);
+  return (
+    <div style={styles.artifactPreview}>
+      <div style={styles.artifactPreviewHead}>
+        <strong>資料預覽</strong>
+        <span>{preview?.loading ? "讀取中" : preview?.error ? "讀取失敗" : cards.length ? `${cards.length} 組資料` : "尚無資料"}</span>
+      </div>
+      <div style={styles.artifactPreviewGrid}>
+        {cards.map((card) => (
+          <div style={styles.artifactCard} key={card.title}>
+            <strong>{card.title}</strong>
+            <div style={styles.evidenceRows}>
+              {card.rows.map((row, index) => (
+                <span style={styles.evidenceRow} key={`${card.title}-${row.label}-${index}`}>
+                  <em>{row.label}</em>
+                  <code style={styles.code}>{row.value}</code>
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+        {!cards.length ? <EmptyLine text={step.nodeLog ? "此步驟沒有可展開的 artifact。" : "執行後會顯示資料。"} /> : null}
+      </div>
+    </div>
+  );
+}
+
+function artifactPreviewCards(step: WorkflowStep, preview?: ArtifactPreviewEntry): Array<{ title: string; rows: FieldRow[] }> {
+  if (preview?.loading) {
+    return [{ title: step.displayName, rows: [{ label: "狀態", value: "讀取中" }] }];
+  }
+  if (preview?.error) {
+    return [{ title: step.displayName, rows: [{ label: "錯誤", value: preview.error }] }];
+  }
+  return Object.entries(preview?.payloads ?? {}).map(([port, artifact]) => ({
+    title: outputLabel(port),
+    rows: summarizeArtifact(port, artifact.payload),
+  }));
+}
+
+function summarizeArtifact(port: string, payload: unknown): FieldRow[] {
+  if (Array.isArray(payload)) {
+    const first = payload[0];
+    return [
+      { label: outputLabel(port), value: `${payload.length} 筆` },
+      ...sampleRows(first),
+    ];
+  }
+  if (payload && typeof payload === "object") {
+    const objectPayload = payload as Record<string, unknown>;
+    const priorityRows = priorityArtifactRows(port, objectPayload);
+    const genericRows = Object.entries(objectPayload)
+      .filter(([key]) => !priorityRows.some((row) => row.label === outputLabel(key) || row.label === inputLabel(key)))
+      .slice(0, 6)
+      .map(([key, value]) => ({ label: outputLabel(key), value: summarizeUnknown(value) }));
+    return [...priorityRows, ...genericRows].slice(0, 9);
+  }
+  return [{ label: outputLabel(port), value: summarizeUnknown(payload) }];
+}
+
+function priorityArtifactRows(port: string, payload: Record<string, unknown>): FieldRow[] {
+  const rows: FieldRow[] = [];
+  const add = (label: string, value: unknown) => {
+    if (value !== undefined && value !== null && value !== "") {
+      rows.push({ label, value: summarizeUnknown(value) });
+    }
+  };
+  if (port === "pages" && Array.isArray(payload)) {
+    add("頁數", payload.length);
+  }
+  add("工作資料夾", payload.work_folder);
+  add("頁面資料夾", payload.page_folder);
+  add("PDF 數量", payload.pdf_count);
+  add("資料來源", payload.source_kind || payload.kind);
+  add("資料列數", payload.record_count);
+  add("工作表", payload.sheet_name || payload.sheet);
+  add("狀態", payload.status || payload.state);
+  add("總列數", payload.total_rows || payload.total);
+  add("通過", payload.ready || payload.pass || payload.passed);
+  add("待確認", payload.review || payload.warn || payload.blocked);
+  return rows;
+}
+
+function sampleRows(value: unknown): FieldRow[] {
+  if (!value || typeof value !== "object") {
+    return value === undefined ? [] : [{ label: "樣本", value: summarizeUnknown(value) }];
+  }
+  return Object.entries(value as Record<string, unknown>)
+    .slice(0, 5)
+    .map(([key, entry]) => ({ label: outputLabel(key), value: summarizeUnknown(entry) }));
+}
+
+function summarizeUnknown(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "-";
+  }
+  if (typeof value === "string") {
+    return value.includes("\\") || value.includes("/") ? compactPath(value) : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `${value.length} 筆`;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if ("artifact_ref" in (value as Record<string, unknown>)) {
+      return outputRefSummary(value);
+    }
+    return entries.length ? `${entries.length} 欄位` : "{}";
+  }
+  return String(value);
+}
+
+function outputRefSummary(value: unknown): string {
+  if (value && typeof value === "object") {
+    const ref = value as Record<string, unknown>;
+    if (typeof ref.artifact_ref === "string") {
+      const bytes = typeof ref.bytes === "number" ? ` · ${Math.round(ref.bytes / 1024)} KB` : "";
+      return `${compactPath(ref.artifact_ref)}${bytes}`;
+    }
+  }
+  return summarizeUnknown(value);
+}
+
+function outputLabel(key: string) {
+  if (key === "profile") return "設定檔";
+  if (key === "candidates") return "來源候選";
+  if (key === "folder") return "工作資料夾";
+  if (key === "page_folder") return "頁面資料夾";
+  if (key === "pages") return "頁面清單";
+  if (key === "pdf_count") return "PDF 數量";
+  if (key === "source_kind") return "來源類型";
+  if (key === "iso_source") return "ISO 來源";
+  if (key === "sample_records") return "樣本列";
+  if (key === "record_count") return "資料列數";
+  if (key === "rows") return "命名列";
+  if (key === "result") return "命名結果";
+  if (key === "job") return "工作狀態";
+  if (key === "iso_run_log") return "ISO 紀錄";
+  if (key === "pilot_results") return "檢查項目";
+  if (key === "pilot_summary") return "檢查摘要";
+  if (key === "distribution") return "信心分布";
+  if (key === "csv_path") return "CSV 路徑";
+  if (key === "applied") return "已套用";
+  return inputLabel(key);
+}
 
 function compactWorkflowInputs(inputs: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
@@ -850,6 +1335,17 @@ function sideEffectLabel(effect: string) {
   if (effect === "writes_debug_bundle") return "問題包";
   if (effect === "spawns_worker") return "背景處理";
   return effect;
+}
+
+function decisionLabel(decision: string) {
+  if (decision === "executed") return "已執行";
+  if (decision === "blocked_policy") return "政策阻擋";
+  if (decision === "blocked_replay") return "回放阻擋";
+  if (decision === "skipped_disabled") return "停用略過";
+  if (decision === "skipped_dry_run") return "試算略過";
+  if (decision === "skipped_not_needed") return "不需執行";
+  if (decision === "simulated") return "模擬";
+  return decision || "未記錄";
 }
 
 function gateConditionMark(met: boolean | null) {
@@ -1072,6 +1568,19 @@ const styles = {
     minWidth: 0,
     padding: 10,
   },
+  sectionFlowTree: {
+    background: "linear-gradient(180deg, rgba(4,24,19,0.7), rgba(0,0,0,0.12))",
+    border: "1px solid rgba(47,245,200,0.22)",
+    borderRadius: 10,
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    gridColumn: "1 / -1",
+    order: -2,
+    minHeight: 0,
+    minWidth: 0,
+    padding: 10,
+  },
   sectionHead: {
     alignItems: "center",
     borderBottom: "1px solid rgba(255,255,255,0.08)",
@@ -1079,6 +1588,158 @@ const styles = {
     gap: 8,
     minWidth: 0,
     paddingBottom: 8,
+  },
+  flowTreeLayout: {
+    display: "grid",
+    gap: 10,
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(340px, 100%), 1fr))",
+    minWidth: 0,
+  },
+  flowStepRail: {
+    display: "grid",
+    gap: 7,
+    maxHeight: 540,
+    minWidth: 0,
+    overflow: "auto",
+    paddingRight: 2,
+  },
+  flowStep: {
+    alignItems: "center",
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 10,
+    color: "inherit",
+    cursor: "pointer",
+    display: "grid",
+    gap: 9,
+    gridTemplateColumns: "32px minmax(0, 1fr) auto",
+    minHeight: 58,
+    minWidth: 0,
+    padding: "8px 10px",
+    textAlign: "left",
+  },
+  flowStepIndex: {
+    alignItems: "center",
+    border: "1px solid rgba(47,245,200,0.4)",
+    borderRadius: 999,
+    display: "inline-flex",
+    fontSize: 12,
+    fontWeight: 900,
+    height: 28,
+    justifyContent: "center",
+    minWidth: 28,
+  },
+  flowStepText: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 3,
+    minWidth: 0,
+  },
+  flowStepStatus: {
+    border: "1px solid rgba(255,255,255,0.1)",
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: 800,
+    padding: "3px 7px",
+    whiteSpace: "nowrap",
+  },
+  flowStepDetail: {
+    background: "rgba(0,0,0,0.13)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 10,
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    minHeight: 220,
+    minWidth: 0,
+    padding: 10,
+  },
+  stepDetailHead: {
+    alignItems: "center",
+    display: "grid",
+    gap: 10,
+    gridTemplateColumns: "auto minmax(0, 1fr) auto",
+    minWidth: 0,
+  },
+  stepDetailTitle: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 3,
+    minWidth: 0,
+  },
+  stepStatePill: {
+    border: "1px solid rgba(47,245,200,0.4)",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 900,
+    padding: "4px 9px",
+    whiteSpace: "nowrap",
+  },
+  stepMetricGrid: {
+    display: "grid",
+    gap: 8,
+    gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+    minWidth: 0,
+  },
+  evidenceGrid: {
+    display: "grid",
+    gap: 8,
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    minWidth: 0,
+  },
+  evidenceCard: {
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    display: "flex",
+    flexDirection: "column",
+    gap: 7,
+    minWidth: 0,
+    padding: "9px 10px",
+  },
+  evidenceRows: {
+    display: "grid",
+    gap: 5,
+    minWidth: 0,
+  },
+  evidenceRow: {
+    display: "grid",
+    gap: 4,
+    gridTemplateColumns: "minmax(72px, 0.32fr) minmax(0, 1fr)",
+    minWidth: 0,
+  },
+  artifactPreview: {
+    background: "rgba(47,245,200,0.045)",
+    border: "1px solid rgba(47,245,200,0.16)",
+    borderRadius: 8,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    minWidth: 0,
+    padding: 10,
+  },
+  artifactPreviewHead: {
+    alignItems: "center",
+    display: "flex",
+    gap: 8,
+    justifyContent: "space-between",
+    minWidth: 0,
+  },
+  artifactPreviewGrid: {
+    display: "grid",
+    gap: 8,
+    gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))",
+    minWidth: 0,
+  },
+  artifactCard: {
+    background: "rgba(0,0,0,0.16)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    display: "flex",
+    flexDirection: "column",
+    gap: 7,
+    minWidth: 0,
+    padding: "9px 10px",
   },
   scrollList: {
     display: "grid",
