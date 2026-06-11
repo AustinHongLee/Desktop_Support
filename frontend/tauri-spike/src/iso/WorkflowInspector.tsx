@@ -60,6 +60,7 @@ import { WorkflowGuideCanvas, type IsoPageTrial } from "./workbench/WorkflowGuid
 import { buildNodeCardSummaries } from "./workbench/nodeCards";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
+const NODE_PREVIEW_CACHE_LIMIT = 10;
 
 type WorkflowInspectorProps = {
   workflowInputs?: Record<string, unknown>;
@@ -100,6 +101,9 @@ export function WorkflowInspector({
   const [projectedPlan, setProjectedPlan] = useState<IsoWorkflowPlan | null>(null);
   const [projectionError, setProjectionError] = useState("");
   const [nodePreview, setNodePreview] = useState<IsoPreviewPayload | null>(null);
+  const [nodePreviewCache, setNodePreviewCache] = useState<Record<string, IsoPreviewPayload>>({});
+  const [nodePreviewFailed, setNodePreviewFailed] = useState<Record<string, boolean>>({});
+  const [nodePreviewLoading, setNodePreviewLoading] = useState<Record<string, boolean>>({});
   const [nodePreviewBusy, setNodePreviewBusy] = useState(false);
   const [nodePreviewError, setNodePreviewError] = useState("");
   const [nodePreviewReloadKey, setNodePreviewReloadKey] = useState(0);
@@ -158,6 +162,11 @@ export function WorkflowInspector({
   const displayPlan = projectedPlan ?? workbenchPlan;
   const displayPlanOrigin = projectedPlan ? "節點流程結果" : workbenchPlan ? "工作台草稿已接入" : "等待資料";
   const previewErrorForCanvas = nodePreviewError || (displayPlan ? "" : projectionError);
+  const previewCacheRows = useMemo(() => (displayPlan?.rows ?? []).slice(0, NODE_PREVIEW_CACHE_LIMIT), [displayPlan]);
+  const previewCacheRowsKey = useMemo(
+    () => previewCacheRows.map((row) => `${row.id}:${row.source_path}`).join("|"),
+    [previewCacheRows],
+  );
   const selectedPreviewRow = useMemo(() => {
     const rows = displayPlan?.rows ?? [];
     return rows.find((row) => row.id === selectedGuideRowId)
@@ -195,6 +204,9 @@ export function WorkflowInspector({
     setOverlayInputs({});
     setDirtyNodeIds([]);
     setSelectedGuideRowId("");
+    setNodePreviewCache({});
+    setNodePreviewFailed({});
+    setNodePreviewLoading({});
     setPageTrials({});
     setPageTrialBusyId("");
   }, [baseInputsKey]);
@@ -204,6 +216,56 @@ export function WorkflowInspector({
       setSelectedGuideRowId(workbenchSelectedRowId);
     }
   }, [workbenchSelectedRowId]);
+
+  useEffect(() => {
+    const allowed = new Set(previewCacheRows.map((row) => row.source_path).filter(Boolean));
+    setNodePreviewCache((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
+    setNodePreviewFailed((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
+    setNodePreviewLoading((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
+  }, [previewCacheRowsKey]);
+
+  useEffect(() => {
+    if (!previewCacheRows.length || !isTauri()) {
+      return;
+    }
+    let cancelled = false;
+    const serialRegion = regionOrDefault(safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
+    const drawingRegion = regionOrDefault(safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
+    const missingRows = previewCacheRows.filter((row) => row.source_path && !nodePreviewCache[row.source_path] && !nodePreviewLoading[row.source_path] && !nodePreviewFailed[row.source_path]);
+    if (!missingRows.length) {
+      return;
+    }
+    missingRows.forEach((row) => {
+      setNodePreviewLoading((previous) => ({ ...previous, [row.source_path]: true }));
+      loadIsoPreview({
+        source_path: row.source_path,
+        detect_serial: false,
+        serial_region: serialRegion,
+        drawing_region: drawingRegion,
+      })
+        .then((payload) => {
+          if (cancelled) {
+            return;
+          }
+          setNodePreviewCache((previous) => ({ ...previous, [row.source_path]: payload }));
+          setNodePreviewFailed((previous) => ({ ...previous, [row.source_path]: false }));
+        })
+        .catch((caught) => {
+          if (!cancelled) {
+            setNodePreviewFailed((previous) => ({ ...previous, [row.source_path]: true }));
+            setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
+          }
+        })
+        .finally(() => {
+          if (!cancelled) {
+            setNodePreviewLoading((previous) => ({ ...previous, [row.source_path]: false }));
+          }
+        });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [displayPlan?.source.drawing_region, displayPlan?.source.serial_region, nodePreviewCache, nodePreviewFailed, nodePreviewLoading, previewCacheRows, previewCacheRowsKey, safeInputs.drawing_region, safeInputs.serial_region]);
 
   useEffect(() => {
     if (!selectedGuideRowId) {
@@ -297,6 +359,8 @@ export function WorkflowInspector({
           return;
         }
         setNodePreview(payload);
+        setNodePreviewCache((previous) => ({ ...previous, [payload.source_path]: payload }));
+        setNodePreviewFailed((previous) => ({ ...previous, [payload.source_path]: false }));
       })
       .catch((caught) => {
         if (cancelled) {
@@ -502,6 +566,8 @@ export function WorkflowInspector({
         drawing_region: regionOrDefault(safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION),
       });
       setNodePreview(payload);
+      setNodePreviewCache((previous) => ({ ...previous, [payload.source_path]: payload }));
+      setNodePreviewFailed((previous) => ({ ...previous, [payload.source_path]: false }));
       setPageTrials((previous) => ({
         ...previous,
         [rowId]: {
@@ -816,8 +882,10 @@ export function WorkflowInspector({
               pageTrials={pageTrials}
               plan={displayPlan}
               preview={nodePreview}
+              previewBySourcePath={nodePreviewCache}
               previewBusy={nodePreviewBusy}
               previewError={previewErrorForCanvas}
+              previewLoadingBySourcePath={nodePreviewLoading}
               rerunEnabled={canRerun}
               runLog={runLog}
               selectedNodeId={activeCanvasNodeId}

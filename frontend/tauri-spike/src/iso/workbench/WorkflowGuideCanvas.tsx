@@ -45,6 +45,8 @@ type WorkflowGuideCanvasProps = {
   preview: IsoPreviewPayload | null;
   previewBusy?: boolean;
   previewError?: string;
+  previewBySourcePath?: Record<string, IsoPreviewPayload>;
+  previewLoadingBySourcePath?: Record<string, boolean>;
   rerunEnabled?: boolean;
   runLog: IsoNodeWorkflowRunLog | null;
   selectedNodeId?: string;
@@ -157,8 +159,10 @@ export function WorkflowGuideCanvas({
   pageTrials = {},
   plan,
   preview,
+  previewBySourcePath = {},
   previewBusy = false,
   previewError = "",
+  previewLoadingBySourcePath = {},
   rerunEnabled = false,
   runLog,
   selectedNodeId = "pdf_source",
@@ -205,8 +209,10 @@ export function WorkflowGuideCanvas({
     pdfPath,
     plan,
     preview,
+    previewBySourcePath,
     previewBusy,
     previewError,
+    previewLoadingBySourcePath,
     rerunEnabled,
     rows,
     runLog,
@@ -238,8 +244,10 @@ export function WorkflowGuideCanvas({
     pdfPath,
     plan,
     preview,
+    previewBySourcePath,
     previewBusy,
     previewError,
+    previewLoadingBySourcePath,
     rerunEnabled,
     rows,
     runLog,
@@ -636,7 +644,7 @@ function Crop({ image, title }: { image?: string; title: string }) {
 
 type BuildGuideGraphArgs = Pick<
   WorkflowGuideCanvasProps,
-  "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
+  "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
 > & {
   dirty: Set<string>;
   drawingRegion: IsoRegion;
@@ -898,7 +906,10 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     const roiId = `roi_${row.page}`;
     const resultId = `result_${row.page}`;
     const outputId = `output_${row.page}`;
-    const selectedPreview = args.preview?.source_path === row.source_path;
+    const globalPreviewMatches = args.preview?.source_path === row.source_path;
+    const rowPreview = args.previewBySourcePath?.[row.source_path] ?? (globalPreviewMatches ? args.preview : null);
+    const rowPreviewBusy = Boolean(args.previewLoadingBySourcePath?.[row.source_path]) || (args.selectedRowId === row.id && Boolean(args.previewBusy));
+    const selectedPreview = Boolean(rowPreview);
     const lowConfidence = Number(row.confidence || 0) > 0 && Number(row.confidence || 0) < args.threshold;
     const rowTone = row.status === "blocked" ? "danger" : row.status === "warn" || lowConfidence ? "warn" : row.status === "ready" ? "ready" : "idle";
     const commonRow = (nodeId: string, kind: WorkflowNodeKind, title: string, icon: ReactNode, tone: GuideNodeData["tone"], rows: GuideNodeData["rows"]): GuideNodeData => ({
@@ -907,6 +918,8 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       dirty: args.dirty.has(nodeId) || args.dirty.has("roi_calib"),
       pageTrial: args.pageTrials?.[row.id],
       pageTrialBusy: args.pageTrialBusyId === row.id,
+      preview: rowPreview,
+      previewBusy: rowPreviewBusy,
       row,
       selectedPreview,
     });
