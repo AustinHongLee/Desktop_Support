@@ -406,3 +406,142 @@ python -m pytest tests\test_iso_workflow_pollution.py tests\test_frontend_safety
 ```
 
 E0 結論：`recent_all_equal=true`、`real_samples=true`、`shadow_design=true`，且 G3 指定套件已綠。E1 可開工。
+
+---
+
+## 10. E 期完工 Postscript（2026-06-11）
+
+結論：E 期已達成「workflow-backed 一鍵」9/10 工程目標。workflow primary 由 operator gate + feature flag 控制；flag 不存在時維持 legacy，一鍵頁只在 flag 存在後顯示引擎 chip；workflow 失敗不會自動 fallback，必須由使用者按「改用傳統路徑重跑」；連續兩次 workflow 一鍵失敗會 lazy auto-revert 到 legacy 並寫 audit。
+
+### Commit 清單
+
+```text
+d61e6f4 docs(iso-workflow): add e phase plan with gate readiness (E0)
+d917235 feat(iso-workflow): one-click workflow contract and sanity guard (E1)
+de33762 feat(iso-workflow): gated one-click engine switch with audit and breaker (E2)
+799a069 feat(iso): one-click runs on workflow engine behind operator gate (E3)
+79d5644 feat(iso): one-click failure handling and friendly errors (E4)
+```
+
+### 驗證矩陣
+
+```text
+python -m pytest tests -q
+482 passed in 66.24s
+
+cd frontend\tauri-spike
+npx tsc --noEmit
+exit 0
+
+npm run -s build
+vite build OK
+
+npm run -s test:unit
+3 passed
+```
+
+E4 focused：
+
+```text
+python -m pytest tests\test_iso_one_click_failures.py tests\test_iso_one_click_engine.py tests\test_tauri_iso_workflow.py tests\test_iso_workflow_pollution.py -q
+43 passed in 5.87s
+```
+
+### 雙引擎真樣本 Smoke
+
+樣本來源：`C:\Users\a0976\Downloads\t` 複製到 `.runtime\temp\e5_sample_20260611_091554`，未改動原始資料夾。
+
+報告：`.runtime\temp\e5_dual_engine_report_20260611_091554.json`
+
+```json
+{
+  "equal": true,
+  "legacy_summary": {
+    "total": 4,
+    "ready": 4,
+    "warn": 0,
+    "blocked": 0,
+    "selected": 4
+  },
+  "workflow_summary": {
+    "total": 4,
+    "ready": 4,
+    "warn": 0,
+    "blocked": 0,
+    "selected": 4
+  },
+  "workflow_run_id": "wf-20260611-091610-c99d21",
+  "legacy_job_id": "e5-legacy-20260611_091554",
+  "one_click_graph_hash": "sha256:58eb621dfe9dce1edf9066e61f6427018214dc601a6e3408da0ee7869cc652d7"
+}
+```
+
+Fallback smoke：
+
+```json
+{
+  "engine": "legacy",
+  "enabled": false,
+  "fallback_job_state": "completed",
+  "fallback_summary": {
+    "total": 4,
+    "ready": 4,
+    "warn": 0,
+    "blocked": 0,
+    "selected": 4
+  }
+}
+```
+
+### Gate / Audit 摘要
+
+```text
+python -m launcher.plugins.iso_tools.workflow.cli gate --json
+ready=true
+headline=可進入 E 期換軌評估
+evaluated_at=2026-06-11T09:17:56
+recent_all_equal=true
+real_samples=true
+shadow_design=true
+```
+
+`engine_audit.jsonl` E5 摘要：
+
+```json
+{"event":"enable","gate_ready":true,"graph_hash":"sha256:58eb621dfe9dce1edf9066e61f6427018214dc601a6e3408da0ee7869cc652d7","at":"2026-06-11T09:16:09"}
+{"event":"disable","engine":"legacy","reason":"e5_smoke_disable","at":"2026-06-11T09:16:26"}
+```
+
+目前 flag：
+
+```json
+{
+  "schema_version": 1,
+  "engine": "legacy",
+  "reason": "e5_smoke_disable"
+}
+```
+
+### 開關手冊
+
+啟用 workflow primary：
+
+```powershell
+'{"action":"workflow_set_one_click_engine","workflow":{"engine":"workflow"}}' |
+  python -m launcher.app.tauri_iso_workflow
+```
+
+切回 legacy：
+
+```powershell
+'{"action":"workflow_set_one_click_engine","workflow":{"engine":"legacy","reason":"manual_disable"}}' |
+  python -m launcher.app.tauri_iso_workflow
+```
+
+緊急 rollback：
+
+```powershell
+Remove-Item -LiteralPath ".runtime\flags\iso-one-click-engine.json"
+```
+
+備註：刪 flag 不會改 git，不會刪 run log；下次一鍵會回到 legacy。若 workflow 一鍵連續兩次失敗，`workflow_one_click_engine` 讀取時會自動寫回 legacy flag 並 append `auto_revert` audit。
