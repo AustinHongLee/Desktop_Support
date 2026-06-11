@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "workflow_id": "iso_pdf_one_click",
+  "display_name": "ISO PDF 一鍵節點流程",
+  "description": "Locked one-click plan producer: split/load table/batch detect/pilot only. No export, no apply.",
+  "inputs": {
+    "work_folder": null,
+    "combine_pdf": null,
+    "page_folder": null,
+    "iso_list": null,
+    "sheet_name": "",
+    "serial_col": null,
+    "line_col": null,
+    "pattern": "{serial}--{line}.pdf",
+    "detect_serials": true,
+    "confidence_threshold": 0.7,
+    "serial_region": null,
+    "drawing_region": null
+  },
+  "metadata": {
+    "author": "codex",
+    "locked": true,
+    "purpose": "workflow-backed one-click plan generation"
+  },
+  "nodes": [
+    {
+      "node_id": "split",
+      "node_type": "iso.split_pdf",
+      "display_name": "拆頁 PDF",
+      "inputs": {
+        "combine_pdf": "$workflow.inputs.combine_pdf",
+        "work_folder": "$workflow.inputs.work_folder",
+        "page_folder": "$workflow.inputs.page_folder"
+      },
+      "side_effects": [
+        "may_write_page_pdfs"
+      ]
+    },
+    {
+      "node_id": "load_table",
+      "node_type": "iso.load_iso_table",
+      "display_name": "載入 ISO List",
+      "inputs": {
+        "work_folder": "$workflow.inputs.work_folder",
+        "iso_list": "$workflow.inputs.iso_list",
+        "sheet_name": "$workflow.inputs.sheet_name",
+        "serial_col": "$workflow.inputs.serial_col",
+        "line_col": "$workflow.inputs.line_col"
+      }
+    },
+    {
+      "node_id": "batch_detect",
+      "node_type": "iso.batch_detect_serials",
+      "display_name": "批次判讀流水號",
+      "inputs": {
+        "page_folder": "$nodes.split.outputs.page_folder",
+        "work_folder": "$workflow.inputs.work_folder",
+        "iso_list": "$workflow.inputs.iso_list",
+        "sheet_name": "$workflow.inputs.sheet_name",
+        "serial_col": "$workflow.inputs.serial_col",
+        "line_col": "$workflow.inputs.line_col",
+        "pattern": "$workflow.inputs.pattern",
+        "detect_serials": "$workflow.inputs.detect_serials",
+        "confidence_threshold": "$workflow.inputs.confidence_threshold",
+        "serial_region": "$workflow.inputs.serial_region",
+        "drawing_region": "$workflow.inputs.drawing_region"
+      },
+      "params": {
+        "wait_for_completion": true,
+        "poll_interval_ms": 500,
+        "timeout_s": 1800
+      },
+      "side_effects": [
+        "writes_job_files",
+        "writes_iso_run_log",
+        "spawns_worker"
+      ]
+    },
+    {
+      "node_id": "pilot",
+      "node_type": "iso.pilot_report",
+      "display_name": "Pilot 檢查",
+      "inputs": {
+        "rows": "$nodes.batch_detect.outputs.rows",
+        "plan": "$nodes.batch_detect.outputs.result",
+        "job": "$nodes.batch_detect.outputs.job",
+        "work_folder": "$workflow.inputs.work_folder",
+        "confidence_threshold": "$workflow.inputs.confidence_threshold"
+      }
+    }
+  ]
+}

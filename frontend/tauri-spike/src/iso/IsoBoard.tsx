@@ -33,14 +33,17 @@ import { WorkflowInspector } from "./WorkflowInspector";
 import {
   applyIsoPlan,
   cancelIsoJob,
+  cancelIsoWorkflowJob,
   exportIsoDebugBundle,
   exportIsoPlanCsv,
   loadIsoJobStatus,
+  loadIsoOneClickEngine,
   loadIsoProfile,
   loadIsoPreview,
   loadIsoRoiDistribution,
   loadIsoSwitchoverGate,
   loadIsoWorkflowJobStatus,
+  loadIsoWorkflowPlanFromRun,
   listIsoRunLogs,
   pickIsoCombinePdf,
   pickIsoListFile,
@@ -51,11 +54,13 @@ import {
   replayIsoRunLog,
   revertIsoProfile,
   runIsoPlan,
+  runIsoOneClickWorkflow,
   runIsoShadowVerify,
   saveIsoDraftProfile,
   startIsoBatchDetect,
   type IsoJobPayload,
   type IsoNodeWorkflowJobPayload,
+  type IsoOneClickEnginePayload,
   type IsoPilotItem,
   type IsoPlanRow,
   type IsoProfilePayload,
@@ -142,6 +147,9 @@ export function IsoBoard() {
   const [batchBusy, setBatchBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [workflowPrimaryJob, setWorkflowPrimaryJob] = useState<IsoNodeWorkflowJobPayload | null>(null);
+  const [oneClickEngine, setOneClickEngine] = useState<IsoOneClickEnginePayload | null>(null);
+  const [legacyFallbackAvailable, setLegacyFallbackAvailable] = useState(false);
   const [problemOnly, setProblemOnly] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [sortMode, setSortMode] = useState<IsoSortMode>("page");
@@ -744,6 +752,44 @@ export function IsoBoard() {
     }
   }
 
+  async function startLegacyOneClick(runId: string) {
+    const job = await startIsoBatchDetect({ ...requestPayload(undefined, { run_id: runId }), detect_serials: true });
+    registerRunLog(job.run_log, runId);
+    setBatchJob(job);
+    setWorkflowPrimaryJob(null);
+  }
+
+  async function fallbackToLegacyOneClick() {
+    if (oneClickBusy) {
+      return;
+    }
+    setError("");
+    setMessage("");
+    setRecordPath("");
+    setOneClickSummaryText("");
+    setPlan(null);
+    setBatchJob(null);
+    setWorkflowPrimaryJob(null);
+    setRunStartedAt(Date.now());
+    const runId = createIsoRunId();
+    setActiveIsoRunId(runId);
+    setOneClickRunLog(null);
+    setIsoFailure(null);
+    setFailureCopied(false);
+    setLegacyFallbackAvailable(false);
+    setOneClickStage("running");
+    oneClickActiveRef.current = true;
+    try {
+      await startLegacyOneClick(runId);
+      setMessage("已改用傳統路徑重跑；節點引擎開關不會被改動。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setOneClickFailure("傳統路徑啟動失敗", caught, runId);
+      setOneClickStage("idle");
+      oneClickActiveRef.current = false;
+    }
+  }
+
   async function runOneClick() {
     setError("");
     if (oneClickStage === "done") {
@@ -756,7 +802,21 @@ export function IsoBoard() {
       setOneClickSummaryText("");
       setShadowJob(null);
       setShadowError("");
+      setBatchJob(null);
+      setWorkflowPrimaryJob(null);
+      setOneClickEngine(null);
+      setLegacyFallbackAvailable(false);
       setMessage("");
+      return;
+    }
+    if (oneClickStage === "running" && workflowPrimaryRunning && workflowPrimaryJob) {
+      try {
+        const job = await cancelIsoWorkflowJob(workflowPrimaryJob.workflow_job_id);
+        setWorkflowPrimaryJob(job);
+        setMessage("正在取消節點路徑一鍵命名…");
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
       return;
     }
     if (oneClickStage === "running" && batchRunning && batchJob) {
@@ -790,22 +850,36 @@ export function IsoBoard() {
     setRecordPath("");
     setOneClickSummaryText("");
     setPlan(null);
+    setBatchJob(null);
+    setWorkflowPrimaryJob(null);
     setRunStartedAt(Date.now());
     const runId = createIsoRunId();
     setActiveIsoRunId(runId);
     setOneClickRunLog(null);
     setIsoFailure(null);
     setFailureCopied(false);
+    setLegacyFallbackAvailable(false);
     setShadowJob(null);
     setShadowError("");
     oneClickActiveRef.current = true;
+    let attemptedWorkflow = false;
     try {
-      const job = await startIsoBatchDetect({ ...requestPayload(undefined, { run_id: runId }), detect_serials: true });
-      registerRunLog(job.run_log, runId);
-      setBatchJob(job);
+      const engine = await loadIsoOneClickEngine();
+      setOneClickEngine(engine);
+      attemptedWorkflow = engine.enabled && engine.engine === "workflow";
+      if (engine.auto_reverted) {
+        setMessage("已自動切回傳統路徑（連續失敗保護），這次會用傳統路徑。");
+      }
+      if (attemptedWorkflow) {
+        const job = await runIsoOneClickWorkflow({ ...requestPayload(undefined, { run_id: runId }), detect_serials: true } as unknown as Record<string, unknown>);
+        setWorkflowPrimaryJob(job);
+        return;
+      }
+      await startLegacyOneClick(runId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
-      setOneClickFailure("一鍵命名啟動失敗", caught, runId);
+      setOneClickFailure(attemptedWorkflow ? "節點路徑一鍵命名啟動失敗" : "一鍵命名啟動失敗", caught, runId);
+      setLegacyFallbackAvailable(attemptedWorkflow);
       setOneClickStage("idle");
       oneClickActiveRef.current = false;
     }
@@ -1065,6 +1139,7 @@ export function IsoBoard() {
         ? compactPath(profile?.folder || "")
         : activeProfileFolder() ? "預設設定檔" : "等待來源";
   const batchRunning = batchJob?.state === "queued" || batchJob?.state === "running" || batchJob?.state === "cancel_requested";
+  const workflowPrimaryRunning = workflowJobIsRunning(workflowPrimaryJob);
   const workflowEvents = [...(batchJob?.events ?? []), ...(plan?.issues ?? [])];
   const hasOneClickSource = Boolean(workFolder || combinePdf || pageFolder);
   const isoMachineInput = isoMachineInputForPlan(plan);
@@ -1072,19 +1147,25 @@ export function IsoBoard() {
   const elapsedSec = runStartedAt ? Math.max(0, Math.round((nowTs - runStartedAt) / 1000)) : 0;
   const oneClickRunning = oneClickStage === "running";
   const oneClickApplying = oneClickStage === "applying";
-  const detectDone = batchJob?.progress?.done ?? (plan ? plan.summary.total : 0);
-  const detectTotal = batchJob?.progress?.total ?? plan?.summary.total ?? 0;
-  const oneClickBusy = busy || batchBusy || applyBusy;
+  const detectDone = batchJob?.progress?.done ?? (workflowPrimaryRunning ? workflowPrimaryJob?.progress?.done ?? 0 : plan ? plan.summary.total : 0);
+  const detectTotal = batchJob?.progress?.total ?? (workflowPrimaryRunning ? workflowPrimaryJob?.progress?.total ?? 0 : plan?.summary.total ?? 0);
+  const oneClickBusy = busy || batchBusy || applyBusy || (workflowPrimaryRunning && !oneClickRunning);
   const shadowVerifyBusy = shadowBusy || workflowJobIsRunning(shadowJob);
   const showShadowVerify = shadowFlagEnabled && Boolean(batchJob?.state === "completed") && (oneClickStage === "done" || oneClickStage === "review");
   const shadowVerifyDisabled = !batchJob?.job_id || shadowVerifyBusy || Boolean(shadowJob && !workflowJobIsRunning(shadowJob));
   const shadowVerifySummary = shadowError || shadowVerifyMessage(shadowJob);
   const activePilotText = oneClickRunning || oneClickApplying
-    ? activePilotSummary(pilotItems, oneClickApplying ? "正在套用更名" : `判讀流水號 ${detectDone}/${detectTotal || "?"}`)
+    ? activePilotSummary(pilotItems, oneClickApplying ? "正在套用更名" : workflowPrimaryRunning ? `節點流程 ${detectDone}/${detectTotal || "?"}` : `判讀流水號 ${detectDone}/${detectTotal || "?"}`)
     : "";
   const pilotSuccessSummary = oneClickStage === "done" ? oneClickSummaryText || oneClickSuccessSummary(plan, pilotItems) : "";
   const probableFailureCause = isoFailure ? firstPilotProblemText(pilotItems) : "";
+  const engineBadge = oneClickEngine?.flag_exists
+    ? oneClickEngine.engine === "workflow"
+      ? "節點路徑（驗證中）"
+      : "傳統路徑"
+    : "";
   const oneClickButton = (() => {
+    if (oneClickRunning && workflowPrimaryRunning) return { icon: <GitBranch size={20} />, label: `取消節點路徑 ${detectDone}/${detectTotal || "?"} · ${elapsedSec}s`, hint: "正在執行鎖定 workflow;按一下可取消" };
     if (oneClickRunning) return { icon: <ScanLine size={20} />, label: `取消判讀 ${detectDone}/${detectTotal || "?"} · ${elapsedSec}s`, hint: "正在讀取 worker 真實事件;按一下可取消" };
     if (applyBusy) return { icon: <ClipboardCheck size={20} />, label: "更名中…", hint: "正在寫入更名記錄" };
     if (oneClickStage === "done") return { icon: <RefreshCcw size={20} />, label: "完成 · 再處理一批", hint: recordPath ? `記錄:${compactPath(recordPath)}` : "按一下清空,重新開始" };
@@ -1095,7 +1176,7 @@ export function IsoBoard() {
   })();
   const pipelineStages: Array<{ key: string; label: string; icon: React.ReactNode; state: string; detail: string; seconds: number | null }> = [
     pilotPipelineStage(pilotItems, ["P01", "P02"], { key: "source", label: "來源", icon: <FolderOpen size={18} />, state: hasOneClickSource ? "done" : "idle", detail: hasOneClickSource ? compactPath(workFolder || combinePdf || pageFolder) : "選資料夾", seconds: null }),
-    pilotPipelineStage(pilotItems, ["P03"], { key: "split", label: "拆頁", icon: <Layers3 size={18} />, state: detectTotal ? "done" : oneClickRunning ? "run" : "idle", detail: detectTotal ? `${detectTotal} 頁` : "等待", seconds: null }),
+    pilotPipelineStage(pilotItems, ["P03"], { key: "split", label: "拆頁", icon: <Layers3 size={18} />, state: detectTotal ? "done" : oneClickRunning ? "run" : "idle", detail: workflowPrimaryRunning ? "節點流程" : detectTotal ? `${detectTotal} 頁` : "等待", seconds: null }),
     pilotPipelineStage(pilotItems, ["P06"], { key: "detect", label: "判讀流水號", icon: <ScanLine size={18} />, state: oneClickRunning ? "run" : plan ? "done" : "idle", detail: oneClickRunning ? `${detectDone}/${detectTotal || "?"}` : plan ? `${readyCount} 已讀` : "等待", seconds: oneClickRunning ? elapsedSec : null }),
     pilotPipelineStage(pilotItems, ["P04", "P07"], { key: "match", label: "對 ISO", icon: <Table2 size={18} />, state: plan?.source.record_count ? "done" : "idle", detail: plan?.source.record_count ? `${plan.source.record_count} 列` : "等待", seconds: null }),
     pilotPipelineStage(pilotItems, ["P10", "P11"], { key: "name", label: "命名", icon: <WandSparkles size={18} />, state: plan ? (blockedCount ? "warn" : "done") : "idle", detail: plan ? `${plan.summary.total} 檔` : "等待", seconds: null }),
@@ -1103,7 +1184,17 @@ export function IsoBoard() {
       ? { key: "apply", label: "更名", icon: <ClipboardCheck size={18} />, state: "run", detail: "寫入中", seconds: elapsedSec }
       : pilotPipelineStage(pilotItems, ["P12"], { key: "apply", label: "更名", icon: <ClipboardCheck size={18} />, state: oneClickStage === "done" ? "done" : "idle", detail: oneClickStage === "done" ? "完成" : "等待", seconds: null }),
   ];
-  const echoLines = ([...(batchJob?.events ?? []), ...(plan?.issues ?? [])] as unknown as Array<{ code?: string; tone?: string; title?: string; detail?: string }>).slice(-80);
+  const workflowPrimaryEcho = workflowPrimaryJob
+    ? [{
+        code: "WF",
+        tone: workflowPrimaryRunning ? "ready" : workflowPrimaryJob.state === "failed" ? "blocked" : "idle",
+        title: "節點路徑",
+        detail: workflowPrimaryRunning
+          ? `${workflowPrimaryJob.progress.current_node || "執行中"} · ${workflowPrimaryJob.progress.done}/${workflowPrimaryJob.progress.total || "?"}`
+          : localizeIsoDisplayText(workflowPrimaryJob.error || workflowPrimaryJob.state),
+      }]
+    : [];
+  const echoLines = ([...workflowPrimaryEcho, ...(batchJob?.events ?? []), ...(plan?.issues ?? [])] as unknown as Array<{ code?: string; tone?: string; title?: string; detail?: string }>).slice(-80);
 
   function isoMachineInputForPlan(currentPlan: IsoWorkflowPlan | null) {
     const currentRows = currentPlan?.rows ?? [];
@@ -1289,6 +1380,79 @@ export function IsoBoard() {
   }, [batchJob?.job_id, batchRunning, activeIsoRunId, oneClickRunLog]);
 
   useEffect(() => {
+    if (!workflowPrimaryJob || !workflowJobIsRunning(workflowPrimaryJob)) {
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void loadIsoWorkflowJobStatus(workflowPrimaryJob.workflow_job_id)
+        .then(async (job) => {
+          if (cancelled) {
+            return;
+          }
+          setWorkflowPrimaryJob(job);
+          if (workflowJobIsRunning(job)) {
+            return;
+          }
+          if (!oneClickActiveRef.current) {
+            return;
+          }
+          oneClickActiveRef.current = false;
+          const knownRunId = job.workflow_run_id || job.run_id || activeIsoRunId;
+          if (job.state === "cancelled") {
+            setOneClickStage("idle");
+            setMessage("已取消節點路徑一鍵命名,保留已完成進度。");
+            return;
+          }
+          if (job.state === "completed" && job.workflow_run_id) {
+            try {
+              const projected = await loadIsoWorkflowPlanFromRun(job.workflow_run_id, { oneClickGuard: true });
+              if (cancelled) {
+                return;
+              }
+              setPlan(projected);
+              registerRunLog(projected.run_log, projected.provenance?.iso_run_log?.run_id || activeIsoRunId);
+              const problems = projected.rows.filter((row) => row.status === "warn" || row.status === "blocked");
+              setSelectedRowId(problems[0]?.id ?? projected.rows[0]?.id ?? "");
+              if (problems.length) {
+                setOneClickStage("review");
+                setMessage(`節點路徑已產生命名草稿；有 ${problems.length} 個待確認值。`);
+              } else {
+                void autoApplyWithRecord(projected);
+              }
+            } catch (caught) {
+              if (!cancelled) {
+                setError(caught instanceof Error ? caught.message : String(caught));
+                setOneClickFailure("節點路徑一鍵命名沒有完成", caught, knownRunId);
+                setLegacyFallbackAvailable(true);
+                setOneClickStage("idle");
+              }
+            }
+            return;
+          }
+          const detail = oneClickWorkflowFailureText(job);
+          setError(detail);
+          setOneClickFailure("節點路徑一鍵命名沒有完成", detail, knownRunId);
+          setLegacyFallbackAvailable(true);
+          setOneClickStage("idle");
+        })
+        .catch((caught) => {
+          if (!cancelled) {
+            setError(caught instanceof Error ? caught.message : String(caught));
+            setOneClickFailure("讀取節點路徑進度失敗", caught, activeIsoRunId);
+            setLegacyFallbackAvailable(true);
+            setOneClickStage("idle");
+            oneClickActiveRef.current = false;
+          }
+        });
+    }, 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [workflowPrimaryJob?.workflow_job_id, workflowPrimaryJob?.state, activeIsoRunId]);
+
+  useEffect(() => {
     if (!shadowJob || !workflowJobIsRunning(shadowJob)) {
       return;
     }
@@ -1379,7 +1543,7 @@ export function IsoBoard() {
     if (terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
-  }, [batchJob?.events?.length, oneClickStage]);
+  }, [batchJob?.events?.length, workflowPrimaryJob?.progress?.done, workflowPrimaryJob?.state, oneClickStage]);
 
   const visualPanel = (
     <IsoVisualPanel
@@ -1496,10 +1660,13 @@ export function IsoBoard() {
           debugBundleBusy={debugBundleBusy}
           echoLines={echoLines}
           elapsedSec={elapsedSec}
+          engineBadge={engineBadge}
           exportFailureBundle={exportFailureBundle}
+          fallbackToLegacyOneClick={() => void fallbackToLegacyOneClick()}
           failureCopied={failureCopied}
           isoFailure={isoFailure}
           issueRows={issueRows}
+          legacyFallbackAvailable={legacyFallbackAvailable}
           oneClickApplying={oneClickApplying}
           oneClickBusy={oneClickBusy}
           oneClickButton={oneClickButton}
@@ -1760,6 +1927,27 @@ function firstPilotProblemText(items: IsoPilotItem[]): string {
   const item = items.find((candidate) => candidate.status === "blocked")
     ?? items.find((candidate) => candidate.status === "warn" || candidate.freshness === "stale" || candidate.needs_review);
   return localizeIsoDisplayText(item?.user_text || item?.manual_hint || "");
+}
+
+function oneClickWorkflowFailureText(job: IsoNodeWorkflowJobPayload): string {
+  const nodeId = failedWorkflowNodeId(job);
+  const nodeText = nodeId ? oneClickNodeFailureText(nodeId) : "節點路徑沒有完成";
+  const detail = localizeIsoDisplayText(job.error || job.result?.error?.message || job.state || "");
+  return detail ? `${nodeText}：${detail}` : nodeText;
+}
+
+function failedWorkflowNodeId(job: IsoNodeWorkflowJobPayload): string {
+  const failed = Object.values(job.nodes ?? {}).find((node) => node.status === "failed" || node.status === "blocked");
+  return failed?.node_id || job.progress?.current_node || "";
+}
+
+function oneClickNodeFailureText(nodeId: string): string {
+  const key = nodeId.toLowerCase();
+  if (key.includes("split")) return "PDF 拆頁失敗，請確認 PDF 是否可讀或未被其他程式鎖住";
+  if (key.includes("load_table")) return "ISO 清單讀取失敗，請檢查工作表與欄位設定";
+  if (key.includes("batch_detect")) return "流水號辨識失敗，請檢查 ROI、OCR 或來源頁面";
+  if (key.includes("pilot")) return "命名檢查未通過，請查看待處理項目";
+  return `節點 ${nodeId} 失敗`;
 }
 
 function oneClickSuccessSummary(plan: IsoWorkflowPlan | null, items: IsoPilotItem[]): string {

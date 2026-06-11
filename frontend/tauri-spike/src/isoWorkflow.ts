@@ -36,6 +36,8 @@ export type IsoWorkflowAction =
   | "workflow_parity_history"
   | "workflow_shadow_run"
   | "workflow_set_shadow_flag"
+  | "workflow_one_click_engine"
+  | "workflow_set_one_click_engine"
   | "workflow_switchover_gate";
 
 export interface IsoRegion {
@@ -326,6 +328,21 @@ export interface IsoSwitchoverGateVerdict {
   window: IsoParityReportSummary[];
   evaluated_at: string;
   shadow_flag_enabled?: boolean;
+}
+
+export interface IsoOneClickEnginePayload {
+  schema_version: number;
+  action: "workflow_one_click_engine";
+  created_at: string;
+  engine: "legacy" | "workflow" | string;
+  enabled: boolean;
+  auto_reverted: boolean;
+  flag_path: string;
+  audit_path: string;
+  graph_hash: string;
+  gate_snapshot?: IsoSwitchoverGateVerdict | null;
+  invalid_flag?: boolean;
+  flag_exists?: boolean;
 }
 
 export interface IsoRunLogRef {
@@ -787,8 +804,12 @@ export async function readIsoWorkflowRunLog(runId: string): Promise<IsoNodeWorkf
   return invokeJson<IsoNodeWorkflowRunLog>("run_iso_workflow", { action: "workflow_read_run_log", workflow_run_id: runId });
 }
 
-export async function loadIsoWorkflowPlanFromRun(runId: string): Promise<IsoWorkflowPlan> {
-  return invokeJson<IsoWorkflowPlan>("run_iso_workflow", { action: "workflow_plan_from_run", workflow_run_id: runId });
+export async function loadIsoWorkflowPlanFromRun(runId: string, options: { oneClickGuard?: boolean } = {}): Promise<IsoWorkflowPlan> {
+  return invokeJson<IsoWorkflowPlan>("run_iso_workflow", {
+    action: "workflow_plan_from_run",
+    workflow_run_id: runId,
+    workflow: options.oneClickGuard ? { one_click_guard: true } : undefined,
+  });
 }
 
 export async function readIsoWorkflowArtifact(runId: string, nodeId: string, port: string): Promise<IsoNodeWorkflowArtifactPayload> {
@@ -806,6 +827,25 @@ export async function runIsoNodeWorkflowSafe(request: { workflow_path: string; w
     workflow_path: request.workflow_path,
     workflow_inputs: request.workflow_inputs ?? {},
     workflow_mode: "run",
+  });
+}
+
+export async function loadIsoOneClickEngine(): Promise<IsoOneClickEnginePayload> {
+  return invokeJson<IsoOneClickEnginePayload>("run_iso_workflow", { action: "workflow_one_click_engine" });
+}
+
+export async function setIsoOneClickEngine(engine: "legacy" | "workflow"): Promise<IsoOneClickEnginePayload> {
+  return invokeJson<IsoOneClickEnginePayload>("run_iso_workflow", { action: "workflow_set_one_click_engine", workflow: { engine } });
+}
+
+export async function runIsoOneClickWorkflow(workflowInputs: Record<string, unknown>): Promise<IsoNodeWorkflowJobPayload> {
+  const runId = typeof workflowInputs.run_id === "string" ? workflowInputs.run_id : undefined;
+  return invokeJson<IsoNodeWorkflowJobPayload>("run_iso_workflow", {
+    action: "workflow_run",
+    workflow: { one_click: true },
+    workflow_inputs: workflowInputs,
+    workflow_mode: "run",
+    run_id: runId,
   });
 }
 

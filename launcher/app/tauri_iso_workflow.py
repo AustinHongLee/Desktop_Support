@@ -58,6 +58,7 @@ from launcher.plugins.rename_tools.rename_actions import RenameOperation, _apply
 
 SERIAL_AUTO_FILL_CONFIDENCE = 0.70
 DEFAULT_PATTERN = "{serial}--{line}.pdf"
+ONE_CLICK_WORKFLOW_PATH = Path("launcher/plugins/iso_tools/workflow/workflows/iso_pdf_one_click.workflow.json")
 
 
 @dataclass(frozen=True)
@@ -191,6 +192,10 @@ def _dispatch_request(request: IsoWorkflowRequest) -> dict[str, Any]:
         return workflow_shadow_run_action(request)
     if request.action == "workflow_switchover_gate":
         return workflow_switchover_gate_action(request)
+    if request.action == "workflow_one_click_engine":
+        return workflow_one_click_engine_action(request)
+    if request.action == "workflow_set_one_click_engine":
+        return workflow_set_one_click_engine_action(request)
     raise ValueError(f"unknown action: {request.action}")
 
 
@@ -533,6 +538,7 @@ def workflow_validate_action(request: IsoWorkflowRequest) -> dict[str, Any]:
 
 
 def workflow_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    request, one_click = _workflow_request_for_one_click(request)
     _workflow_policy_from_request(request)
     if (request.workflow_mode or "run") != "replay":
         _workflow_graph_from_request(request)
@@ -544,7 +550,7 @@ def workflow_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
     job_dir.mkdir(parents=True, exist_ok=True)
     job = _initial_workflow_job_payload(job_id, "queued")
     _write_json(job_dir / "job.json", job)
-    _write_json(job_dir / "request.json", _workflow_request_payload(request, job_id=job_id))
+    _write_json(job_dir / "request.json", _workflow_request_payload(request, job_id=job_id, one_click=one_click))
     _spawn_workflow_job(job_dir)
     return _read_json(job_dir / "job.json")
 
@@ -607,7 +613,9 @@ def workflow_read_run_log_action(request: IsoWorkflowRequest) -> dict[str, Any]:
 def workflow_plan_from_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
     from launcher.plugins.iso_tools.workflow.projection import plan_from_run
 
-    return plan_from_run(_workflow_run_dir_required(request))
+    payload = request.workflow if request.workflow is not None else request.workflow_inputs or {}
+    one_click_guard = bool(payload.get("one_click_guard")) if isinstance(payload, dict) else False
+    return plan_from_run(_workflow_run_dir_required(request), one_click_guard=one_click_guard)
 
 
 def workflow_read_artifact_action(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -714,6 +722,86 @@ def workflow_switchover_gate_action(_request: IsoWorkflowRequest) -> dict[str, A
     return payload
 
 
+def workflow_one_click_engine_action(_request: IsoWorkflowRequest) -> dict[str, Any]:
+    flag = _read_one_click_engine_flag()
+    auto_reverted = False
+    if flag.get("engine") == "workflow" and _should_auto_revert_one_click():
+        previous = dict(flag)
+        flag = _write_one_click_engine_flag(
+            {
+                "schema_version": 1,
+                "engine": "legacy",
+                "updated_at": _now(),
+                "auto_reverted_at": _now(),
+                "reason": "consecutive_failures",
+                "previous_graph_hash": previous.get("graph_hash") or "",
+            }
+        )
+        _append_engine_audit(
+            "auto_revert",
+            {
+                "reason": "consecutive_failures",
+                "previous_engine": previous.get("engine") or "",
+                "previous_graph_hash": previous.get("graph_hash") or "",
+            },
+        )
+        auto_reverted = True
+    return _one_click_engine_payload(flag, auto_reverted=auto_reverted)
+
+
+def workflow_set_one_click_engine_action(request: IsoWorkflowRequest) -> dict[str, Any]:
+    payload = request.workflow if request.workflow is not None else request.workflow_inputs or {}
+    if not isinstance(payload, dict):
+        raise ValueError("workflow_set_one_click_engine 需要 workflow 或 workflow_inputs。")
+    requested = str(payload.get("engine") or "").strip().lower()
+    enabled = payload.get("enabled")
+    if not requested:
+        requested = "workflow" if bool(enabled) else "legacy"
+    if requested not in {"workflow", "legacy"}:
+        raise ValueError("one-click engine 只接受 workflow 或 legacy。")
+
+    if requested == "legacy":
+        flag = _write_one_click_engine_flag(
+            {
+                "schema_version": 1,
+                "engine": "legacy",
+                "updated_at": _now(),
+                "disabled_at": _now(),
+                "reason": str(payload.get("reason") or "manual_disable"),
+            }
+        )
+        _append_engine_audit("disable", {"engine": "legacy", "reason": flag.get("reason") or ""})
+        return _one_click_engine_payload(flag, auto_reverted=False)
+
+    from launcher.plugins.iso_tools.workflow.gate import evaluate_switchover_gate
+
+    gate = evaluate_switchover_gate()
+    if not bool(gate.get("ready")):
+        unmet = [f"{item.get('title')}: {item.get('detail')}" for item in gate.get("conditions") or [] if item.get("met") is not True]
+        raise ValueError("workflow primary gate 未通過：" + "；".join(unmet))
+    graph_hash = _one_click_graph_hash()
+    flag = _write_one_click_engine_flag(
+        {
+            "schema_version": 1,
+            "engine": "workflow",
+            "updated_at": _now(),
+            "enabled_at": _now(),
+            "graph_hash": graph_hash,
+            "gate_snapshot": gate,
+        }
+    )
+    _append_engine_audit(
+        "enable",
+        {
+            "engine": "workflow",
+            "graph_hash": graph_hash,
+            "gate_headline": gate.get("headline") or "",
+            "gate_ready": bool(gate.get("ready")),
+        },
+    )
+    return _one_click_engine_payload(flag, auto_reverted=False)
+
+
 def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
     selected_rows = [row for row in request.rows if row.get("selected")]
     operations = [RenameOperation(Path(row["source_path"]), Path(row["target_path"])) for row in selected_rows]
@@ -727,8 +815,8 @@ def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
             "message": "沒有勾選需要更名的 PDF。",
         }
     _validate_operations(operations)
-    record = _record_apply_csv(request, selected_rows, operations)
-    _apply_operations(operations)
+    _apply_iso_operations(operations)
+    record, record_warning = _record_apply_csv_safely(request, selected_rows, operations)
     payload = {
         "schema_version": 1,
         "action": "apply",
@@ -748,7 +836,62 @@ def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
     if record is not None:
         payload["record_path"] = record["path"]
         payload["record_row_count"] = record["row_count"]
+    if record_warning is not None:
+        payload["record_warning"] = record_warning
+        payload["message"] = f"{payload['message']} {record_warning['message']}"
     return payload
+
+
+def _apply_iso_operations(operations: list[RenameOperation]) -> None:
+    try:
+        _apply_operations(operations)
+    except Exception as exc:
+        lock_exc = _first_file_lock_error(exc)
+        if lock_exc is not None:
+            locked_path = _exception_path(lock_exc) or operations[0].source
+            locked_name = locked_path.name if locked_path else "PDF"
+            raise ValueError(
+                f"PDF 正被其他程式開啟，請關閉後重試：{locked_name}。已完成 0 筆，未動 {len(operations)} 筆。"
+            ) from exc
+        raise
+
+
+def _record_apply_csv_safely(
+    request: IsoWorkflowRequest,
+    rows: list[dict[str, Any]],
+    operations: list[RenameOperation],
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    if not request.run_id:
+        return None, None
+    try:
+        return _record_apply_csv(request, rows, operations), None
+    except (PermissionError, OSError) as exc:
+        if _is_csv_lock_error(exc):
+            path = _apply_record_path(request)
+            return None, {
+                "path": str(path),
+                "message": f"記錄檔被佔用：{path}，更名已完成，記錄稍後補寫。",
+            }
+        raise
+
+
+def _first_file_lock_error(exc: BaseException) -> BaseException | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, PermissionError) or getattr(current, "winerror", None) in {32, 33}:
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _exception_path(exc: BaseException) -> Path | None:
+    for name in ("filename", "filename2"):
+        value = getattr(exc, name, None)
+        if value:
+            return Path(str(value))
+    return None
 
 
 def _record_apply_csv(
@@ -759,7 +902,7 @@ def _record_apply_csv(
     if not request.run_id:
         return None
     created_at = _now()
-    record_path = iso_run_root() / request.run_id / "artifacts" / "apply_rename_record.csv"
+    record_path = _apply_record_path(request)
     record_path.parent.mkdir(parents=True, exist_ok=True)
     operation_by_source = {str(operation.source): operation for operation in operations}
     columns = [
@@ -793,6 +936,10 @@ def _record_apply_csv(
             exported_row["created_at"] = created_at
             writer.writerow(exported_row)
     return {"path": str(record_path), "row_count": len(rows)}
+
+
+def _apply_record_path(request: IsoWorkflowRequest) -> Path:
+    return iso_run_root() / str(request.run_id or "") / "artifacts" / "apply_rename_record.csv"
 
 
 def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -1324,7 +1471,13 @@ def _workflow_policy_from_request(request: IsoWorkflowRequest) -> Any:
     )
 
 
-def _workflow_request_payload(request: IsoWorkflowRequest, *, job_id: str, shadow: dict[str, Any] | None = None) -> dict[str, Any]:
+def _workflow_request_payload(
+    request: IsoWorkflowRequest,
+    *,
+    job_id: str,
+    shadow: dict[str, Any] | None = None,
+    one_click: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload = {
         "action": "workflow_run",
         "workflow_path": str(request.workflow_path or ""),
@@ -1338,7 +1491,156 @@ def _workflow_request_payload(request: IsoWorkflowRequest, *, job_id: str, shado
     }
     if shadow:
         payload["shadow"] = shadow
+    if one_click:
+        payload["one_click"] = one_click
     return payload
+
+
+def _workflow_request_for_one_click(request: IsoWorkflowRequest) -> tuple[IsoWorkflowRequest, dict[str, Any] | None]:
+    if not _is_one_click_workflow_request(request):
+        return request, None
+    flag = _read_one_click_engine_flag()
+    if flag.get("engine") != "workflow":
+        raise ValueError("一鍵節點路徑尚未啟用。請先在節點式分頁通過 gate 後啟用。")
+    expected_hash = str(flag.get("graph_hash") or "")
+    actual_hash = _one_click_graph_hash()
+    if expected_hash != actual_hash:
+        raise ValueError("一鍵圖已被修改，請重新啟用換軌。")
+    return (
+        replace(
+            request,
+            workflow_path=ONE_CLICK_WORKFLOW_PATH,
+            workflow=None,
+            workflow_allow=(),
+            workflow_confirm=(),
+            workflow_mode="run",
+        ),
+        {
+            "enabled_at": flag.get("enabled_at") or "",
+            "graph_hash": actual_hash,
+            "requested_at": _now(),
+        },
+    )
+
+
+def _is_one_click_workflow_request(request: IsoWorkflowRequest) -> bool:
+    payload = request.workflow
+    if not isinstance(payload, dict):
+        return False
+    if "nodes" in payload or "workflow_id" in payload:
+        return False
+    return bool(payload.get("one_click"))
+
+
+def _one_click_graph_hash() -> str:
+    from launcher.plugins.iso_tools.workflow.schema import graph_content_hash, load_workflow
+
+    return graph_content_hash(load_workflow(_resolve_workflow_path(ONE_CLICK_WORKFLOW_PATH)))
+
+
+def _one_click_engine_path() -> Path:
+    return runtime_root() / ".runtime" / "flags" / "iso-one-click-engine.json"
+
+
+def _engine_audit_path() -> Path:
+    return runtime_root() / ".runtime" / "runs" / "engine_audit.jsonl"
+
+
+def _read_one_click_engine_flag() -> dict[str, Any]:
+    path = _one_click_engine_path()
+    if not path.exists():
+        return {"schema_version": 1, "engine": "legacy"}
+    try:
+        payload = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        _append_engine_audit("invalid_flag", {"reason": "unreadable", "flag_path": str(path)})
+        return {"schema_version": 1, "engine": "legacy", "invalid_flag": True}
+    if payload.get("schema_version") != 1 or payload.get("engine") not in {"legacy", "workflow"}:
+        _append_engine_audit("invalid_flag", {"reason": "schema", "flag_path": str(path)})
+        return {"schema_version": 1, "engine": "legacy", "invalid_flag": True}
+    return payload
+
+
+def _write_one_click_engine_flag(payload: dict[str, Any]) -> dict[str, Any]:
+    path = _one_click_engine_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(path, payload)
+    return payload
+
+
+def _one_click_engine_payload(flag: dict[str, Any], *, auto_reverted: bool) -> dict[str, Any]:
+    flag_path = _one_click_engine_path()
+    return {
+        "schema_version": 1,
+        "action": "workflow_one_click_engine",
+        "created_at": _now(),
+        "engine": flag.get("engine") or "legacy",
+        "enabled": flag.get("engine") == "workflow",
+        "auto_reverted": auto_reverted,
+        "flag_path": str(flag_path),
+        "flag_exists": flag_path.exists(),
+        "audit_path": str(_engine_audit_path()),
+        "graph_hash": flag.get("graph_hash") or "",
+        "gate_snapshot": flag.get("gate_snapshot") or None,
+        "invalid_flag": bool(flag.get("invalid_flag")),
+    }
+
+
+def _append_engine_audit(event: str, detail: dict[str, Any]) -> None:
+    path = _engine_audit_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"schema_version": 1, "event": event, "at": _now(), **detail}
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+def _should_auto_revert_one_click() -> bool:
+    jobs = _recent_one_click_jobs(limit=2)
+    return len(jobs) >= 2 and all(_one_click_job_failed(job) for job in jobs[:2])
+
+
+def _recent_one_click_jobs(*, limit: int) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    root = _workflow_job_root()
+    if not root.exists():
+        return []
+    for job_dir in root.iterdir():
+        if not job_dir.is_dir():
+            continue
+        request_path = job_dir / "request.json"
+        job_path = job_dir / "job.json"
+        if not request_path.exists() or not job_path.exists():
+            continue
+        try:
+            request_payload = _read_json(request_path)
+            if not isinstance(request_payload.get("one_click"), dict):
+                continue
+            job = _read_json(job_path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        state = str(job.get("state") or "")
+        result = job.get("result") if isinstance(job.get("result"), dict) else {}
+        result_status = str(result.get("status") or "")
+        if state in {"queued", "running", "cancel_requested"} or result_status == "":
+            continue
+        jobs.append(
+            {
+                "job_id": job.get("workflow_job_id") or job.get("job_id") or job_dir.name,
+                "state": state,
+                "result_status": result_status,
+                "updated_at": job.get("updated_at") or job.get("created_at") or "",
+            }
+        )
+    jobs.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return jobs[:limit]
+
+
+def _one_click_job_failed(job: dict[str, Any]) -> bool:
+    state = str(job.get("state") or "")
+    result_status = str(job.get("result_status") or "")
+    if state == "cancelled" or result_status == "cancelled":
+        return False
+    return state == "failed" or result_status in {"failed", "completed_with_blocked"}
 
 
 def _shadow_workflow_inputs_from_iso_request(payload: dict[str, Any]) -> dict[str, Any]:

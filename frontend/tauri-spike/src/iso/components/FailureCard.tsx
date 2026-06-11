@@ -1,4 +1,4 @@
-import { AlertTriangle, Copy, FileJson, PanelRightOpen } from "lucide-react";
+import { AlertTriangle, Copy, FileJson, PanelRightOpen, RefreshCcw } from "lucide-react";
 
 export interface IsoFailureInfo {
   run_id?: string;
@@ -13,6 +13,7 @@ export function FailureCard({
   copied,
   exportBusy,
   failure,
+  fallbackAction,
   onCopy,
   onExport,
   onOpenWorkbench,
@@ -21,6 +22,7 @@ export function FailureCard({
   copied: boolean;
   exportBusy: boolean;
   failure: IsoFailureInfo;
+  fallbackAction?: { label: string; disabled?: boolean; onClick: () => void };
   onCopy: () => void;
   onExport: () => void;
   onOpenWorkbench: () => void;
@@ -63,6 +65,12 @@ export function FailureCard({
             <PanelRightOpen size={15} />
             <span>開啟工作台</span>
           </button>
+          {fallbackAction ? (
+            <button className="action-button" disabled={fallbackAction.disabled} onClick={fallbackAction.onClick} type="button">
+              <RefreshCcw size={15} />
+              <span>{fallbackAction.label}</span>
+            </button>
+          ) : null}
         </div>
       </div>
     </section>
