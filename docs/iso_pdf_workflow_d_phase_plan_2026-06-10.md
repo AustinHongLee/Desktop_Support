@@ -431,3 +431,171 @@ main bundle gzip 53.61 kB; vendor-xyflow gzip 101.64 kB; no large chunk warning
    ```
 
 7. 回報使用者：D 期已完成/或 gate 尚缺幾筆 real evidence；不要開 E 期內容，除非使用者明確同意。
+
+## 12. D 期完工 Postscript（2026-06-11）
+
+### 結論
+
+D 期已完成「影子驗證 + switchover gate + worker progress 節流」的先導施工；沒有進入 E 期範圍。  
+E 期換軌 gate 目前仍是 `ready=false`，原因是最近 parity window 只有 `4/5` 筆，這是正確的保守輸出；目前沒有 parity violation。
+
+### Commit 清單
+
+```text
+bb3bd62 docs(iso-workflow): add d phase plan (D0)
+43fe1b7 test(smoke): follow iso view extraction in smoke checks (D0)
+8cad29c feat(iso-workflow): add shadow run with parity recording (D1)
+2852783 feat(iso-workflow): add switchover gate evaluator (D2)
+0497f19 feat(iso-workflow): shadow verify entry and switchover gate panel (D3)
+b98a3b4 perf(iso): throttle worker progress writes for large pdfs (D4)
+64c6238 docs(iso-workflow): record d5 pause point
+```
+
+### 2026-06-11 最終驗證
+
+```text
+python -m pytest tests -q
+461 passed in 56.90s
+
+cd frontend\tauri-spike
+npx tsc --noEmit
+npm run test:unit
+Test Files 1 passed (1)
+Tests 3 passed (3)
+
+npm run build
+main bundle gzip 53.61 kB
+vendor-xyflow gzip 101.64 kB
+no large chunk warning
+```
+
+昨日 D5 分組矩陣也已全綠（見本文件第 11 節）：Shadow、Gate、Parity、防污染 + 安全契約、Backend actions、Worker 進度全部通過。
+
+### Real Shadow Sample
+
+資料夾：`C:\Users\a0976\Downloads\t`
+
+```json
+{
+  "iso_job_id": "d5-real-iso-job",
+  "iso_state": "completed",
+  "iso_rows": 4,
+  "workflow_job_id": "shadow-c8089b369a85",
+  "workflow_state": "completed",
+  "parity_summary": {
+    "status": "recorded",
+    "equal": true,
+    "violation_count": 0,
+    "acceptable_diff_count": 25,
+    "report_path": "C:\\Users\\a0976\\Documents\\GitHub\\桌面輔助系統\\.runtime\\runs\\parity\\20260610_175401_ade94f\\report.json"
+  }
+}
+```
+
+### CLI Real Parity Sample
+
+輸入檔：`.runtime\temp\d5_real_inputs.json`  
+命令：
+
+```powershell
+python -m launcher.plugins.iso_tools.workflow.cli parity --inputs-json .runtime\temp\d5_real_inputs.json --sample-kind real --json
+```
+
+結果：
+
+```json
+{
+  "schema_version": 2,
+  "action": "workflow_parity",
+  "trigger": "cli",
+  "sample_kind": "real",
+  "equal": true,
+  "violations": [],
+  "acceptable_diff_count": 25,
+  "legacy_digest": "sha256:e1b8a6dfb31f03af9397656f19502e768539d42231dae1f1a33930bae55e3841",
+  "workflow_digest": "sha256:e1b8a6dfb31f03af9397656f19502e768539d42231dae1f1a33930bae55e3841",
+  "report_path": "C:\\Users\\a0976\\Documents\\GitHub\\桌面輔助系統\\.runtime\\runs\\parity\\20260611_080126_a2fe3a\\report.json"
+}
+```
+
+### Gate Snapshot
+
+命令：
+
+```powershell
+python -m launcher.plugins.iso_tools.workflow.cli gate --json
+```
+
+Exit code：`7`（not ready，非錯誤）
+
+```json
+{
+  "schema_version": 1,
+  "action": "workflow_switchover_gate",
+  "ready": false,
+  "headline": "尚未可換軌（2/4）",
+  "evaluated_at": "2026-06-11T08:01:45",
+  "conditions": [
+    {
+      "id": "recent_all_equal",
+      "title": "最近 5 筆 parity 全一致",
+      "met": false,
+      "detail": "目前 4/5 筆，equal 4/5 筆。"
+    },
+    {
+      "id": "real_samples",
+      "title": "最近 5 筆至少 2 筆 real sample",
+      "met": true,
+      "detail": "已達成"
+    },
+    {
+      "id": "pollution_suite",
+      "title": "防污染與前端安全契約綠燈",
+      "met": null,
+      "detail": "python -m pytest tests/test_iso_workflow_pollution.py tests/test_frontend_safety_contract.py -q"
+    },
+    {
+      "id": "shadow_design",
+      "title": "Shadow run 設計書已入庫",
+      "met": true,
+      "detail": "docs\\iso_pdf_workflow_d_phase_plan_2026-06-10.md"
+    }
+  ],
+  "window_summary": [
+    {
+      "created_at": "2026-06-11T08:01:26",
+      "trigger": "cli",
+      "sample_kind": "real",
+      "equal": true,
+      "violation_count": 0
+    },
+    {
+      "created_at": "2026-06-10T17:54:01",
+      "trigger": "shadow",
+      "sample_kind": "real",
+      "equal": true,
+      "violation_count": 0
+    },
+    {
+      "created_at": "2026-06-10T17:18:37",
+      "trigger": "cli",
+      "sample_kind": "real",
+      "equal": true,
+      "violation_count": 0
+    },
+    {
+      "created_at": "2026-06-10T16:35:37",
+      "trigger": "cli",
+      "sample_kind": "unknown",
+      "equal": true,
+      "violation_count": 0
+    }
+  ]
+}
+```
+
+### 殘留與下一步
+
+- D 期可合流；gate `ready=false` 不代表 D 期失敗，只表示還不能進 E 期真換軌。
+- E 期若要開工，至少要先補足最近 5 筆 parity window，並由 gate 顯示 `recent_all_equal=true`；`pollution_suite` 仍是手動 attest 條件。
+- 不要在沒有新施工書的情況下做 E 期內容：不改一鍵執行語意、不做自動 shadow、不做可編輯節點畫布、不動 normalize 規則版本。
