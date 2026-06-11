@@ -32,7 +32,17 @@ def test_safe_workflow_run_has_single_frontend_call_path_and_no_effect_autorun()
     call_count = sum(text.count("runIsoNodeWorkflowSafe(") for text in sources.values())
     assert call_count <= 2
 
-    forbidden = ('"workflow_run"', "'workflow_run'", "startIsoBatchDetect(", "runIsoNodeWorkflowSafe(", "runIsoShadowVerify(", "setIsoShadowFlag(")
+    forbidden = (
+        '"workflow_run"',
+        "'workflow_run'",
+        "startIsoBatchDetect(",
+        "runIsoNodeWorkflowSafe(",
+        "runIsoOneClickWorkflow(",
+        "loadIsoOneClickEngine(",
+        "setIsoOneClickEngine(",
+        "runIsoShadowVerify(",
+        "setIsoShadowFlag(",
+    )
     for path, text in sources.items():
         for block in _call_blocks(text, "useEffect"):
             for token in forbidden:
@@ -67,6 +77,18 @@ def test_shadow_verify_has_single_click_path_and_no_generic_ui_action() -> None:
         if path.name == "isoWorkflow.ts":
             continue
         assert "workflow_shadow_run" not in text
+
+
+def test_one_click_workflow_primary_is_click_gated_and_switch_is_single_path() -> None:
+    sources = {path: path.read_text(encoding="utf-8") for path in _frontend_sources()}
+    assert sum(text.count("runIsoOneClickWorkflow(") for text in sources.values()) == 2
+    assert sum(text.count("setIsoOneClickEngine(") for text in sources.values()) == 2
+
+    for path, text in sources.items():
+        if path.name == "isoWorkflow.ts":
+            continue
+        assert "workflow_one_click_engine" not in text
+        assert "workflow_set_one_click_engine" not in text
 
 
 def test_policy_keeps_guarded_side_effects_out_of_auto_and_replay() -> None:

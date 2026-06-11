@@ -613,7 +613,9 @@ def workflow_read_run_log_action(request: IsoWorkflowRequest) -> dict[str, Any]:
 def workflow_plan_from_run_action(request: IsoWorkflowRequest) -> dict[str, Any]:
     from launcher.plugins.iso_tools.workflow.projection import plan_from_run
 
-    return plan_from_run(_workflow_run_dir_required(request))
+    payload = request.workflow if request.workflow is not None else request.workflow_inputs or {}
+    one_click_guard = bool(payload.get("one_click_guard")) if isinstance(payload, dict) else False
+    return plan_from_run(_workflow_run_dir_required(request), one_click_guard=one_click_guard)
 
 
 def workflow_read_artifact_action(request: IsoWorkflowRequest) -> dict[str, Any]:
@@ -1508,6 +1510,7 @@ def _write_one_click_engine_flag(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _one_click_engine_payload(flag: dict[str, Any], *, auto_reverted: bool) -> dict[str, Any]:
+    flag_path = _one_click_engine_path()
     return {
         "schema_version": 1,
         "action": "workflow_one_click_engine",
@@ -1515,7 +1518,8 @@ def _one_click_engine_payload(flag: dict[str, Any], *, auto_reverted: bool) -> d
         "engine": flag.get("engine") or "legacy",
         "enabled": flag.get("engine") == "workflow",
         "auto_reverted": auto_reverted,
-        "flag_path": str(_one_click_engine_path()),
+        "flag_path": str(flag_path),
+        "flag_exists": flag_path.exists(),
         "audit_path": str(_engine_audit_path()),
         "graph_hash": flag.get("graph_hash") or "",
         "gate_snapshot": flag.get("gate_snapshot") or None,

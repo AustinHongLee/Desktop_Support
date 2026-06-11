@@ -33,7 +33,9 @@ export function AutopilotView({
   debugBundleBusy,
   echoLines,
   elapsedSec,
+  engineBadge,
   exportFailureBundle,
+  fallbackToLegacyOneClick,
   failureCopied,
   isoFailure,
   issueRows,
@@ -59,13 +61,16 @@ export function AutopilotView({
   terminalRef,
   activePilotText,
   warnCount,
+  legacyFallbackAvailable,
 }: {
   blockedCount: number;
   copyFailureForEngineer: () => void;
   debugBundleBusy: boolean;
   echoLines: EchoLine[];
   elapsedSec: number;
+  engineBadge: string;
   exportFailureBundle: () => void;
+  fallbackToLegacyOneClick: () => void;
   failureCopied: boolean;
   isoFailure: IsoFailureInfo | null;
   issueRows: IsoPlanRow[];
@@ -91,6 +96,7 @@ export function AutopilotView({
   terminalRef: Ref<HTMLDivElement>;
   activePilotText: string;
   warnCount: number;
+  legacyFallbackAvailable: boolean;
 }) {
   return (
     <div className="iso-autopilot-grid one-click-grid">
@@ -105,6 +111,7 @@ export function AutopilotView({
               <strong>{activePilotText}</strong>
             </div>
           ) : null}
+          {engineBadge ? <div className="engine-chip">{engineBadge}</div> : null}
         </div>
 
         <div className="pipeline">
@@ -174,6 +181,7 @@ export function AutopilotView({
             onExport={exportFailureBundle}
             onOpenWorkbench={openFailureWorkbench}
             probableCause={probableFailureCause}
+            fallbackAction={legacyFallbackAvailable ? { label: "改用傳統路徑重跑", onClick: fallbackToLegacyOneClick, disabled: oneClickBusy } : undefined}
           />
         ) : null}
 

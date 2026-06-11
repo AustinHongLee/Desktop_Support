@@ -18,14 +18,17 @@ import {
   listIsoParityReports,
   listIsoWorkflowNodes,
   listIsoWorkflowRuns,
+  loadIsoOneClickEngine,
   loadIsoSwitchoverGate,
   loadIsoWorkflowJobStatus,
   loadIsoNodeWorkflow,
   readIsoWorkflowRunLog,
   runIsoNodeWorkflowSafe,
+  setIsoOneClickEngine,
   setIsoShadowFlag,
   type IsoNodeWorkflowJobPayload,
   type IsoNodeWorkflowListPayload,
+  type IsoOneClickEnginePayload,
   type IsoNodeWorkflowRunLog,
   type IsoNodeWorkflowRunSummary,
   type IsoNodeWorkflowValidationPayload,
@@ -80,6 +83,8 @@ export function WorkflowInspector({
   const [graphCopied, setGraphCopied] = useState(false);
   const [selectedCanvasNodeId, setSelectedCanvasNodeId] = useState("");
   const [shadowFlagBusy, setShadowFlagBusy] = useState(false);
+  const [oneClickEngine, setOneClickEngineState] = useState<IsoOneClickEnginePayload | null>(null);
+  const [engineBusy, setEngineBusy] = useState(false);
   const job = workflowJob === undefined ? localJob : workflowJob;
   const updateJob = setWorkflowJob ?? setLocalJob;
   const gate = gateVerdict === undefined ? localGateVerdict : gateVerdict;
@@ -107,6 +112,11 @@ export function WorkflowInspector({
   const sideEffectPreview = useMemo(() => buildSideEffectPreview(graphNodes, specByType), [graphNodes, specByType]);
   const terminalJob = Boolean(job && !isWorkflowJobRunning(job));
   const graphJson = useMemo(() => graph?.graph ? JSON.stringify(graph.graph, null, 2) : "", [graph]);
+  const oneClickEngineLabel = oneClickEngine?.flag_exists
+    ? oneClickEngine.engine === "workflow"
+      ? "節點路徑（驗證中）"
+      : "傳統路徑"
+    : "傳統路徑（未設旗標）";
 
   useEffect(() => {
     if (!job?.workflow_job_id || !isWorkflowJobRunning(job)) {
@@ -161,12 +171,13 @@ export function WorkflowInspector({
     setLoading(true);
     setError("");
     try {
-      const [nodesPayload, graphPayload, runsPayload, parityPayload, gatePayload] = await Promise.all([
+      const [nodesPayload, graphPayload, runsPayload, parityPayload, gatePayload, enginePayload] = await Promise.all([
         listIsoWorkflowNodes(),
         loadIsoNodeWorkflow(SAFE_WORKFLOW_PATH),
         listIsoWorkflowRuns(),
         listIsoParityReports(),
         loadIsoSwitchoverGate(),
+        loadIsoOneClickEngine(),
       ]);
       setNodeCatalog(nodesPayload);
       setGraph(graphPayload);
@@ -174,6 +185,7 @@ export function WorkflowInspector({
       setParityReports(parityPayload.reports);
       updateGate(gatePayload);
       updateShadowFlag(Boolean(gatePayload.shadow_flag_enabled));
+      setOneClickEngineState(enginePayload);
       setLoaded(true);
       const runId = selectedRunId || runsPayload.runs[0]?.run_id || "";
       if (runId) {
@@ -311,6 +323,33 @@ export function WorkflowInspector({
     } finally {
       setShadowFlagBusy(false);
     }
+  }
+
+  async function switchOneClickEngine(engine: "legacy" | "workflow") {
+    if (engineBusy) {
+      return;
+    }
+    setEngineBusy(true);
+    setError("");
+    try {
+      const next = await setIsoOneClickEngine(engine);
+      setOneClickEngineState(next);
+      const gatePayload = await loadIsoSwitchoverGate();
+      updateGate(gatePayload);
+      updateShadowFlag(Boolean(gatePayload.shadow_flag_enabled));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setEngineBusy(false);
+    }
+  }
+
+  function requestEnableOneClickEngine() {
+    const headline = gate?.headline || "尚未讀取 gate";
+    if (!window.confirm(`啟用後，一鍵命名會改走節點路徑（仍保留傳統 fallback）。\n\n目前 gate：${headline}`)) {
+      return;
+    }
+    void switchOneClickEngine("workflow");
   }
 
   return (
@@ -564,6 +603,17 @@ export function WorkflowInspector({
             <div style={styles.gateNote}>
               <span>{gate?.headline || "尚未讀取換軌 gate。"}</span>
               <code style={styles.code}>python -m launcher.plugins.iso_tools.workflow.cli gate --json</code>
+              <div style={styles.engineSwitch}>
+                <span>一鍵引擎：<strong>{oneClickEngineLabel}</strong></span>
+                <button className="action-button" type="button" onClick={requestEnableOneClickEngine} disabled={!isTauri() || engineBusy || oneClickEngine?.engine === "workflow"}>
+                  <GitBranch size={14} />
+                  <span>{engineBusy ? "切換中" : "啟用節點路徑"}</span>
+                </button>
+                <button className="action-button" type="button" onClick={() => void switchOneClickEngine("legacy")} disabled={!isTauri() || engineBusy || Boolean(oneClickEngine?.flag_exists && oneClickEngine.engine === "legacy")}>
+                  <Route size={14} />
+                  <span>切回傳統</span>
+                </button>
+              </div>
               <button className="action-button" type="button" onClick={() => void toggleShadowFlag()} disabled={!isTauri() || shadowFlagBusy}>
                 <ShieldCheck size={14} />
                 <span>{!isTauri() ? "桌面版啟用" : shadowFlagBusy ? "更新中" : shadowFlag ? "關閉影子驗證" : "開啟影子驗證"}</span>
@@ -1152,6 +1202,12 @@ const styles = {
     gap: 7,
     justifyContent: "space-between",
     padding: 10,
+  },
+  engineSwitch: {
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 7,
   },
   gateChecklist: {
     display: "grid",
