@@ -28,12 +28,15 @@ type NodeDetailPanelProps = {
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
   onWorkflowInputChange?: (nodeId: string, field: string, value: unknown) => void;
+  onApplyPlan?: () => void;
+  onExportPlan?: () => void;
   plan: IsoWorkflowPlan | null;
   preview: IsoPreviewPayload | null;
   previewBusy?: boolean;
   previewError?: string;
   rerunEnabled?: boolean;
   summary?: NodeCardSummary;
+  workbenchActionBusy?: "" | "apply" | "export";
   workflowInputs?: Record<string, unknown>;
 };
 
@@ -45,12 +48,15 @@ export function NodeDetailPanel({
   onRunFrom,
   onRunNode,
   onWorkflowInputChange,
+  onApplyPlan,
+  onExportPlan,
   plan,
   preview,
   previewBusy = false,
   previewError = "",
   rerunEnabled = false,
   summary,
+  workbenchActionBusy = "",
   workflowInputs = {},
 }: NodeDetailPanelProps) {
   if (!node) {
@@ -79,7 +85,7 @@ export function NodeDetailPanel({
           { label: "重跑下游", disabled: !rerunEnabled, onClick: () => onRunFrom?.(node.node_id), tone: "primary" },
         ]}
       />
-      {renderNodeDetail({ node, onSelectNode, onWorkflowInputChange, plan, preview, previewBusy, previewError, workflowInputs })}
+      {renderNodeDetail({ node, onApplyPlan, onExportPlan, onSelectNode, onWorkflowInputChange, plan, preview, previewBusy, previewError, workbenchActionBusy, workflowInputs })}
       <LogBlock nodeLog={nodeLog} />
     </div>
   );
@@ -87,14 +93,17 @@ export function NodeDetailPanel({
 
 function renderNodeDetail({
   node,
+  onApplyPlan,
+  onExportPlan,
   onSelectNode,
   onWorkflowInputChange,
   plan,
   preview,
   previewBusy,
   previewError,
+  workbenchActionBusy,
   workflowInputs,
-}: Pick<NodeDetailPanelProps, "node" | "onSelectNode" | "onWorkflowInputChange" | "plan" | "preview" | "previewBusy" | "previewError" | "workflowInputs"> & { node: IsoNodeWorkflowInstance }) {
+}: Pick<NodeDetailPanelProps, "node" | "onApplyPlan" | "onExportPlan" | "onSelectNode" | "onWorkflowInputChange" | "plan" | "preview" | "previewBusy" | "previewError" | "workbenchActionBusy" | "workflowInputs"> & { node: IsoNodeWorkflowInstance }) {
   if (node.node_id === "pdf_source" || node.node_id === "discover") {
     return <SourceDetail onChange={onWorkflowInputChange} plan={plan} workflowInputs={workflowInputs ?? {}} />;
   }
@@ -126,10 +135,10 @@ function renderNodeDetail({
     );
   }
   if (node.node_id === "export_csv") {
-    return <GuardedActionDetail action="export" plan={plan} />;
+    return <GuardedActionDetail action="export" busy={workbenchActionBusy === "export"} onAction={onExportPlan} plan={plan} />;
   }
   if (node.node_id === "apply_rename") {
-    return <GuardedActionDetail action="apply" plan={plan} />;
+    return <GuardedActionDetail action="apply" busy={workbenchActionBusy === "apply"} onAction={onApplyPlan} plan={plan} />;
   }
   return <GenericDetail node={node} />;
 }
@@ -297,7 +306,17 @@ function PilotDetail({ plan }: { plan: IsoWorkflowPlan | null }) {
   );
 }
 
-function GuardedActionDetail({ action, plan }: { action: "apply" | "export"; plan: IsoWorkflowPlan | null }) {
+function GuardedActionDetail({
+  action,
+  busy,
+  onAction,
+  plan,
+}: {
+  action: "apply" | "export";
+  busy?: boolean;
+  onAction?: () => void;
+  plan: IsoWorkflowPlan | null;
+}) {
   const rows = plan?.rows ?? [];
   const readyRows = rows.filter((row) => row.status === "ready" && row.selected);
   const blocked = rows.filter((row) => row.status === "blocked" || row.status === "warn");
@@ -316,7 +335,7 @@ function GuardedActionDetail({ action, plan }: { action: "apply" | "export"; pla
         ["來源 run", plan?.source_run_id || plan?.provenance?.workflow_run_id || "-"],
       ]} />
       <SampleRows rows={(readyRows.length ? readyRows : rows).slice(0, 6).map((row) => [row.source_name, row.new_name || "-"])} />
-      <ActionRow actions={[{ label: action === "export" ? "匯出草稿 CSV" : "開啟套用確認", disabled: true, tone: "primary" }]} />
+      <ActionRow actions={[{ label: busy ? "處理中" : action === "export" ? "匯出草稿 CSV" : "開啟套用確認", disabled: busy || !plan || (action === "apply" && !readyRows.length), onClick: onAction, tone: "primary" }]} />
     </div>
   );
 }

@@ -93,6 +93,14 @@ def test_workbench_param_changes_do_not_execute_workflow_actions() -> None:
                 assert token not in block, f"{path} has {token} in useEffect/onChange; workbench edits must stay dirty-only"
 
 
+def test_workbench_apply_is_confirmed_and_uses_sanctioned_action() -> None:
+    text = (FRONTEND_SRC / "iso" / "WorkflowInspector.tsx").read_text(encoding="utf-8")
+    assert "exportIsoPlanCsv(" in text
+    apply_index = text.find("applyIsoPlan(")
+    assert apply_index >= 0
+    assert "window.confirm" in text[max(0, apply_index - 900) : apply_index]
+
+
 def test_shadow_verify_has_single_click_path_and_no_generic_ui_action() -> None:
     sources = {path: path.read_text(encoding="utf-8") for path in _frontend_sources()}
     assert sum(text.count("runIsoShadowVerify(") for text in sources.values()) == 2

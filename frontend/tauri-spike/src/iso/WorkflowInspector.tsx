@@ -15,6 +15,8 @@ import type { CSSProperties, ReactNode, SyntheticEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   cancelIsoWorkflowJob,
+  applyIsoPlan,
+  exportIsoPlanCsv,
   listIsoParityReports,
   listIsoWorkflowNodes,
   listIsoWorkflowRuns,
@@ -43,8 +45,10 @@ import {
   type IsoNodeWorkflowSpec,
   type IsoNodeWorkflowValidationPayload,
   type IsoParityReportSummary,
+  type IsoPlanRow,
   type IsoPreviewPayload,
   type IsoSwitchoverGateVerdict,
+  type IsoWorkflowRequest,
   type IsoWorkflowPlan,
 } from "../isoWorkflow";
 import { compactPath, DEFAULT_DRAWING_REGION, DEFAULT_SERIAL_REGION } from "./helpers";
@@ -95,6 +99,8 @@ export function WorkflowInspector({
   const [nodePreviewError, setNodePreviewError] = useState("");
   const [overlayInputs, setOverlayInputs] = useState<Record<string, unknown>>({});
   const [dirtyNodeIds, setDirtyNodeIds] = useState<string[]>([]);
+  const [workbenchActionBusy, setWorkbenchActionBusy] = useState<"" | "apply" | "export">("");
+  const [workbenchActionMessage, setWorkbenchActionMessage] = useState("");
   const [safeRunConfirmOpen, setSafeRunConfirmOpen] = useState(false);
   const [safeRunBusy, setSafeRunBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -470,6 +476,49 @@ export function WorkflowInspector({
     }
   }
 
+  async function exportWorkbenchPlan() {
+    if (!projectedPlan || workbenchActionBusy) {
+      return;
+    }
+    setWorkbenchActionBusy("export");
+    setRunError("");
+    setWorkbenchActionMessage("");
+    try {
+      const result = await exportIsoPlanCsv(workbenchPlanRequest(projectedPlan, safeInputs, projectedPlan.rows));
+      setWorkbenchActionMessage(result.export_path ? `已匯出命名草稿 CSV：${result.export_path}` : result.message);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setWorkbenchActionBusy("");
+    }
+  }
+
+  async function applyWorkbenchPlan() {
+    if (!projectedPlan || workbenchActionBusy) {
+      return;
+    }
+    const rows = projectedPlan.rows.filter((row) => row.selected && row.status === "ready");
+    if (!rows.length) {
+      setRunError("沒有可套用的 ready 列。");
+      return;
+    }
+    if (!window.confirm(`將套用更名 ${rows.length} 筆。此動作會實際改名 PDF，並寫入既有更名記錄。是否繼續？`)) {
+      return;
+    }
+    setWorkbenchActionBusy("apply");
+    setRunError("");
+    setWorkbenchActionMessage("");
+    try {
+      const result = await applyIsoPlan(workbenchPlanRequest(projectedPlan, safeInputs, rows));
+      setWorkbenchActionMessage(result.message);
+      await refreshRuns(rerunSourceRunId);
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setWorkbenchActionBusy("");
+    }
+  }
+
   async function confirmSafeRun() {
     if (safeRunBusy || isWorkflowJobRunning(job)) {
       return;
@@ -624,6 +673,11 @@ export function WorkflowInspector({
             <span>{runError}</span>
           </div>
         ) : null}
+        {workbenchActionMessage ? (
+          <div style={styles.notice}>
+            <span>{workbenchActionMessage}</span>
+          </div>
+        ) : null}
         {!safeRunReady ? (
           <div style={styles.notice}>
             <span>{safeRunBlockReason(graph?.valid === true, hasPdfSource, hasIsoSource)}</span>
@@ -685,12 +739,15 @@ export function WorkflowInspector({
               onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
               onSelectNode={setSelectedCanvasNodeId}
               onWorkflowInputChange={handleWorkflowInputChange}
+              onApplyPlan={() => void applyWorkbenchPlan()}
+              onExportPlan={() => void exportWorkbenchPlan()}
               plan={projectedPlan}
               preview={nodePreview}
               previewBusy={nodePreviewBusy}
               previewError={nodePreviewError || projectionError}
               rerunEnabled={canRerun}
               summary={selectedCanvasNode ? nodeSummaries[selectedCanvasNode.node_id] : undefined}
+              workbenchActionBusy={workbenchActionBusy}
               workflowInputs={safeInputs}
             />
           )}
@@ -1452,6 +1509,27 @@ function inputPreviewRows(inputs: Record<string, unknown>): Array<[string, strin
     .map(([key, value]) => [key, formatInputPreview(value)]);
 }
 
+function workbenchPlanRequest(plan: IsoWorkflowPlan, inputs: Record<string, unknown>, rows: IsoPlanRow[]): IsoWorkflowRequest {
+  const source = plan.source;
+  return {
+    action: "apply",
+    work_folder: stringInput(inputs.work_folder ?? source.work_folder),
+    combine_pdf: stringInput(inputs.combine_pdf ?? source.combine_pdf),
+    page_folder: stringInput(inputs.page_folder ?? source.page_folder),
+    iso_list: stringInput(inputs.iso_list ?? source.iso_list),
+    sheet_name: stringInput(inputs.sheet_name ?? source.sheet_name),
+    serial_col: numberInput(inputs.serial_col ?? source.serial_col),
+    line_col: numberInput(inputs.line_col ?? source.line_col),
+    pattern: stringInput(inputs.pattern ?? source.pattern),
+    serial_region: regionOrDefault(inputs.serial_region ?? source.serial_region, DEFAULT_SERIAL_REGION),
+    drawing_region: regionOrDefault(inputs.drawing_region ?? source.drawing_region, DEFAULT_DRAWING_REGION),
+    confidence_threshold: numberInput(inputs.confidence_threshold ?? source.confidence_threshold) || 0.7,
+    detect_serials: booleanInput(inputs.detect_serials ?? source.detect_serials),
+    run_id: plan.source_run_id || plan.provenance?.workflow_run_id,
+    rows,
+  };
+}
+
 function formatInputPreview(value: unknown): string {
   if (typeof value === "string") {
     return compactPath(value);
@@ -1460,6 +1538,28 @@ function formatInputPreview(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function stringInput(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function numberInput(value: unknown): number | "" {
+  if (value === "" || value === null || value === undefined) {
+    return "";
+  }
+  const numeric = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : "";
+}
+
+function booleanInput(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.toLowerCase() !== "false";
+  }
+  return Boolean(value);
 }
 
 function regionOrDefault(value: unknown, fallback: typeof DEFAULT_SERIAL_REGION): typeof DEFAULT_SERIAL_REGION {
