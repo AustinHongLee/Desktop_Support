@@ -91,6 +91,8 @@ export function WorkflowInspector({
   const [nodePreview, setNodePreview] = useState<IsoPreviewPayload | null>(null);
   const [nodePreviewBusy, setNodePreviewBusy] = useState(false);
   const [nodePreviewError, setNodePreviewError] = useState("");
+  const [overlayInputs, setOverlayInputs] = useState<Record<string, unknown>>({});
+  const [dirtyNodeIds, setDirtyNodeIds] = useState<string[]>([]);
   const [safeRunConfirmOpen, setSafeRunConfirmOpen] = useState(false);
   const [safeRunBusy, setSafeRunBusy] = useState(false);
   const [cancelBusy, setCancelBusy] = useState(false);
@@ -133,14 +135,16 @@ export function WorkflowInspector({
   const summary = job?.result?.side_effect_summary ?? selectedRun?.side_effect_summary ?? runLog?.side_effect_summary;
   const blockedCount = summary?.blocked?.length ?? 0;
   const executedCount = summary?.executed?.length ?? 0;
-  const safeInputs = useMemo(() => compactWorkflowInputs(workflowInputs), [workflowInputs]);
+  const baseInputs = useMemo(() => compactWorkflowInputs(workflowInputs), [workflowInputs]);
+  const baseInputsKey = useMemo(() => stableJson(baseInputs), [baseInputs]);
+  const safeInputs = useMemo(() => compactWorkflowInputs({ ...baseInputs, ...overlayInputs }), [baseInputs, overlayInputs]);
   const selectedPreviewRow = useMemo(() => {
     const rows = projectedPlan?.rows ?? [];
     return rows.find((row) => row.status === "warn" || row.status === "blocked") ?? rows[0] ?? null;
   }, [projectedPlan]);
   const nodeSummaries = useMemo(
-    () => buildNodeCardSummaries({ job, plan: projectedPlan, preview: nodePreview, runLog, workflowInputs: safeInputs }),
-    [job, projectedPlan, nodePreview, runLog, safeInputs],
+    () => buildNodeCardSummaries({ dirtyNodeIds, job, plan: projectedPlan, preview: nodePreview, runLog, workflowInputs: safeInputs }),
+    [dirtyNodeIds, job, projectedPlan, nodePreview, runLog, safeInputs],
   );
   const hasPdfSource = Boolean(safeInputs.work_folder || safeInputs.combine_pdf);
   const hasIsoSource = Boolean(safeInputs.iso_list || safeInputs.work_folder);
@@ -161,6 +165,11 @@ export function WorkflowInspector({
       ? "節點路徑（驗證中）"
       : "傳統路徑"
     : "傳統路徑（未設旗標）";
+
+  useEffect(() => {
+    setOverlayInputs({});
+    setDirtyNodeIds([]);
+  }, [baseInputsKey]);
 
   useEffect(() => {
     if (!selectedStep || !runLog?.run_id || !isTauri()) {
@@ -285,6 +294,7 @@ export function WorkflowInspector({
         if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
           await refreshRuns(next.workflow_run_id);
           setProjectionRunId(next.workflow_run_id);
+          setDirtyNodeIds([]);
         }
       } catch (caught) {
         if (!cancelled) {
@@ -413,6 +423,11 @@ export function WorkflowInspector({
     setSafeRunConfirmOpen(true);
   }
 
+  function handleWorkflowInputChange(nodeId: string, field: string, value: unknown) {
+    setOverlayInputs((previous) => ({ ...previous, [field]: value }));
+    setDirtyNodeIds((previous) => mergeUnique(previous, dirtyNodesFrom(nodeId)));
+  }
+
   async function confirmSafeRun() {
     if (safeRunBusy || isWorkflowJobRunning(job)) {
       return;
@@ -433,6 +448,7 @@ export function WorkflowInspector({
       if (!isWorkflowJobRunning(next) && next.workflow_run_id) {
         await refreshRuns(next.workflow_run_id);
         setProjectionRunId(next.workflow_run_id);
+        setDirtyNodeIds([]);
       }
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
@@ -609,14 +625,17 @@ export function WorkflowInspector({
           canvas={<WorkflowCanvas payload={graph} runLog={runLog} nodeSummaries={nodeSummaries} selectedNodeId={activeCanvasNodeId} onSelectNode={setSelectedCanvasNodeId} />}
           detail={(
             <NodeDetailPanel
+              dirtyNodeIds={dirtyNodeIds}
               node={selectedCanvasNode}
               nodeLog={selectedCanvasLog}
               onSelectNode={setSelectedCanvasNodeId}
+              onWorkflowInputChange={handleWorkflowInputChange}
               plan={projectedPlan}
               preview={nodePreview}
               previewBusy={nodePreviewBusy}
               previewError={nodePreviewError || projectionError}
               summary={selectedCanvasNode ? nodeSummaries[selectedCanvasNode.node_id] : undefined}
+              workflowInputs={safeInputs}
             />
           )}
           drawerMeta={`${workflowSteps.length || graphNodes.length} 節點 · ${runs.length} 紀錄`}
@@ -1308,6 +1327,31 @@ function compactWorkflowInputs(inputs: Record<string, unknown>): Record<string, 
   return Object.fromEntries(
     Object.entries(inputs).filter(([, value]) => value !== undefined),
   );
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return entry;
+    }
+    return Object.fromEntries(Object.entries(entry as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)));
+  });
+}
+
+function mergeUnique(left: string[], right: string[]): string[] {
+  return [...new Set([...left, ...right])];
+}
+
+function dirtyNodesFrom(nodeId: string): string[] {
+  const downstream: Record<string, string[]> = {
+    pdf_source: ["pdf_source", "discover", "split", "load_table", "roi_calib", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    discover: ["discover", "split", "load_table", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    split: ["split", "roi_calib", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    load_table: ["load_table", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    roi_calib: ["roi_calib", "batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+    batch_detect: ["batch_detect", "pilot", "roi_dist", "export_csv", "apply_rename"],
+  };
+  return downstream[nodeId] ?? [nodeId];
 }
 
 function buildSideEffectPreview(

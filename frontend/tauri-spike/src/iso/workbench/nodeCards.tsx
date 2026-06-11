@@ -24,6 +24,7 @@ export type NodeCardSummary = {
 };
 
 export type NodeSummaryContext = {
+  dirtyNodeIds?: string[];
   job: IsoNodeWorkflowJobPayload | null;
   plan: IsoWorkflowPlan | null;
   preview: IsoPreviewPayload | null;
@@ -33,6 +34,7 @@ export type NodeSummaryContext = {
 
 export function buildNodeCardSummaries(context: NodeSummaryContext): Record<string, NodeCardSummary> {
   const { job, plan, preview, runLog, workflowInputs } = context;
+  const dirtyNodeIds = new Set(context.dirtyNodeIds ?? []);
   const rows = plan?.rows ?? [];
   const source = plan?.source;
   const threshold = Number(source?.confidence_threshold ?? workflowInputs.confidence_threshold ?? 0.7);
@@ -42,7 +44,7 @@ export function buildNodeCardSummaries(context: NodeSummaryContext): Record<stri
   const batchJobId = shortId(job?.workflow_job_id || job?.job_id || plan?.provenance?.workflow_run_id || runLog?.run_id || "");
   const pdfSourceCount = source?.pdf_count ?? (inputValue(workflowInputs.combine_pdf) ? 1 : 0);
 
-  return {
+  return markDirtySummaries({
     pdf_source: {
       badges: [{ label: source ? "來源已解析" : "等待來源", tone: source ? "ready" : "idle" }],
       metrics: [
@@ -163,7 +165,29 @@ export function buildNodeCardSummaries(context: NodeSummaryContext): Record<stri
       rows: rows.slice(0, 2).map((row) => ({ label: row.source_name, value: row.new_name || "-" })),
       tone: "warn",
     },
-  };
+  }, dirtyNodeIds);
+}
+
+function markDirtySummaries(summaries: Record<string, NodeCardSummary>, dirtyNodeIds: Set<string>): Record<string, NodeCardSummary> {
+  if (!dirtyNodeIds.size) {
+    return summaries;
+  }
+  return Object.fromEntries(
+    Object.entries(summaries).map(([nodeId, summary]) => {
+      if (!dirtyNodeIds.has(nodeId)) {
+        return [nodeId, summary];
+      }
+      return [
+        nodeId,
+        {
+          ...summary,
+          badges: [{ label: "參數已變更", tone: "warn" }, ...summary.badges.filter((badge) => badge.label !== "參數已變更")],
+          preview: summary.preview ? `${summary.preview} · 待重跑` : "待重跑",
+          tone: "warn",
+        },
+      ];
+    }),
+  );
 }
 
 function inputValue(value: unknown): string {

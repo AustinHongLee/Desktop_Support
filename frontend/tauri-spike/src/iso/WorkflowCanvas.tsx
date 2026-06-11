@@ -91,10 +91,11 @@ function IsoNode({ data, selected }: NodeProps<CanvasNode>) {
   const disabled = !data.enabled;
   const guarded = data.guarded;
   const tone = disabled ? "disabled" : guarded ? "guarded" : data.sideEffects.length ? "auto" : "read";
+  const dirty = data.summary?.badges.some((badge) => badge.label === "參數已變更") ?? false;
   const inputPorts = data.inputPorts ?? [];
   const outputPorts = data.outputPorts ?? [];
   return (
-    <div style={{ ...styles.node, ...nodeToneStyle(tone), outline: data.selected || selected ? "2px solid rgba(47,245,200,0.75)" : "0" }}>
+    <div style={{ ...styles.node, ...nodeToneStyle(tone), ...(dirty ? styles.dirtyNode : {}), outline: data.selected || selected ? "2px solid rgba(47,245,200,0.75)" : "0" }}>
       {inputPorts.map((port, index) => (
         <Handle
           id={port.name}
@@ -359,6 +360,10 @@ const styles = {
     color: "#7fd7ff",
     fontSize: 10,
     padding: "2px 6px",
+  },
+  dirtyNode: {
+    borderColor: "rgba(255,209,102,0.78)",
+    boxShadow: "0 0 0 1px rgba(255,209,102,0.18), 0 14px 30px rgba(0,0,0,0.28)",
   },
   summaryBadge: {
     border: "1px solid",

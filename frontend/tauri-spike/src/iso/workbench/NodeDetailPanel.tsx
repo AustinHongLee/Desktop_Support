@@ -1,5 +1,5 @@
-import { AlertTriangle, CircleCheck, FileJson, Lock, Play, RotateCcw } from "lucide-react";
-import type { CSSProperties } from "react";
+import { AlertTriangle, CircleCheck, Lock, Play, RotateCcw } from "lucide-react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import type {
   IsoNodeWorkflowInstance,
   IsoNodeWorkflowNodeRunLog,
@@ -21,25 +21,31 @@ type DetailAction = {
 };
 
 type NodeDetailPanelProps = {
+  dirtyNodeIds?: string[];
   node: IsoNodeWorkflowInstance | null;
   nodeLog?: IsoNodeWorkflowNodeRunLog;
   onSelectNode?: (nodeId: string) => void;
+  onWorkflowInputChange?: (nodeId: string, field: string, value: unknown) => void;
   plan: IsoWorkflowPlan | null;
   preview: IsoPreviewPayload | null;
   previewBusy?: boolean;
   previewError?: string;
   summary?: NodeCardSummary;
+  workflowInputs?: Record<string, unknown>;
 };
 
 export function NodeDetailPanel({
+  dirtyNodeIds = [],
   node,
   nodeLog,
   onSelectNode,
+  onWorkflowInputChange,
   plan,
   preview,
   previewBusy = false,
   previewError = "",
   summary,
+  workflowInputs = {},
 }: NodeDetailPanelProps) {
   if (!node) {
     return <EmptyDetail />;
@@ -54,8 +60,14 @@ export function NodeDetailPanel({
         </div>
         <span style={statusPillStyle(nodeLog?.status)}>{statusLabel(nodeLog?.status, node.enabled === false)}</span>
       </div>
+      {dirtyNodeIds?.includes(node.node_id) ? (
+        <div style={styles.dirtyNotice}>
+          <AlertTriangle size={14} />
+          <span>參數已變更，按執行或重跑後才會更新結果。</span>
+        </div>
+      ) : null}
       {summary ? <SummaryBlock summary={summary} /> : null}
-      {renderNodeDetail({ node, onSelectNode, plan, preview, previewBusy, previewError })}
+      {renderNodeDetail({ node, onSelectNode, onWorkflowInputChange, plan, preview, previewBusy, previewError, workflowInputs })}
       <LogBlock nodeLog={nodeLog} />
     </div>
   );
@@ -64,22 +76,24 @@ export function NodeDetailPanel({
 function renderNodeDetail({
   node,
   onSelectNode,
+  onWorkflowInputChange,
   plan,
   preview,
   previewBusy,
   previewError,
-}: Pick<NodeDetailPanelProps, "node" | "onSelectNode" | "plan" | "preview" | "previewBusy" | "previewError"> & { node: IsoNodeWorkflowInstance }) {
+  workflowInputs,
+}: Pick<NodeDetailPanelProps, "node" | "onSelectNode" | "onWorkflowInputChange" | "plan" | "preview" | "previewBusy" | "previewError" | "workflowInputs"> & { node: IsoNodeWorkflowInstance }) {
   if (node.node_id === "pdf_source" || node.node_id === "discover") {
-    return <SourceDetail plan={plan} />;
+    return <SourceDetail onChange={onWorkflowInputChange} plan={plan} workflowInputs={workflowInputs ?? {}} />;
   }
   if (node.node_id === "split") {
     return <SplitDetail plan={plan} />;
   }
   if (node.node_id === "load_table") {
-    return <IsoListDetail plan={plan} />;
+    return <IsoListDetail onChange={onWorkflowInputChange} plan={plan} workflowInputs={workflowInputs ?? {}} />;
   }
   if (node.node_id === "roi_calib") {
-    return <RoiDetail plan={plan} preview={preview} previewBusy={previewBusy} previewError={previewError} />;
+    return <RoiDetail onChange={onWorkflowInputChange} plan={plan} preview={preview} previewBusy={previewBusy} previewError={previewError} workflowInputs={workflowInputs ?? {}} />;
   }
   if (node.node_id === "batch_detect") {
     return <BatchDetail plan={plan} actions={[{ label: "重跑此節點", disabled: true }, { label: "重跑下游", disabled: true }]} />;
@@ -108,10 +122,22 @@ function renderNodeDetail({
   return <GenericDetail node={node} />;
 }
 
-function SourceDetail({ plan }: { plan: IsoWorkflowPlan | null }) {
+function SourceDetail({
+  onChange,
+  plan,
+  workflowInputs,
+}: {
+  onChange?: NodeDetailPanelProps["onWorkflowInputChange"];
+  plan: IsoWorkflowPlan | null;
+  workflowInputs: Record<string, unknown>;
+}) {
   const source = plan?.source;
   return (
     <div style={styles.section}>
+      <EditorGrid>
+        <TextEditor label="工作資料夾" value={stringValue(workflowInputs.work_folder ?? source?.work_folder)} onChange={(value) => onChange?.("pdf_source", "work_folder", value)} />
+        <TextEditor label="合併 PDF" value={stringValue(workflowInputs.combine_pdf ?? source?.combine_pdf)} onChange={(value) => onChange?.("pdf_source", "combine_pdf", value)} />
+      </EditorGrid>
       <DetailGrid rows={[
         ["合併 PDF", compactPath(source?.combine_pdf || "未選擇")],
         ["工作資料夾", compactPath(source?.work_folder || "未選擇")],
@@ -137,10 +163,24 @@ function SplitDetail({ plan }: { plan: IsoWorkflowPlan | null }) {
   );
 }
 
-function IsoListDetail({ plan }: { plan: IsoWorkflowPlan | null }) {
+function IsoListDetail({
+  onChange,
+  plan,
+  workflowInputs,
+}: {
+  onChange?: NodeDetailPanelProps["onWorkflowInputChange"];
+  plan: IsoWorkflowPlan | null;
+  workflowInputs: Record<string, unknown>;
+}) {
   const source = plan?.source;
   return (
     <div style={styles.section}>
+      <EditorGrid>
+        <TextEditor label="ISO 清單" value={stringValue(workflowInputs.iso_list ?? source?.iso_list)} onChange={(value) => onChange?.("load_table", "iso_list", value)} />
+        <TextEditor label="工作表" value={stringValue(workflowInputs.sheet_name ?? source?.sheet_name)} onChange={(value) => onChange?.("load_table", "sheet_name", value)} />
+        <NumberEditor label="流水號欄" value={numberOrEmpty(workflowInputs.serial_col ?? source?.serial_col)} onChange={(value) => onChange?.("load_table", "serial_col", value)} />
+        <NumberEditor label="圖號欄" value={numberOrEmpty(workflowInputs.line_col ?? source?.line_col)} onChange={(value) => onChange?.("load_table", "line_col", value)} />
+      </EditorGrid>
       <DetailGrid rows={[
         ["ISO 清單", compactPath(source?.iso_list || "未選擇")],
         ["工作表", source?.sheet_name || "自動"],
@@ -154,31 +194,47 @@ function IsoListDetail({ plan }: { plan: IsoWorkflowPlan | null }) {
 }
 
 function RoiDetail({
+  onChange,
   plan,
   preview,
   previewBusy,
   previewError,
+  workflowInputs,
 }: {
+  onChange?: NodeDetailPanelProps["onWorkflowInputChange"];
   plan: IsoWorkflowPlan | null;
   preview: IsoPreviewPayload | null;
   previewBusy?: boolean;
   previewError?: string;
+  workflowInputs: Record<string, unknown>;
 }) {
+  const [activeRoi, setActiveRoi] = useState<"serial" | "drawing">("serial");
   const source = plan?.source;
-  const serialRegion = source?.serial_region ?? DEFAULT_SERIAL_REGION;
-  const drawingRegion = source?.drawing_region ?? DEFAULT_DRAWING_REGION;
+  const serialRegion = regionOrDefault(workflowInputs.serial_region ?? source?.serial_region, DEFAULT_SERIAL_REGION);
+  const drawingRegion = regionOrDefault(workflowInputs.drawing_region ?? source?.drawing_region, DEFAULT_DRAWING_REGION);
+  const threshold = numberOrDefault(workflowInputs.confidence_threshold ?? source?.confidence_threshold, 0.7);
+  const pattern = stringValue(workflowInputs.pattern ?? source?.pattern ?? "{serial}--{line}.pdf");
+  const detectSerials = booleanValue(workflowInputs.detect_serials ?? source?.detect_serials ?? true);
+  const updateRegion = (target: "serial" | "drawing", region: IsoRegion) => {
+    onChange?.("roi_calib", target === "serial" ? "serial_region" : "drawing_region", region);
+  };
   return (
     <div style={styles.section}>
+      <EditorGrid>
+        <TextEditor label="命名格式" value={pattern} onChange={(value) => onChange?.("roi_calib", "pattern", value)} />
+        <ToggleEditor label="影像判讀流水號" checked={detectSerials} onChange={(value) => onChange?.("roi_calib", "detect_serials", value)} />
+        <SliderEditor label="信心門檻" value={threshold} onChange={(value) => onChange?.("roi_calib", "confidence_threshold", value)} />
+      </EditorGrid>
       <div style={styles.previewFrame}>
         {preview ? (
           <div style={styles.previewCanvas}>
             <img src={preview.page.image} alt={preview.source_name} style={styles.previewImage} />
             <RoiOverlay
-              activeRoi="serial"
+              activeRoi={activeRoi}
               drawingRegion={drawingRegion}
-              editable={false}
-              onChange={() => {}}
-              onSelect={() => {}}
+              editable
+              onChange={updateRegion}
+              onSelect={setActiveRoi}
               serialRegion={serialRegion}
             />
           </div>
@@ -190,10 +246,11 @@ function RoiDetail({
         <Crop title="流水號裁切" image={preview?.serial_crop.image} />
         <Crop title="圖號裁切" image={preview?.drawing_crop.image} />
       </div>
+      <RegionEditor activeRoi={activeRoi} drawingRegion={drawingRegion} onChange={updateRegion} serialRegion={serialRegion} />
       <DetailGrid rows={[
-        ["信心門檻", `${Math.round(Number(source?.confidence_threshold ?? 0.7) * 100)}%`],
-        ["影像判讀", source?.detect_serials === false ? "關閉" : "開啟"],
-        ["命名格式", source?.pattern || "{serial}--{line}.pdf"],
+        ["信心門檻", `${Math.round(threshold * 100)}%`],
+        ["影像判讀", detectSerials ? "開啟" : "關閉"],
+        ["命名格式", pattern],
         ["流水號 ROI", regionSummary(serialRegion)],
         ["圖號 ROI", regionSummary(drawingRegion)],
       ]} />
@@ -272,6 +329,95 @@ function SummaryBlock({ summary }: { summary: NodeCardSummary }) {
         ))}
       </div>
       {summary.preview ? <span style={styles.previewText}>{summary.preview}</span> : null}
+    </div>
+  );
+}
+
+function EditorGrid({ children }: { children: ReactNode }) {
+  return <div style={styles.editorGrid}>{children}</div>;
+}
+
+function TextEditor({ label, onChange, value }: { label: string; onChange: (value: string) => void; value: string }) {
+  return (
+    <label style={styles.editorField}>
+      <span>{label}</span>
+      <input style={styles.textInput} type="text" value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function NumberEditor({ label, onChange, value }: { label: string; onChange: (value: number | "") => void; value: number | "" }) {
+  return (
+    <label style={styles.editorField}>
+      <span>{label}</span>
+      <input
+        style={styles.textInput}
+        type="number"
+        value={value}
+        onChange={(event) => onChange(event.target.value === "" ? "" : Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function ToggleEditor({ checked, label, onChange }: { checked: boolean; label: string; onChange: (value: boolean) => void }) {
+  return (
+    <label style={{ ...styles.editorField, ...styles.toggleField }}>
+      <span>{label}</span>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    </label>
+  );
+}
+
+function SliderEditor({ label, onChange, value }: { label: string; onChange: (value: number) => void; value: number }) {
+  return (
+    <label style={styles.editorField}>
+      <span>{label} {Math.round(value * 100)}%</span>
+      <input
+        type="range"
+        min={0.1}
+        max={0.99}
+        step={0.01}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function RegionEditor({
+  activeRoi,
+  drawingRegion,
+  onChange,
+  serialRegion,
+}: {
+  activeRoi: "serial" | "drawing";
+  drawingRegion: IsoRegion;
+  onChange: (target: "serial" | "drawing", region: IsoRegion) => void;
+  serialRegion: IsoRegion;
+}) {
+  const region = activeRoi === "serial" ? serialRegion : drawingRegion;
+  const targetLabel = activeRoi === "serial" ? "流水號 ROI" : "圖號 ROI";
+  const updateField = (field: keyof IsoRegion, value: number) => onChange(activeRoi, { ...region, [field]: clampRegionNumber(value) });
+  return (
+    <div style={styles.regionEditor}>
+      <strong>{targetLabel}</strong>
+      <div style={styles.regionGrid}>
+        {(["left", "top", "width", "height"] as const).map((field) => (
+          <label style={styles.editorField} key={field}>
+            <span>{field.toUpperCase()}</span>
+            <input
+              style={styles.textInput}
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={Number(region[field]).toFixed(2)}
+              onChange={(event) => updateField(field, Number(event.target.value))}
+            />
+          </label>
+        ))}
+      </div>
     </div>
   );
 }
@@ -369,6 +515,51 @@ function metricStyle(tone: NodeCardSummary["tone"]): CSSProperties {
   };
 }
 
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : value == null ? "" : String(value);
+}
+
+function numberOrDefault(value: unknown, fallback: number): number {
+  const numeric = typeof value === "number" ? value : typeof value === "string" && value !== "" ? Number(value) : NaN;
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function numberOrEmpty(value: unknown): number | "" {
+  const numeric = typeof value === "number" ? value : typeof value === "string" && value !== "" ? Number(value) : NaN;
+  return Number.isFinite(numeric) ? numeric : "";
+}
+
+function booleanValue(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.toLowerCase() !== "false";
+  }
+  return Boolean(value);
+}
+
+function regionOrDefault(value: unknown, fallback: IsoRegion): IsoRegion {
+  if (!value || typeof value !== "object") {
+    return fallback;
+  }
+  const region = value as Partial<IsoRegion>;
+  const next = {
+    left: Number(region.left),
+    top: Number(region.top),
+    width: Number(region.width),
+    height: Number(region.height),
+  };
+  return Object.values(next).every(Number.isFinite) ? next : fallback;
+}
+
+function clampRegionNumber(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
 function regionSummary(region: IsoRegion): string {
   return `${region.left.toFixed(2)}, ${region.top.toFixed(2)}, ${region.width.toFixed(2)}, ${region.height.toFixed(2)}`;
 }
@@ -431,6 +622,30 @@ const styles = {
     display: "grid",
     gap: 7,
     gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+    minWidth: 0,
+  },
+  dirtyNotice: {
+    alignItems: "center",
+    background: "rgba(255,209,102,0.08)",
+    border: "1px solid rgba(255,209,102,0.28)",
+    borderRadius: 8,
+    color: "#ffd166",
+    display: "flex",
+    gap: 7,
+    padding: "8px 10px",
+  },
+  editorField: {
+    color: "rgba(220,235,228,0.72)",
+    display: "grid",
+    fontSize: 11,
+    fontWeight: 800,
+    gap: 5,
+    minWidth: 0,
+  },
+  editorGrid: {
+    display: "grid",
+    gap: 8,
+    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
     minWidth: 0,
   },
   empty: {
@@ -501,6 +716,21 @@ const styles = {
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
+  regionEditor: {
+    background: "rgba(0,0,0,0.14)",
+    border: "1px solid rgba(47,245,200,0.12)",
+    borderRadius: 8,
+    display: "grid",
+    gap: 8,
+    minWidth: 0,
+    padding: 9,
+  },
+  regionGrid: {
+    display: "grid",
+    gap: 7,
+    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    minWidth: 0,
+  },
   sampleRow: {
     display: "grid",
     gap: 8,
@@ -525,8 +755,21 @@ const styles = {
     gap: 10,
     minWidth: 0,
   },
+  textInput: {
+    background: "rgba(0,0,0,0.28)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 7,
+    color: "#dffcf4",
+    font: "inherit",
+    minWidth: 0,
+    padding: "7px 8px",
+  },
   summaryBlock: {
     display: "grid",
     gap: 8,
+  },
+  toggleField: {
+    alignContent: "space-between",
+    gridTemplateColumns: "minmax(0, 1fr) auto",
   },
 } satisfies Record<string, CSSProperties>;

@@ -69,6 +69,30 @@ def test_workflow_canvas_is_readonly_display_only() -> None:
     assert "guarded：需 CLI 三因子授權" in text
 
 
+def test_workbench_param_changes_do_not_execute_workflow_actions() -> None:
+    workbench_paths = [
+        FRONTEND_SRC / "iso" / "WorkflowInspector.tsx",
+        FRONTEND_SRC / "iso" / "WorkflowCanvas.tsx",
+        FRONTEND_SRC / "iso" / "workbench" / "NodeWorkbench.tsx",
+        FRONTEND_SRC / "iso" / "workbench" / "NodeDetailPanel.tsx",
+        FRONTEND_SRC / "iso" / "workbench" / "nodeCards.tsx",
+    ]
+    forbidden = (
+        "runIsoNodeWorkflowSafe(",
+        "runIsoOneClickWorkflow(",
+        "startIsoBatchDetect(",
+        "applyIsoPlan(",
+        "exportIsoPlanCsv(",
+        '"workflow_run"',
+        "'workflow_run'",
+    )
+    for path in workbench_paths:
+        text = path.read_text(encoding="utf-8")
+        for block in [*_call_blocks(text, "useEffect"), *_jsx_attribute_blocks(text, "onChange")]:
+            for token in forbidden:
+                assert token not in block, f"{path} has {token} in useEffect/onChange; workbench edits must stay dirty-only"
+
+
 def test_shadow_verify_has_single_click_path_and_no_generic_ui_action() -> None:
     sources = {path: path.read_text(encoding="utf-8") for path in _frontend_sources()}
     assert sum(text.count("runIsoShadowVerify(") for text in sources.values()) == 2
@@ -127,6 +151,22 @@ def _call_blocks(text: str, call_name: str) -> list[str]:
             return blocks
         paren = text.find("(", start)
         end = _matching_delimiter(text, paren, "(", ")")
+        if end < 0:
+            return blocks
+        blocks.append(text[start : end + 1])
+        offset = end + 1
+
+
+def _jsx_attribute_blocks(text: str, attr_name: str) -> list[str]:
+    blocks: list[str] = []
+    offset = 0
+    needle = f"{attr_name}={{"
+    while True:
+        start = text.find(needle, offset)
+        if start < 0:
+            return blocks
+        brace = text.find("{", start)
+        end = _matching_delimiter(text, brace, "{", "}")
         if end < 0:
             return blocks
         blocks.append(text[start : end + 1])
