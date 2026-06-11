@@ -1430,8 +1430,8 @@ export function IsoBoard() {
             }
             return;
           }
-          const detail = job.error || job.result?.error?.message || job.state || "workflow job failed";
-          setError(localizeIsoDisplayText(detail));
+          const detail = oneClickWorkflowFailureText(job);
+          setError(detail);
           setOneClickFailure("節點路徑一鍵命名沒有完成", detail, knownRunId);
           setLegacyFallbackAvailable(true);
           setOneClickStage("idle");
@@ -1927,6 +1927,27 @@ function firstPilotProblemText(items: IsoPilotItem[]): string {
   const item = items.find((candidate) => candidate.status === "blocked")
     ?? items.find((candidate) => candidate.status === "warn" || candidate.freshness === "stale" || candidate.needs_review);
   return localizeIsoDisplayText(item?.user_text || item?.manual_hint || "");
+}
+
+function oneClickWorkflowFailureText(job: IsoNodeWorkflowJobPayload): string {
+  const nodeId = failedWorkflowNodeId(job);
+  const nodeText = nodeId ? oneClickNodeFailureText(nodeId) : "節點路徑沒有完成";
+  const detail = localizeIsoDisplayText(job.error || job.result?.error?.message || job.state || "");
+  return detail ? `${nodeText}：${detail}` : nodeText;
+}
+
+function failedWorkflowNodeId(job: IsoNodeWorkflowJobPayload): string {
+  const failed = Object.values(job.nodes ?? {}).find((node) => node.status === "failed" || node.status === "blocked");
+  return failed?.node_id || job.progress?.current_node || "";
+}
+
+function oneClickNodeFailureText(nodeId: string): string {
+  const key = nodeId.toLowerCase();
+  if (key.includes("split")) return "PDF 拆頁失敗，請確認 PDF 是否可讀或未被其他程式鎖住";
+  if (key.includes("load_table")) return "ISO 清單讀取失敗，請檢查工作表與欄位設定";
+  if (key.includes("batch_detect")) return "流水號辨識失敗，請檢查 ROI、OCR 或來源頁面";
+  if (key.includes("pilot")) return "命名檢查未通過，請查看待處理項目";
+  return `節點 ${nodeId} 失敗`;
 }
 
 function oneClickSuccessSummary(plan: IsoWorkflowPlan | null, items: IsoPilotItem[]): string {

@@ -815,8 +815,8 @@ def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
             "message": "沒有勾選需要更名的 PDF。",
         }
     _validate_operations(operations)
-    record = _record_apply_csv(request, selected_rows, operations)
-    _apply_operations(operations)
+    _apply_iso_operations(operations)
+    record, record_warning = _record_apply_csv_safely(request, selected_rows, operations)
     payload = {
         "schema_version": 1,
         "action": "apply",
@@ -836,7 +836,62 @@ def apply_iso_plan(request: IsoWorkflowRequest) -> dict[str, Any]:
     if record is not None:
         payload["record_path"] = record["path"]
         payload["record_row_count"] = record["row_count"]
+    if record_warning is not None:
+        payload["record_warning"] = record_warning
+        payload["message"] = f"{payload['message']} {record_warning['message']}"
     return payload
+
+
+def _apply_iso_operations(operations: list[RenameOperation]) -> None:
+    try:
+        _apply_operations(operations)
+    except Exception as exc:
+        lock_exc = _first_file_lock_error(exc)
+        if lock_exc is not None:
+            locked_path = _exception_path(lock_exc) or operations[0].source
+            locked_name = locked_path.name if locked_path else "PDF"
+            raise ValueError(
+                f"PDF 正被其他程式開啟，請關閉後重試：{locked_name}。已完成 0 筆，未動 {len(operations)} 筆。"
+            ) from exc
+        raise
+
+
+def _record_apply_csv_safely(
+    request: IsoWorkflowRequest,
+    rows: list[dict[str, Any]],
+    operations: list[RenameOperation],
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    if not request.run_id:
+        return None, None
+    try:
+        return _record_apply_csv(request, rows, operations), None
+    except (PermissionError, OSError) as exc:
+        if _is_csv_lock_error(exc):
+            path = _apply_record_path(request)
+            return None, {
+                "path": str(path),
+                "message": f"記錄檔被佔用：{path}，更名已完成，記錄稍後補寫。",
+            }
+        raise
+
+
+def _first_file_lock_error(exc: BaseException) -> BaseException | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, PermissionError) or getattr(current, "winerror", None) in {32, 33}:
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _exception_path(exc: BaseException) -> Path | None:
+    for name in ("filename", "filename2"):
+        value = getattr(exc, name, None)
+        if value:
+            return Path(str(value))
+    return None
 
 
 def _record_apply_csv(
@@ -847,7 +902,7 @@ def _record_apply_csv(
     if not request.run_id:
         return None
     created_at = _now()
-    record_path = iso_run_root() / request.run_id / "artifacts" / "apply_rename_record.csv"
+    record_path = _apply_record_path(request)
     record_path.parent.mkdir(parents=True, exist_ok=True)
     operation_by_source = {str(operation.source): operation for operation in operations}
     columns = [
@@ -881,6 +936,10 @@ def _record_apply_csv(
             exported_row["created_at"] = created_at
             writer.writerow(exported_row)
     return {"path": str(record_path), "row_count": len(rows)}
+
+
+def _apply_record_path(request: IsoWorkflowRequest) -> Path:
+    return iso_run_root() / str(request.run_id or "") / "artifacts" / "apply_rename_record.csv"
 
 
 def export_plan_csv(request: IsoWorkflowRequest) -> dict[str, Any]:

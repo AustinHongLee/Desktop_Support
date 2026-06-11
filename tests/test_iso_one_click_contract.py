@@ -22,7 +22,7 @@ from launcher.plugins.iso_tools.workflow.schema import graph_content_hash, load_
 
 
 ONE_CLICK_WORKFLOW_PATH = Path("launcher/plugins/iso_tools/workflow/workflows/iso_pdf_one_click.workflow.json")
-ONE_CLICK_GRAPH_HASH = "sha256:a6fd12f538fed4c0866ff4a7ab5f78ded8e9adada8f8d3931aaebe8cfbda6275"
+ONE_CLICK_GRAPH_HASH = "sha256:58eb621dfe9dce1edf9066e61f6427018214dc601a6e3408da0ee7869cc652d7"
 
 PLAN_KEYS = {
     "schema_version",

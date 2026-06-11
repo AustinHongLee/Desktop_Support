@@ -68,7 +68,7 @@
       "params": {
         "wait_for_completion": true,
         "poll_interval_ms": 500,
-        "timeout_s": 900
+        "timeout_s": 1800
       },
       "side_effects": [
         "writes_job_files",
