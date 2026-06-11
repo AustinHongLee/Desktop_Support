@@ -1054,6 +1054,8 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: 8,
+    gridColumn: "1 / -1",
+    order: -1,
     minHeight: 0,
     minWidth: 0,
     padding: 10,
@@ -1081,7 +1083,7 @@ const styles = {
   scrollList: {
     display: "grid",
     gap: 7,
-    maxHeight: 260,
+    maxHeight: 420,
     overflow: "auto",
     paddingRight: 2,
   },

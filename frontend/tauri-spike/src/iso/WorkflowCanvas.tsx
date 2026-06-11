@@ -153,10 +153,12 @@ const styles = {
   canvasShell: {
     border: "1px solid rgba(47,245,200,0.22)",
     borderRadius: 8,
-    height: 340,
+    height: "clamp(520px, 58vh, 760px)",
     marginBottom: 10,
+    minHeight: 480,
     overflow: "hidden",
     background: "rgba(3,10,8,0.74)",
+    width: "100%",
   },
   disabledChip: {
     border: "1px solid rgba(220,235,228,0.22)",
