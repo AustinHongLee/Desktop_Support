@@ -73,10 +73,12 @@ type GuideNodeData = {
   active: boolean;
   dirty: boolean;
   drawingRegion: IsoRegion;
+  guarded?: boolean;
   icon: ReactNode;
   kind: WorkflowNodeKind;
   meta?: string;
   nodeId: string;
+  notice?: { text: string; tone: "idle" | "ready" | "warn" | "danger"; title?: string };
   onLoadMore?: () => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
@@ -283,7 +285,7 @@ export function WorkflowGuideCanvas({
 
 function GuideNodeCard({ data, selected }: NodeProps<GuideNode>) {
   const active = data.active || selected;
-  const cardTone = cardToneStyle(data.tone, data.dirty);
+  const cardTone = cardToneStyle(data.tone, data.dirty, data.guarded);
   const width = nodeWidth(data.size);
   return (
     <article style={{ ...styles.node, ...cardTone, outline: active ? "2px solid rgba(47,245,200,0.78)" : "0", width }}>
@@ -292,7 +294,7 @@ function GuideNodeCard({ data, selected }: NodeProps<GuideNode>) {
       <span style={styles.portLabelLeft}>{data.portIn}</span>
       <span style={styles.portLabelRight}>{data.portOut}</span>
       <NodeHeader data={data} />
-      {data.kind === "source" ? <SourceBody rows={data.rows} /> : null}
+      {data.kind === "source" ? <SourceBody data={data} /> : null}
       {data.kind === "config" ? <ConfigBody data={data} /> : null}
       {data.kind === "listPreview" ? <PreviewRows data={data} /> : null}
       {data.kind === "page" ? <PageBody data={data} /> : null}
@@ -316,23 +318,34 @@ function NodeHeader({ data }: { data: GuideNodeData }) {
         {data.meta ? <em>{data.meta}</em> : null}
       </div>
       <span style={{ ...styles.statusPill, borderColor: toneColor(data.tone), color: toneColor(data.tone) }}>
-        {data.dirty ? "待重跑" : statusToneLabel(data.tone)}
+        {data.guarded ? "需確認" : data.dirty ? "待重跑" : statusToneLabel(data.tone)}
       </span>
     </div>
   );
 }
 
-function SourceBody({ rows }: { rows: GuideNodeData["rows"] }) {
-  return <KeyRows rows={rows} />;
+function SourceBody({ data }: { data: GuideNodeData }) {
+  return (
+    <div style={styles.nodeBody}>
+      <Notice notice={data.notice} />
+      <KeyRows rows={data.rows} />
+    </div>
+  );
 }
 
 function ConfigBody({ data }: { data: GuideNodeData }) {
-  return <KeyRows rows={data.rows} />;
+  return (
+    <div style={styles.nodeBody}>
+      <Notice notice={data.notice} />
+      <KeyRows rows={data.rows} />
+    </div>
+  );
 }
 
 function PreviewRows({ data }: { data: GuideNodeData }) {
   return (
     <div style={styles.nodeBody}>
+      <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
       {data.rowCount && data.rowCount > data.rows.length ? <span style={styles.moreHint}>尚有 {data.rowCount - data.rows.length} 筆</span> : null}
     </div>
@@ -462,6 +475,7 @@ function RoiBody({ data }: { data: GuideNodeData }) {
 function ResultBody({ data }: { data: GuideNodeData }) {
   return (
     <div style={styles.nodeBody}>
+      <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
       {data.selectedPreview && data.preview?.vision ? (
         <div style={styles.visionBox}>
@@ -475,23 +489,34 @@ function ResultBody({ data }: { data: GuideNodeData }) {
 }
 
 function OutputBody({ data }: { data: GuideNodeData }) {
-  return <KeyRows rows={data.rows} />;
+  return (
+    <div style={styles.nodeBody}>
+      <Notice notice={data.notice} />
+      <KeyRows rows={data.rows} />
+    </div>
+  );
 }
 
 function SummaryBody({ data }: { data: GuideNodeData }) {
-  return <KeyRows rows={data.rows} />;
+  return (
+    <div style={styles.nodeBody}>
+      <Notice notice={data.notice} />
+      <KeyRows rows={data.rows} />
+    </div>
+  );
 }
 
 function ActionBody({ data }: { data: GuideNodeData }) {
   return (
     <div style={styles.nodeBody}>
+      <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
       <button className="action-button nodrag" type="button" onClick={(event) => {
         event.stopPropagation();
         data.onRunNode?.(data.nodeId);
       }}>
         <SearchCheck size={13} />
-        <span>{data.nodeId === "export_csv" ? "匯出草稿" : "開啟確認"}</span>
+        <span>{data.nodeId === "export_csv" ? "匯出草稿" : "預覽更名"}</span>
       </button>
     </div>
   );
@@ -523,6 +548,17 @@ function KeyRows({ rows }: { rows: GuideNodeData["rows"] }) {
       ))}
       {!rows.length ? <span style={styles.muted}>等待資料</span> : null}
     </div>
+  );
+}
+
+function Notice({ notice }: { notice?: GuideNodeData["notice"] }) {
+  if (!notice) {
+    return null;
+  }
+  return (
+    <span style={{ ...styles.notice, borderColor: toneColor(notice.tone), color: toneColor(notice.tone) }} title={notice.title}>
+      {notice.text}
+    </span>
   );
 }
 
@@ -607,12 +643,11 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     id: "source",
     position: { x: GUIDE_LAYOUT.sourceX, y: GUIDE_LAYOUT.sourceY },
     data: {
-      ...common("discover", "source", "選取工作區", <FolderOpen size={17} />, args.workFolder || args.pdfPath || args.isoPath ? "ready" : "idle", [
-        { label: "工作區", value: compactOrEmpty(args.workFolder) },
-        { label: "合併 PDF", value: compactOrEmpty(args.pdfPath) },
-        { label: "ISO 清單", value: compactOrEmpty(args.isoPath) },
-      ]),
+      ...common("discover", "source", "選取工作區", <FolderOpen size={17} />, args.workFolder || args.pdfPath || args.isoPath ? "ready" : "idle", sourceReadinessRows(args)),
       meta: "流程入口",
+      notice: args.workFolder || args.pdfPath || args.isoPath
+        ? { text: "來源已連到下游節點", tone: "ready", title: "工作區會同時餵給 ISO 清單與合併 PDF 分支。" }
+        : { text: "從這裡開始：點選此卡設定工作資料夾", tone: "warn", title: "選好工作資料夾後，ISO 清單與 PDF 分支會依序亮起。" },
       portIn: "使用者選擇",
       portOut: "來源路徑",
     },
@@ -624,8 +659,11 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     data: {
       ...common("load_table", "config", "ISO 清單", <Table2 size={17} />, args.isoPath || args.source?.iso_list ? "ready" : "idle", [
         { label: "檔案", value: compactOrEmpty(args.isoPath || args.source?.iso_list || "") },
-        { label: "列數", value: String(args.source?.record_count ?? 0) },
+        { label: "資料列", value: args.source?.record_count ? `${args.source.record_count} 列` : "等待載入", tone: args.source?.record_count ? "ready" : "idle" },
       ]),
+      notice: args.isoPath || args.source?.iso_list
+        ? undefined
+        : { text: "等待工作區提供 ISO 清單", tone: "idle" },
       portIn: "清單檔",
       portOut: "表格資料",
     },
@@ -638,6 +676,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
         { label: "名稱", value: stringValue(args.workflowInputs.sheet_name ?? args.source?.sheet_name) || "自動" },
         { label: "候選", value: String(args.source?.sheet_options?.length ?? 0) },
       ]),
+      notice: args.source?.sheet_options?.length ? undefined : { text: "載入清單後可確認工作表", tone: "idle" },
       portIn: "表格資料",
       portOut: "工作表",
     },
@@ -650,6 +689,9 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
         { label: "流水號欄", value: stringValue(args.workflowInputs.serial_col ?? args.source?.serial_col) || "自動" },
         { label: "圖號欄", value: stringValue(args.workflowInputs.line_col ?? args.source?.line_col) || "自動" },
       ]),
+      notice: args.source?.serial_col || args.source?.line_col
+        ? undefined
+        : { text: "欄位會先自動猜測，必要時再修正", tone: "idle" },
       portIn: "工作表",
       portOut: "欄位對應",
     },
@@ -660,7 +702,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     data: {
       ...common("roi_calib", "config", "命名格式", <FileText size={17} />, args.pattern ? "ready" : "idle", [
         { label: "格式", value: args.pattern },
-        { label: "門檻", value: `${Math.round(args.threshold * 100)}%` },
+        { label: "示例", value: sampleNameFromPattern(args.pattern) },
       ]),
       portIn: "欄位對應",
       portOut: "命名規則",
@@ -671,6 +713,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     position: { x: GUIDE_LAYOUT.pageX, y: GUIDE_LAYOUT.isoY + 185 },
     data: {
       ...common("load_table", "listPreview", "ISO 預覽", <Eye size={17} />, args.source?.record_count ? "ready" : "idle", isoPreviewRows(args.source)),
+      notice: args.source?.record_count ? undefined : { text: "載入後會列出前幾筆清單欄位", tone: "idle" },
       portIn: "命名規則",
       portOut: "ISO 候選",
       rowCount: args.source?.record_count ?? 0,
@@ -683,8 +726,11 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     data: {
       ...common("split", "config", "合併 PDF", <FileText size={17} />, args.pdfPath || args.source?.combine_pdf ? "ready" : "idle", [
         { label: "檔案", value: compactOrEmpty(args.pdfPath || args.source?.combine_pdf || "") },
-        { label: "頁數", value: String(args.source?.pdf_count ?? args.rows.length ?? 0) },
+        { label: "頁數", value: args.source?.pdf_count || args.rows.length ? `${args.source?.pdf_count ?? args.rows.length} 頁` : "等待載入", tone: args.source?.pdf_count || args.rows.length ? "ready" : "idle" },
       ]),
+      notice: args.pdfPath || args.source?.combine_pdf
+        ? undefined
+        : { text: "等待工作區提供合併 PDF", tone: "idle" },
       portIn: "PDF 檔",
       portOut: "合併頁面",
     },
@@ -697,6 +743,9 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
         { label: "輸出", value: compactOrEmpty(args.pageFolder || args.source?.page_folder || "") },
         { label: "狀態", value: runStatus(args.runLog, "split") },
       ]),
+      notice: args.source?.page_folder || args.pageFolder
+        ? { text: "拆頁檔可沿用或重新產生", tone: "ready" }
+        : { text: "會寫入單頁 PDF 到拆頁資料夾", tone: "warn" },
       portIn: "合併頁面",
       portOut: "單頁 PDF",
     },
@@ -706,6 +755,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     position: { x: GUIDE_LAYOUT.pageX, y: GUIDE_LAYOUT.pdfY },
     data: {
       ...common("split", "listPreview", "拆頁預覽", <Eye size={17} />, args.rows.length ? "ready" : "idle", args.rows.slice(0, 5).map((row) => ({ label: `P${row.page}`, value: row.source_name }))),
+      notice: args.rows.length ? undefined : { text: "分割完成後會列出前幾頁", tone: "idle" },
       portIn: "單頁 PDF",
       portOut: "頁面卡",
       rowCount: args.rows.length || args.source?.pdf_count || 0,
@@ -725,38 +775,50 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     addNode({
       id: "page_waiting",
       position: { x: GUIDE_LAYOUT.pageX + 390, y: GUIDE_LAYOUT.pdfY },
-      data: common("split", "page", "等待拆頁結果", <FileText size={17} />, "idle", [
-        { label: "顯示", value: "前 10 頁" },
-        { label: "目前", value: "0" },
-      ]),
+      data: {
+        ...common("split", "page", "P001 頁面", <FileText size={17} />, "idle", [
+          { label: "來源", value: "等待拆頁" },
+          { label: "狀態", value: "準備顯示前 10 頁", tone: "idle" },
+        ]),
+        notice: { text: "合併 PDF 分割後，這裡會展開頁面卡", tone: "idle" },
+      },
     });
     addNode({
       id: "roi_waiting",
       position: { x: GUIDE_LAYOUT.roiX, y: GUIDE_LAYOUT.pdfY - 120 },
-      data: common(
-        "roi_calib",
-        "roi",
-        "P001 ROI 調校",
-        <SlidersHorizontal size={17} />,
-        "idle",
-        roiStateRows(args.serialRegion, args.drawingRegion, false),
-      ),
+      data: {
+        ...common(
+          "roi_calib",
+          "roi",
+          "P001 ROI 調校",
+          <SlidersHorizontal size={17} />,
+          "idle",
+          roiStateRows(args.serialRegion, args.drawingRegion, false),
+        ),
+        notice: { text: "載入頁面後可框流水號與圖號", tone: "idle" },
+      },
     });
     addNode({
       id: "result_waiting",
       position: { x: GUIDE_LAYOUT.resultX, y: GUIDE_LAYOUT.pdfY },
-      data: common("batch_detect", "result", "P001 判讀結果", <SearchCheck size={17} />, "idle", [
-        { label: "流水號", value: "待判讀" },
-        { label: "信心", value: "-" },
-      ]),
+      data: {
+        ...common("batch_detect", "result", "P001 判讀結果", <SearchCheck size={17} />, "idle", [
+          { label: "流水號", value: "待判讀", tone: "idle" },
+          { label: "信心", value: "等待 ROI", tone: "idle" },
+        ]),
+        notice: { text: "只在按下判讀或重跑時執行", tone: "warn" },
+      },
     });
     addNode({
       id: "output_waiting",
       position: { x: GUIDE_LAYOUT.outputX, y: GUIDE_LAYOUT.pdfY },
-      data: common("batch_detect", "output", "P001 命名合成", <FileText size={17} />, "idle", [
-        { label: "ISO 圖號", value: "等待清單" },
-        { label: "新檔名", value: "等待判讀" },
-      ]),
+      data: {
+        ...common("batch_detect", "output", "P001 命名合成", <FileText size={17} />, "idle", [
+          { label: "ISO 圖號", value: "等待清單", tone: "idle" },
+          { label: "新檔名", value: "等待判讀", tone: "idle" },
+        ]),
+        notice: { text: "ISO 清單與判讀結果會在這裡合流", tone: "idle" },
+      },
     });
     addEdge("split_preview", "page_waiting", { kind: "pdf" });
     addEdge("page_waiting", "roi_waiting", { kind: "pdf" });
@@ -825,28 +887,44 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   addNode({
     id: "pilot",
     position: { x: summaryX, y: summaryY },
-    data: common("pilot", "summary", "結果表 / Pilot", <CircleCheck size={17} />, args.plan?.summary.blocked ? "danger" : args.plan?.summary.warn ? "warn" : args.plan?.summary.total ? "ready" : "idle", [
-      { label: "可更名", value: String(args.plan?.summary.ready ?? 0), tone: "ready" },
-      { label: "待確認", value: String(args.plan?.summary.warn ?? 0), tone: args.plan?.summary.warn ? "warn" : "idle" },
-      { label: "阻擋", value: String(args.plan?.summary.blocked ?? 0), tone: args.plan?.summary.blocked ? "danger" : "idle" },
-      { label: "檢查", value: `${args.plan?.pilot_results?.length ?? 0} 項` },
-    ]),
+    data: {
+      ...common("pilot", "summary", "結果表 / Pilot", <CircleCheck size={17} />, args.plan?.summary.blocked ? "danger" : args.plan?.summary.warn ? "warn" : args.plan?.summary.total ? "ready" : "idle", [
+        { label: "可更名", value: String(args.plan?.summary.ready ?? 0), tone: "ready" },
+        { label: "待確認", value: String(args.plan?.summary.warn ?? 0), tone: args.plan?.summary.warn ? "warn" : "idle" },
+        { label: "阻擋", value: String(args.plan?.summary.blocked ?? 0), tone: args.plan?.summary.blocked ? "danger" : "idle" },
+        { label: "檢查", value: `${args.plan?.pilot_results?.length ?? 0} 項` },
+      ]),
+      notice: args.plan?.summary.total ? undefined : { text: "命名列生成後會跑 P01-P15 檢查", tone: "idle" },
+    },
   });
   addNode({
     id: "export_csv",
     position: { x: GUIDE_LAYOUT.actionX, y: GUIDE_LAYOUT.sourceY - 80 },
-    data: common("export_csv", "action", "匯出 CSV", <FileText size={17} />, "warn", [
-      { label: "權限", value: "需授權", tone: "warn" },
-      { label: "列數", value: String(args.plan?.summary.selected ?? 0) },
-    ]),
+    data: {
+      ...common("export_csv", "action", "匯出 CSV", <FileText size={17} />, "warn", [
+        { label: "權限", value: "需確認", tone: "warn" },
+        { label: "列數", value: String(args.plan?.summary.selected ?? 0) },
+      ]),
+      guarded: true,
+      notice: { text: "鎖定：只會開啟既有匯出確認", tone: "warn", title: "這張卡不會繞過受控流程；點擊後仍走既有確認與審計路徑。" },
+      portIn: "命名列",
+      portOut: "CSV 檔",
+    },
   });
   addNode({
     id: "apply_rename",
     position: { x: GUIDE_LAYOUT.actionX, y: GUIDE_LAYOUT.sourceY + 220 },
-    data: common("apply_rename", "action", "套用更名", <AlertTriangle size={17} />, "warn", [
-      { label: "權限", value: "需授權", tone: "warn" },
-      { label: "確認", value: "必經確認" },
-    ]),
+    data: {
+      ...common("apply_rename", "action", "套用更名", <AlertTriangle size={17} />, "warn", [
+        { label: "權限", value: "需確認", tone: "warn" },
+        { label: "可更名", value: String(args.plan?.summary.ready ?? 0), tone: args.plan?.summary.ready ? "ready" : "idle" },
+        { label: "阻擋", value: String(args.plan?.summary.blocked ?? 0), tone: args.plan?.summary.blocked ? "danger" : "idle" },
+      ]),
+      guarded: true,
+      notice: { text: "鎖定：需預覽並確認才會套用", tone: "warn", title: "更名仍走既有確認對話框；阻擋列不會被直接套用。" },
+      portIn: "命名列",
+      portOut: "更名結果",
+    },
   });
   if (args.visibleRows.length) {
     for (const row of args.visibleRows) {
@@ -919,7 +997,14 @@ function portLabel(kind: WorkflowNodeKind, side: "in" | "out"): string {
   return side === "in" ? "輸入" : "輸出";
 }
 
-function cardToneStyle(tone: GuideNodeData["tone"], dirty: boolean): CSSProperties {
+function cardToneStyle(tone: GuideNodeData["tone"], dirty: boolean, guarded = false): CSSProperties {
+  if (guarded) {
+    return {
+      background: "linear-gradient(180deg, rgba(28,32,31,0.96), rgba(8,11,10,0.96))",
+      borderColor: "rgba(220,235,228,0.34)",
+      boxShadow: "0 0 0 1px rgba(220,235,228,0.06), 0 18px 40px rgba(0,0,0,0.38)",
+    };
+  }
   if (dirty) {
     return {
       background: "linear-gradient(180deg, rgba(54,43,13,0.96), rgba(15,12,5,0.96))",
@@ -974,6 +1059,27 @@ function edgeColor(kind: GuideEdgeKind): string {
   if (kind === "result") return "#c084fc";
   if (kind === "action") return "#ff9b9b";
   return "rgba(220,235,228,0.62)";
+}
+
+function sourceReadinessRows(args: BuildGuideGraphArgs): GuideNodeData["rows"] {
+  return [
+    { label: "工作資料夾", value: compactOrEmpty(args.workFolder), tone: args.workFolder ? "ready" : "warn" },
+    { label: "合併 PDF", value: readinessText(Boolean(args.pdfPath || args.source?.combine_pdf)), tone: args.pdfPath || args.source?.combine_pdf ? "ready" : "warn" },
+    { label: "ISO 清單", value: readinessText(Boolean(args.isoPath || args.source?.iso_list)), tone: args.isoPath || args.source?.iso_list ? "ready" : "warn" },
+    { label: "拆頁資料夾", value: args.pageFolder || args.source?.page_folder ? "已建立" : "尚未建立", tone: args.pageFolder || args.source?.page_folder ? "ready" : "idle" },
+  ];
+}
+
+function readinessText(ready: boolean): string {
+  return ready ? "已找到" : "待選擇";
+}
+
+function sampleNameFromPattern(pattern: string): string {
+  return pattern
+    .replace(/\{serial\}/g, "A123")
+    .replace(/\{line\}/g, "PIPE-01")
+    .replace(/\{file_basename\}/g, "圖面001")
+    .replace(/\{page\}/g, "001");
 }
 
 function roiStateRows(serialRegion: IsoRegion, drawingRegion: IsoRegion, selectedPreview: boolean): GuideNodeData["rows"] {
@@ -1195,6 +1301,16 @@ const styles = {
     display: "grid",
     gap: 8,
     minWidth: 0,
+  },
+  notice: {
+    background: "rgba(255,255,255,0.035)",
+    border: "1px solid",
+    borderRadius: 7,
+    display: "block",
+    fontSize: 11,
+    fontWeight: 900,
+    lineHeight: 1.35,
+    padding: "6px 7px",
   },
   nodeHeader: {
     alignItems: "center",
