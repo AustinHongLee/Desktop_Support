@@ -157,6 +157,8 @@ type GuideCanvasNode = AreaNode | GuideNode | PageItemNode;
 
 const PAGE_CHUNK_SIZE = 10;
 const DEFAULT_VIEWPORT = { x: 86, y: 54, zoom: 0.58 };
+const PREVIEW_NODE_GAP_Y = 90;
+const PREVIEW_TO_PAGE_GAP_Y = 210;
 const GUIDE_LAYOUT = {
   actionX: 3540,
   branchX: 360,
@@ -775,9 +777,22 @@ type BuildGuideGraphArgs = Pick<
   workFolder: string;
 };
 
+type RuntimeGuideLayout = {
+  isoPreviewHeight: number;
+  isoPreviewRows: GuideNodeData["rows"];
+  isoPreviewY: number;
+  pageAreaHeight: number;
+  pageAreaY: number;
+  rowStartY: number;
+  splitPreviewHeight: number;
+  splitPreviewRows: GuideNodeData["rows"];
+  splitPreviewY: number;
+};
+
 function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: GuideCanvasNode[] } {
   const nodes: GuideCanvasNode[] = [];
   const edges: Edge[] = [];
+  const layout = buildRuntimeLayout(args);
   const addAreaNode = (node: Omit<AreaNode, "type">) => {
     nodes.push({ ...node, type: "areaNode" });
   };
@@ -800,7 +815,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     });
   };
 
-  addWorkbenchAreas(args, addAreaNode);
+  addWorkbenchAreas(addAreaNode, layout);
 
   const common = (nodeId: string, kind: WorkflowNodeKind, title: string, icon: ReactNode, tone: GuideNodeData["tone"], rows: GuideNodeData["rows"] = []): GuideNodeData => ({
     active: args.selectedNodeId === nodeId,
@@ -908,9 +923,9 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   });
   addNode({
     id: "iso_preview",
-    position: { x: GUIDE_LAYOUT.pageX, y: GUIDE_LAYOUT.isoY + 185 },
+    position: { x: GUIDE_LAYOUT.pageX, y: layout.isoPreviewY },
     data: {
-      ...common("load_table", "listPreview", "ISO 預覽", <Eye size={17} />, args.source?.record_count ? "ready" : "idle", isoPreviewRows(args.source)),
+      ...common("load_table", "listPreview", "ISO 預覽", <Eye size={17} />, args.source?.record_count ? "ready" : "idle", layout.isoPreviewRows),
       notice: args.source?.record_count ? undefined : { text: "載入後會列出前幾筆清單欄位", tone: "idle" },
       portIn: "命名規則",
       portOut: "ISO 候選",
@@ -950,9 +965,9 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   });
   addNode({
     id: "split_preview",
-    position: { x: GUIDE_LAYOUT.pageX, y: GUIDE_LAYOUT.pdfY },
+    position: { x: GUIDE_LAYOUT.pageX, y: layout.splitPreviewY },
     data: {
-      ...common("split", "listPreview", "拆頁預覽", <Eye size={17} />, args.rows.length ? "ready" : "idle", args.rows.slice(0, 5).map((row) => ({ label: `P${row.page}`, value: row.source_name }))),
+      ...common("split", "listPreview", "拆頁預覽", <Eye size={17} />, args.rows.length ? "ready" : "idle", layout.splitPreviewRows),
       notice: args.rows.length ? undefined : { text: "分割完成後會列出前幾頁", tone: "idle" },
       portIn: "單頁 PDF",
       portOut: "頁面卡",
@@ -972,7 +987,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   if (!args.visibleRows.length) {
     addNode({
       id: "page_waiting",
-      position: { x: GUIDE_LAYOUT.pageX + 390, y: GUIDE_LAYOUT.pdfY },
+      position: { x: GUIDE_LAYOUT.pageX + 390, y: layout.rowStartY },
       data: {
         ...common("split", "page", "P001 頁面", <FileText size={17} />, "idle", [
           { label: "來源", value: "等待拆頁" },
@@ -983,7 +998,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     });
     addNode({
       id: "roi_waiting",
-      position: { x: GUIDE_LAYOUT.roiX, y: GUIDE_LAYOUT.pdfY - 120 },
+      position: { x: GUIDE_LAYOUT.roiX, y: layout.rowStartY - 110 },
       data: {
         ...common(
           "roi_calib",
@@ -998,7 +1013,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     });
     addNode({
       id: "result_waiting",
-      position: { x: GUIDE_LAYOUT.resultX, y: GUIDE_LAYOUT.pdfY },
+      position: { x: GUIDE_LAYOUT.resultX, y: layout.rowStartY },
       data: {
         ...common("batch_detect", "result", "P001 判讀結果", <SearchCheck size={17} />, "idle", [
           { label: "流水號", value: "待判讀", tone: "idle" },
@@ -1009,7 +1024,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     });
     addNode({
       id: "output_waiting",
-      position: { x: GUIDE_LAYOUT.outputX, y: GUIDE_LAYOUT.pdfY },
+      position: { x: GUIDE_LAYOUT.outputX, y: layout.rowStartY },
       data: {
         ...common("batch_detect", "output", "P001 命名合成", <FileText size={17} />, "idle", [
           { label: "ISO 圖號", value: "等待清單", tone: "idle" },
@@ -1025,7 +1040,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   }
 
   args.visibleRows.forEach((row, index) => {
-    const y = GUIDE_LAYOUT.rowStartY + index * GUIDE_LAYOUT.rowGapY;
+    const y = layout.rowStartY + index * GUIDE_LAYOUT.rowGapY;
     const pageId = `page_${row.page}`;
     const roiId = `roi_${row.page}`;
     const resultId = `result_${row.page}`;
@@ -1171,7 +1186,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   if (args.visibleLimit < args.rows.length) {
     addNode({
       id: "load_more",
-      position: { x: GUIDE_LAYOUT.pageX + 390, y: GUIDE_LAYOUT.rowStartY + args.visibleRows.length * GUIDE_LAYOUT.rowGapY },
+      position: { x: GUIDE_LAYOUT.pageX + 390, y: layout.rowStartY + args.visibleRows.length * GUIDE_LAYOUT.rowGapY },
       data: {
         ...common("split", "more", "更多頁面", <MoreHorizontal size={17} />, "idle", []),
         rowCount: args.rows.length,
@@ -1184,9 +1199,36 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   return { edges, nodes };
 }
 
-function addWorkbenchAreas(args: BuildGuideGraphArgs, addAreaNode: (node: Omit<AreaNode, "type">) => void) {
+function buildRuntimeLayout(args: BuildGuideGraphArgs): RuntimeGuideLayout {
+  const isoPreviewRowsValue = isoPreviewRows(args.source);
+  const splitPreviewRowsValue = args.rows.slice(0, 5).map((row) => ({ label: `P${row.page}`, value: row.source_name }));
+  const isoPreviewY = GUIDE_LAYOUT.isoY + 185;
+  const isoPreviewHeight = listPreviewNodeHeight(isoPreviewRowsValue.length, !args.source?.record_count);
+  const splitPreviewY = Math.max(GUIDE_LAYOUT.pdfY, isoPreviewY + isoPreviewHeight + PREVIEW_NODE_GAP_Y);
+  const splitPreviewHeight = listPreviewNodeHeight(splitPreviewRowsValue.length, !args.rows.length);
+  const rowStartY = Math.max(GUIDE_LAYOUT.rowStartY, splitPreviewY + splitPreviewHeight + PREVIEW_TO_PAGE_GAP_Y);
   const pageCount = Math.max(1, args.visibleRows.length);
   const pageAreaHeight = Math.max(820, pageCount * GUIDE_LAYOUT.rowGapY + 120);
+  return {
+    isoPreviewHeight,
+    isoPreviewRows: isoPreviewRowsValue,
+    isoPreviewY,
+    pageAreaHeight,
+    pageAreaY: rowStartY - 210,
+    rowStartY,
+    splitPreviewHeight,
+    splitPreviewRows: splitPreviewRowsValue,
+    splitPreviewY,
+  };
+}
+
+function listPreviewNodeHeight(rowCount: number, hasNotice: boolean): number {
+  const visibleRows = Math.max(1, rowCount);
+  const noticeHeight = hasNotice ? 42 : 0;
+  return Math.max(220, 108 + noticeHeight + visibleRows * 58);
+}
+
+function addWorkbenchAreas(addAreaNode: (node: Omit<AreaNode, "type">) => void, layout: RuntimeGuideLayout) {
   const areaStyle = (width: number, height: number): CSSProperties => ({
     height,
     pointerEvents: "none",
@@ -1204,10 +1246,14 @@ function addWorkbenchAreas(args: BuildGuideGraphArgs, addAreaNode: (node: Omit<A
     });
   };
 
+  const isoAreaY = -35;
+  const isoAreaHeight = Math.max(390, layout.isoPreviewY + layout.isoPreviewHeight + 55 - isoAreaY);
+  const pdfAreaY = GUIDE_LAYOUT.pdfY - 70;
+  const pdfAreaHeight = Math.max(330, layout.splitPreviewY + layout.splitPreviewHeight + 60 - pdfAreaY);
   area("area_source", "來源區", "選取工作區與來源狀態", -90, GUIDE_LAYOUT.sourceY - 95, 360, 360);
-  area("area_iso", "ISO 清單區", "清單、工作表、欄位、命名格式", GUIDE_LAYOUT.branchX - 70, -35, 1300, 390);
-  area("area_pdf", "PDF 分割區", "合併 PDF、拆頁與頁面預覽", GUIDE_LAYOUT.branchX - 70, GUIDE_LAYOUT.pdfY - 70, 1300, 330);
-  area("area_pages", "頁面處理區", "每頁 Page Item：source → ROI → 判讀 → 命名", GUIDE_LAYOUT.pageX + 300, GUIDE_LAYOUT.rowStartY - 210, 1860, pageAreaHeight);
+  area("area_iso", "ISO 清單區", "清單、工作表、欄位、命名格式", GUIDE_LAYOUT.branchX - 70, isoAreaY, 1300, isoAreaHeight);
+  area("area_pdf", "PDF 分割區", "合併 PDF、拆頁與頁面預覽", GUIDE_LAYOUT.branchX - 70, pdfAreaY, 1300, pdfAreaHeight);
+  area("area_pages", "頁面處理區", "每頁 Page Item：source → ROI → 判讀 → 命名", GUIDE_LAYOUT.pageX + 300, layout.pageAreaY, 1860, layout.pageAreaHeight);
   area("area_output", "輸出/更名區", "Pilot、CSV、套用更名鎖定操作", GUIDE_LAYOUT.mergeX - 90, GUIDE_LAYOUT.sourceY - 70, 760, 760);
 }
 
