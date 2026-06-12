@@ -849,7 +849,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       meta: "流程入口",
       notice: args.workFolder || args.pdfPath || args.isoPath
         ? { text: "來源已連到下游節點", tone: "ready", title: "工作區會同時餵給 ISO 清單與合併 PDF 分支。" }
-        : { text: "從這裡開始：點選此卡設定工作資料夾", tone: "warn", title: "選好工作資料夾後，ISO 清單與 PDF 分支會依序亮起。" },
+        : { text: "從這裡開始：點選此卡設定工作區。", tone: "warn", title: "選好工作區後，ISO 清單與 PDF 分支會依序亮起。" },
       portIn: "使用者選擇",
       portOut: "來源路徑",
     },
@@ -865,7 +865,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       ]),
       notice: args.isoPath || args.source?.iso_list
         ? undefined
-        : { text: "等待工作區提供 ISO 清單", tone: "idle" },
+        : { text: args.workFolder ? "工作區內找不到 ISO 清單，請在來源卡換工作區或到工作台指定檔案。" : "先在左側來源卡選工作區，找到後會自動載入 ISO 清單。", tone: args.workFolder ? "warn" : "idle" },
       portIn: "清單檔",
       portOut: "表格資料",
     },
@@ -932,7 +932,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       ]),
       notice: args.pdfPath || args.source?.combine_pdf
         ? undefined
-        : { text: "等待工作區提供合併 PDF", tone: "idle" },
+        : { text: args.workFolder ? "工作區內找不到合併 PDF，請在來源卡換工作區或到工作台指定檔案。" : "先在左側來源卡選工作區，找到後會自動帶入合併 PDF。", tone: args.workFolder ? "warn" : "idle" },
       portIn: "PDF 檔",
       portOut: "合併頁面",
     },
@@ -947,7 +947,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       ]),
       notice: args.source?.page_folder || args.pageFolder
         ? { text: "拆頁檔可沿用或重新產生", tone: "ready" }
-        : { text: "會寫入單頁 PDF 到拆頁資料夾", tone: "warn" },
+        : { text: args.pdfPath || args.source?.combine_pdf ? "按「開始分割 PDF」後，這裡會寫入單頁 PDF 到拆頁資料夾。" : "先讓合併 PDF 卡找到檔案，再回到這張卡分割。", tone: "warn" },
       portIn: "合併頁面",
       portOut: "單頁 PDF",
     },
@@ -982,7 +982,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
           { label: "來源", value: "等待拆頁" },
           { label: "狀態", value: "準備顯示前 10 頁", tone: "idle" },
         ]),
-        notice: { text: "合併 PDF 分割後，這裡會展開頁面卡", tone: "idle" },
+        notice: { text: "合併 PDF 分割後，這裡會展開頁面卡。", tone: "idle" },
       },
     });
     addNode({
