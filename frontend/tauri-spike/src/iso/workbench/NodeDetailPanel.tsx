@@ -11,6 +11,7 @@ import { compactPath, DEFAULT_DRAWING_REGION, DEFAULT_SERIAL_REGION } from "../h
 import { PilotListPanel } from "../components/PilotListPanel";
 import { RoiOverlay } from "../components/RoiOverlay";
 import { RoiSamplePanel } from "../components/RoiSamplePanel";
+import { LiveCrop } from "./LiveCrop";
 import type { NodeCardSummary } from "./nodeCards";
 
 type DetailAction = {
@@ -264,8 +265,12 @@ function RoiDetail({
         )}
       </div>
       <div style={styles.cropGrid}>
-        <Crop title="流水號裁切" image={preview?.serial_crop.image} />
-        <Crop title="圖號裁切" image={preview?.drawing_crop.image} />
+        <Crop title="流水號裁切">
+          <LiveCrop image={preview?.page.image} region={serialRegion} />
+        </Crop>
+        <Crop title="圖號裁切">
+          <LiveCrop image={preview?.page.image} region={drawingRegion} />
+        </Crop>
       </div>
       <RegionEditor activeRoi={activeRoi} drawingRegion={drawingRegion} onChange={updateRegion} serialRegion={serialRegion} />
       <DetailGrid rows={[
@@ -516,11 +521,11 @@ function ActionRow({ actions }: { actions: DetailAction[] }) {
   );
 }
 
-function Crop({ image, title }: { image?: string; title: string }) {
+function Crop({ children, image, title }: { children?: ReactNode; image?: string; title: string }) {
   return (
     <div style={styles.crop}>
       <span>{title}</span>
-      {image ? <img src={image} alt={title} /> : <div />}
+      {children ?? (image ? <img src={image} alt={title} /> : <div />)}
     </div>
   );
 }
