@@ -897,7 +897,7 @@ export function WorkflowInspector({
           </div>
         ) : null}
 
-        {job ? (
+        {job && isWorkflowJobRunning(job) ? (
           <div style={styles.jobPanel}>
             <div style={styles.jobHead}>
               <div>
@@ -919,16 +919,11 @@ export function WorkflowInspector({
 
         <NodeWorkbench
           header={(
-            <div style={styles.metrics}>
-              <Metric icon={<Braces size={16} />} label="型錄" value={nodeCatalog ? `${nodeCatalog.node_count}` : "-"} />
-              <Metric
-                icon={graph?.valid ? <CircleCheck size={16} /> : <CircleAlert size={16} />}
-                label="驗證"
-                value={graph ? (graph.valid ? "通過" : `${graph.issues.length}`) : "-"}
-                tone={graph?.valid === false ? "warn" : "ready"}
-              />
-              <Metric icon={<Route size={16} />} label="拓撲" value={graph?.topology?.length ? `${graph.topology.length}` : "-"} />
-              <Metric icon={<ShieldCheck size={16} />} label="副作用" value={`${executedCount} / ${blockedCount}`} tone={blockedCount ? "warn" : "ready"} />
+            <div style={styles.nodeStatusStrip}>
+              <span style={styles.nodeStatusChip}><Braces size={13} />型錄 {nodeCatalog ? `${nodeCatalog.node_count}` : "-"}</span>
+              <span style={graph?.valid === false ? styles.nodeStatusChipWarn : styles.nodeStatusChip}><CircleCheck size={13} />驗證 {graph ? (graph.valid ? "通過" : `${graph.issues.length}`) : "-"}</span>
+              <span style={styles.nodeStatusChip}><Route size={13} />拓撲 {graph?.topology?.length ? `${graph.topology.length}` : "-"}</span>
+              <span style={blockedCount ? styles.nodeStatusChipWarn : styles.nodeStatusChip}><ShieldCheck size={13} />副作用 {executedCount} / {blockedCount}</span>
             </div>
           )}
           canvas={(
@@ -2001,8 +1996,8 @@ const styles = {
     borderTop: "1px solid rgba(255,255,255,0.08)",
     display: "flex",
     flexDirection: "column",
-    gap: 12,
-    padding: 12,
+    gap: 8,
+    padding: 9,
     minWidth: 0,
   },
   toolbar: {
@@ -2100,6 +2095,43 @@ const styles = {
     gridTemplateColumns: "auto 1fr",
     padding: "10px 12px",
     minWidth: 0,
+  },
+  nodeStatusStrip: {
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+    minWidth: 0,
+  },
+  nodeStatusChip: {
+    alignItems: "center",
+    background: "rgba(255,255,255,0.028)",
+    border: "1px solid rgba(47,245,200,0.16)",
+    borderRadius: 999,
+    color: "rgba(220,252,244,0.72)",
+    display: "inline-flex",
+    fontSize: 11,
+    fontWeight: 900,
+    gap: 5,
+    lineHeight: 1,
+    minHeight: 24,
+    padding: "4px 8px",
+    whiteSpace: "nowrap",
+  },
+  nodeStatusChipWarn: {
+    alignItems: "center",
+    background: "rgba(255,209,102,0.055)",
+    border: "1px solid rgba(255,209,102,0.26)",
+    borderRadius: 999,
+    color: "#ffd166",
+    display: "inline-flex",
+    fontSize: 11,
+    fontWeight: 900,
+    gap: 5,
+    lineHeight: 1,
+    minHeight: 24,
+    padding: "4px 8px",
+    whiteSpace: "nowrap",
   },
   grid: {
     display: "grid",

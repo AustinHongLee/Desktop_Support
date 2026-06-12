@@ -312,14 +312,7 @@ export function WorkflowGuideCanvas({
       <div style={styles.toolbar}>
         <div style={styles.toolbarText}>
           <span>ComfyUI 風格節點畫布</span>
-          <strong>工作區分叉 · ISO / PDF 匯流 · 每頁 ROI · 判讀輸出</strong>
-          <div style={styles.flowLegend}>
-            <span style={styles.lanePill}>來源</span>
-            <span style={styles.lanePill}>設定</span>
-            <span style={styles.lanePill}>處理</span>
-            <span style={styles.lanePill}>結果</span>
-            <span style={styles.lanePill}>輸出</span>
-          </div>
+          <strong>工作區分叉 · ISO/PDF 匯流 · 每頁 ROI · 判讀輸出</strong>
           <div style={styles.edgeLegend}>
             <span style={styles.edgeLegendItem}><i style={{ ...styles.edgeDot, background: edgeColor("table") }} />表格</span>
             <span style={styles.edgeLegendItem}><i style={{ ...styles.edgeDot, background: edgeColor("pdf") }} />PDF / 頁面</span>
@@ -1519,24 +1512,23 @@ const styles = {
   edgeDot: {
     borderRadius: 999,
     display: "inline-block",
-    height: 7,
-    width: 18,
+    height: 5,
+    width: 14,
   },
   edgeLegend: {
     alignItems: "center",
     display: "flex",
     flexWrap: "wrap",
-    gap: 7,
-    marginTop: 3,
+    gap: 6,
     minWidth: 0,
   },
   edgeLegendItem: {
     alignItems: "center",
     color: "rgba(220,252,244,0.58)",
     display: "inline-flex",
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: 900,
-    gap: 5,
+    gap: 4,
     whiteSpace: "nowrap",
   },
   handle: {
@@ -1802,13 +1794,13 @@ const styles = {
     gridTemplateColumns: "1fr 1fr",
   },
   shell: {
-    background: "rgba(3,10,8,0.72)",
-    border: "1px solid rgba(47,245,200,0.22)",
-    borderRadius: 10,
+    background: "rgba(3,10,8,0.58)",
+    border: "1px solid rgba(47,245,200,0.16)",
+    borderRadius: 8,
     display: "grid",
-    gap: 10,
+    gap: 6,
     minWidth: 0,
-    padding: 10,
+    padding: 7,
   },
   sliderRow: {
     alignItems: "center",
@@ -1830,33 +1822,35 @@ const styles = {
   },
   toolbar: {
     alignItems: "center",
-    background: "rgba(47,245,200,0.07)",
-    border: "1px solid rgba(47,245,200,0.16)",
-    borderRadius: 9,
+    background: "rgba(47,245,200,0.035)",
+    border: "1px solid rgba(47,245,200,0.10)",
+    borderRadius: 7,
     display: "flex",
-    gap: 12,
+    gap: 8,
     justifyContent: "space-between",
     minWidth: 0,
-    padding: "9px 11px",
+    padding: "6px 8px",
   },
   toolbarActions: {
     alignItems: "center",
     display: "flex",
     flexWrap: "wrap",
-    gap: 7,
+    gap: 6,
     justifyContent: "flex-end",
   },
   toolbarPill: {
     border: "1px solid rgba(47,245,200,0.22)",
     borderRadius: 999,
     color: "#2ff5c8",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 900,
-    padding: "5px 9px",
+    padding: "3px 7px",
   },
   toolbarText: {
-    display: "grid",
-    gap: 2,
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
     minWidth: 0,
   },
   trialReadyBox: {
