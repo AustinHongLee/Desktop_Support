@@ -45,7 +45,6 @@ type WorkflowGuideCanvasProps = {
   onSelectNode?: (nodeId: string) => void;
   onSelectRow?: (rowId: string) => void;
   onWorkflowInputChange?: (nodeId: string, field: string, value: unknown) => void;
-  pageRoiDrafts?: Record<string, IsoPageRoiDraft>;
   pageTrialBusyId?: string;
   pageTrials?: Record<string, IsoPageTrial>;
   plan: IsoWorkflowPlan | null;
@@ -69,12 +68,6 @@ export type IsoPageTrial = {
   serial: string;
   sourcePath: string;
   updatedAt: string;
-};
-
-export type IsoPageRoiDraft = {
-  confidenceThreshold?: number;
-  drawingRegion?: IsoRegion;
-  serialRegion?: IsoRegion;
 };
 
 type WorkflowNodeKind =
@@ -186,7 +179,6 @@ export function WorkflowGuideCanvas({
   onSelectRow,
   onPageRoiInputChange,
   onWorkflowInputChange,
-  pageRoiDrafts = {},
   pageTrialBusyId = "",
   pageTrials = {},
   plan,
@@ -241,7 +233,6 @@ export function WorkflowGuideCanvas({
     onSelectRow,
     onPageRoiInputChange,
     onWorkflowInputChange,
-    pageRoiDrafts,
     pageTrialBusyId,
     pageTrials,
     pageFolder,
@@ -284,7 +275,6 @@ export function WorkflowGuideCanvas({
     onSelectRow,
     onPageRoiInputChange,
     onWorkflowInputChange,
-    pageRoiDrafts,
     pageTrialBusyId,
     pageTrials,
     pageFolder,
@@ -532,6 +522,7 @@ function RoiBody({ data }: { data: GuideNodeData }) {
           {lowConfidence ? "低信心" : trial ? "已有試判" : "待試判"}
         </em>
       </div>
+      <span style={styles.sharedRoiNotice}>ROI 為全部頁共用；調整任一頁會讓批次判讀與更名結果待重跑。</span>
       <div
         className="nodrag"
         style={styles.roiPreview}
@@ -680,7 +671,9 @@ function ActionBody({ data }: { data: GuideNodeData }) {
   const isExport = data.nodeId === "export_csv";
   const readyCount = Number(data.rows.find((row) => row.label === "可更名" || row.label === "列數")?.value ?? 0);
   const busy = data.workbenchActionBusy === (isExport ? "export" : "apply");
-  const disabled = busy || (isExport ? !data.onExportPlan : !data.onApplyPlan || readyCount <= 0);
+  const dirtyNeedsRerun = Boolean(data.dirty);
+  const disabled = busy || (dirtyNeedsRerun ? !data.onRunFrom : isExport ? !data.onExportPlan : !data.onApplyPlan || readyCount <= 0);
+  const label = busy ? "處理中" : dirtyNeedsRerun ? "先重跑下游" : isExport ? "匯出草稿 CSV" : "開啟套用確認";
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
@@ -689,9 +682,13 @@ function ActionBody({ data }: { data: GuideNodeData }) {
         className={isExport ? "action-button nodrag" : "launch-button nodrag"}
         disabled={disabled}
         type="button"
-        title={isExport ? "匯出目前命名草稿 CSV。" : "開啟套用確認；確認後才會實際改名 PDF。"}
+        title={dirtyNeedsRerun ? "目前參數已變更，需先重跑判讀、Pilot 與命名結果。" : isExport ? "匯出目前命名草稿 CSV。" : "開啟套用確認；確認後才會實際改名 PDF。"}
         onClick={(event) => {
           event.stopPropagation();
+          if (dirtyNeedsRerun) {
+            data.onRunFrom?.("batch_detect");
+            return;
+          }
           if (isExport) {
             data.onExportPlan?.();
           } else {
@@ -699,8 +696,8 @@ function ActionBody({ data }: { data: GuideNodeData }) {
           }
         }}
       >
-        {isExport ? <SearchCheck size={13} /> : <AlertTriangle size={13} />}
-        <span>{busy ? "處理中" : isExport ? "匯出草稿 CSV" : "開啟套用確認"}</span>
+        {dirtyNeedsRerun ? <RefreshCcw size={13} /> : isExport ? <SearchCheck size={13} /> : <AlertTriangle size={13} />}
+        <span>{label}</span>
       </button>
     </div>
   );
@@ -757,7 +754,7 @@ function Crop({ children, image, title }: { children?: ReactNode; image?: string
 
 type BuildGuideGraphArgs = Pick<
   WorkflowGuideCanvasProps,
-  "onApplyPlan" | "onChooseWorkFolder" | "onExportPlan" | "onPageRoiInputChange" | "onRefreshPreview" | "onRequestSafeRun" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "requestSafeRunEnabled" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workbenchActionBusy" | "workflowInputs"
+  "onApplyPlan" | "onChooseWorkFolder" | "onExportPlan" | "onPageRoiInputChange" | "onRefreshPreview" | "onRequestSafeRun" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "requestSafeRunEnabled" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workbenchActionBusy" | "workflowInputs"
 > & {
   dirty: Set<string>;
   drawingRegion: IsoRegion;
@@ -1037,10 +1034,9 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     const roiId = `roi_${row.page}`;
     const resultId = `result_${row.page}`;
     const outputId = `output_${row.page}`;
-    const pageDraft = args.pageRoiDrafts?.[row.id] ?? {};
-    const rowSerialRegion = pageDraft.serialRegion ?? args.serialRegion;
-    const rowDrawingRegion = pageDraft.drawingRegion ?? args.drawingRegion;
-    const rowThreshold = pageDraft.confidenceThreshold ?? args.threshold;
+    const rowSerialRegion = args.serialRegion;
+    const rowDrawingRegion = args.drawingRegion;
+    const rowThreshold = args.threshold;
     const rowDirty = args.dirty.has(`roi:${row.id}`) || args.dirty.has(`batch_detect:${row.id}`);
     const globalPreviewMatches = args.preview?.source_path === row.source_path;
     const rowPreview = args.previewBySourcePath?.[row.source_path] ?? (globalPreviewMatches ? args.preview : null);
@@ -1087,7 +1083,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
           { label: "信心", value: row.confidence ? `${Math.round(row.confidence * 100)}%` : "未判讀", tone: lowConfidence ? "warn" : row.confidence ? "ready" : "idle" },
           { label: "訊息", value: row.vision_message || "-" },
         ]),
-        notice: trialNotice(args.pageTrials?.[row.id], row),
+        notice: staleResultNotice(args.dirty.has("roi_calib") || args.dirty.has("batch_detect") || rowDirty, args.pageTrials?.[row.id], row),
       },
     });
     addNode({
@@ -1352,6 +1348,17 @@ function trialNotice(trial: IsoPageTrial | undefined, row: IsoPlanRow): GuideNod
     text: "本頁試判與批次結果一致。",
     tone: "ready",
   };
+}
+
+function staleResultNotice(dirty: boolean, trial: IsoPageTrial | undefined, row: IsoPlanRow): GuideNodeData["notice"] | undefined {
+  if (dirty) {
+    return {
+      text: "結果基於舊 ROI/參數，請先重跑下游。",
+      tone: "warn",
+      title: "ROI、欄位或格式已變更，目前顯示的是上一次批次結果。",
+    };
+  }
+  return trialNotice(trial, row);
 }
 
 function regionConfigured(region: IsoRegion, fallback: IsoRegion): boolean {
@@ -1700,6 +1707,18 @@ const styles = {
     gridTemplateColumns: "auto minmax(0, 1fr) auto",
     minWidth: 0,
     padding: "7px 8px",
+  },
+  sharedRoiNotice: {
+    background: "rgba(255,209,102,0.08)",
+    border: "1px solid rgba(255,209,102,0.22)",
+    borderRadius: 7,
+    color: "#ffd166",
+    display: "block",
+    fontSize: 11,
+    fontWeight: 900,
+    gridColumn: "1 / -1",
+    lineHeight: 1.35,
+    padding: "6px 8px",
   },
   roiTrialBox: {
     alignItems: "center",
