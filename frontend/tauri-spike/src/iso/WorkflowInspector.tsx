@@ -4,6 +4,7 @@ import {
   CircleAlert,
   CircleCheck,
   FileSearch,
+  FolderOpen,
   GitBranch,
   Lock,
   RefreshCcw,
@@ -26,6 +27,7 @@ import {
   loadIsoWorkflowJobStatus,
   loadIsoWorkflowPlanFromRun,
   loadIsoNodeWorkflow,
+  pickIsoWorkFolder,
   readIsoWorkflowArtifact,
   readIsoWorkflowRunLog,
   runIsoWorkflowFromSafe,
@@ -121,6 +123,9 @@ export function WorkflowInspector({
   const [pageTrials, setPageTrials] = useState<Record<string, IsoPageTrial>>({});
   const [pageTrialBusyId, setPageTrialBusyId] = useState("");
   const [overlayInputs, setOverlayInputs] = useState<Record<string, unknown>>({});
+  const [nodeSourceTouched, setNodeSourceTouched] = useState(false);
+  const [nodeSourceMessage, setNodeSourceMessage] = useState("");
+  const [sourcePickBusy, setSourcePickBusy] = useState(false);
   const [dirtyNodeIds, setDirtyNodeIds] = useState<string[]>([]);
   const [workbenchActionBusy, setWorkbenchActionBusy] = useState<"" | "apply" | "export">("");
   const [workbenchActionMessage, setWorkbenchActionMessage] = useState("");
@@ -163,15 +168,15 @@ export function WorkflowInspector({
   const selectedCanvasNode = canvasDetailNodes.find((node) => node.node_id === activeCanvasNodeId) ?? null;
   const selectedCanvasSpec = selectedCanvasNode ? specByType.get(selectedCanvasNode.node_type) : undefined;
   const selectedCanvasLog = selectedCanvasNode ? runLog?.nodes?.[selectedCanvasNode.node_id] : undefined;
-  const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
+  const selectedRun = selectedRunId ? runs.find((run) => run.run_id === selectedRunId) ?? null : nodeSourceTouched ? null : runs[0] ?? null;
   const summary = job?.result?.side_effect_summary ?? selectedRun?.side_effect_summary ?? runLog?.side_effect_summary;
   const blockedCount = summary?.blocked?.length ?? 0;
   const executedCount = summary?.executed?.length ?? 0;
   const baseInputs = useMemo(() => compactWorkflowInputs(workflowInputs), [workflowInputs]);
   const baseInputsKey = useMemo(() => stableJson(baseInputs), [baseInputs]);
   const safeInputs = useMemo(() => compactWorkflowInputs({ ...baseInputs, ...overlayInputs }), [baseInputs, overlayInputs]);
-  const displayPlan = projectedPlan ?? workbenchPlan;
-  const displayPlanOrigin = projectedPlan ? "節點流程結果" : workbenchPlan ? "工作台草稿已接入" : "等待資料";
+  const displayPlan = projectedPlan ?? (nodeSourceTouched ? null : workbenchPlan);
+  const displayPlanOrigin = projectedPlan ? "節點流程結果" : nodeSourceTouched ? "節點來源待執行" : workbenchPlan ? "工作台草稿已接入" : "等待資料";
   const previewErrorForCanvas = nodePreviewError || (displayPlan ? "" : projectionError);
   const previewCacheRows = useMemo(() => (displayPlan?.rows ?? []).slice(0, NODE_PREVIEW_CACHE_LIMIT), [displayPlan]);
   const previewCacheRowsKey = useMemo(
@@ -213,6 +218,8 @@ export function WorkflowInspector({
 
   useEffect(() => {
     setOverlayInputs({});
+    setNodeSourceTouched(false);
+    setNodeSourceMessage("");
     setDirtyNodeIds([]);
     setSelectedGuideRowId("");
     setNodePreviewCache({});
@@ -486,9 +493,73 @@ export function WorkflowInspector({
     setSafeRunConfirmOpen(true);
   }
 
+  function resetNodeRunState() {
+    setProjectedPlan(null);
+    setProjectionError("");
+    setRunLog(null);
+    setSelectedRunId("");
+    setProjectionRunId("");
+    setSelectedGuideRowId("");
+    setSelectedCanvasNodeId("pdf_source");
+    setNodePreview(null);
+    setNodePreviewCache({});
+    setNodePreviewFailed({});
+    setNodePreviewLoading({});
+    setNodePreviewError("");
+    setPageTrials({});
+    setPageTrialBusyId("");
+    setArtifactPreview({});
+    previewFailedRef.current.clear();
+    previewInFlightRef.current.clear();
+  }
+
+  async function chooseNodeWorkFolder() {
+    if (!isTauri()) {
+      setRunError("請用 Tauri 桌面版選擇節點式工作區。");
+      return;
+    }
+    if (sourcePickBusy) {
+      return;
+    }
+    setSourcePickBusy(true);
+    setRunError("");
+    try {
+      const path = await pickIsoWorkFolder();
+      if (!path) {
+        return;
+      }
+      setOverlayInputs((previous) => ({
+        ...previous,
+        work_folder: path,
+        combine_pdf: "",
+        page_folder: "",
+        iso_list: "",
+        sheet_name: "",
+        serial_col: "",
+        line_col: "",
+      }));
+      setNodeSourceTouched(true);
+      setNodeSourceMessage(`節點工作區：${path}`);
+      resetNodeRunState();
+      setDirtyNodeIds((previous) => mergeUnique(previous, dirtyNodesFrom("pdf_source")));
+      if (!loaded && !loading) {
+        void refresh();
+      }
+    } catch (caught) {
+      setRunError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSourcePickBusy(false);
+    }
+  }
+
   function handleWorkflowInputChange(nodeId: string, field: string, value: unknown) {
     setOverlayInputs((previous) => ({ ...previous, [field]: value }));
     setDirtyNodeIds((previous) => mergeUnique(previous, dirtyNodesFrom(nodeId)));
+    if (isSourceInputField(field)) {
+      setNodeSourceTouched(true);
+      setNodeSourceMessage(`節點來源已手動更新：${inputLabel(field)}`);
+      resetNodeRunState();
+    }
   }
 
   function handlePageRoiInputChange(rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) {
@@ -857,6 +928,10 @@ export function WorkflowInspector({
             <small>{compactPath(SAFE_WORKFLOW_PATH)}</small>
           </div>
           <div style={styles.toolbarActions}>
+            <button className="action-button" type="button" onClick={() => void chooseNodeWorkFolder()} disabled={sourcePickBusy || isWorkflowJobRunning(job)}>
+              <FolderOpen size={15} />
+              <span>{sourcePickBusy ? "選擇中" : "選工作區"}</span>
+            </button>
             <button className="action-button" type="button" onClick={() => void refresh()} disabled={loading}>
               <RefreshCcw size={15} />
               <span>{loading ? "讀取中" : "重新整理"}</span>
@@ -887,6 +962,12 @@ export function WorkflowInspector({
         {workbenchActionMessage ? (
           <div style={styles.notice}>
             <span>{workbenchActionMessage}</span>
+          </div>
+        ) : null}
+        {nodeSourceTouched && nodeSourceMessage ? (
+          <div style={styles.sourceNotice}>
+            <FolderOpen size={15} />
+            <span>{nodeSourceMessage}</span>
           </div>
         ) : null}
         {!safeRunReady ? (
@@ -1704,6 +1785,10 @@ function dirtyNodesFrom(nodeId: string): string[] {
   return downstream[nodeId] ?? [nodeId];
 }
 
+function isSourceInputField(field: string): boolean {
+  return ["combine_pdf", "iso_list", "page_folder", "work_folder"].includes(field);
+}
+
 function rerunEngineNodeId(nodeId: string): string {
   if (nodeId === "pdf_source") {
     return "discover";
@@ -2039,6 +2124,19 @@ const styles = {
     borderRadius: 10,
     color: "rgba(220,235,228,0.62)",
     fontSize: 12,
+    padding: "9px 11px",
+  },
+  sourceNotice: {
+    alignItems: "center",
+    background: "rgba(47,245,200,0.06)",
+    border: "1px solid rgba(47,245,200,0.20)",
+    borderRadius: 10,
+    color: "#2ff5c8",
+    display: "flex",
+    fontSize: 12,
+    fontWeight: 900,
+    gap: 8,
+    minWidth: 0,
     padding: "9px 11px",
   },
   jobPanel: {
