@@ -33,7 +33,9 @@ type WorkflowGuideCanvasProps = {
   dataOriginLabel?: string;
   dirtyNodeIds?: string[];
   job: IsoNodeWorkflowJobPayload | null;
+  onApplyPlan?: () => void;
   onChooseWorkFolder?: () => void;
+  onExportPlan?: () => void;
   onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
   onRequestSafeRun?: () => void;
@@ -57,6 +59,7 @@ type WorkflowGuideCanvasProps = {
   runLog: IsoNodeWorkflowRunLog | null;
   selectedNodeId?: string;
   selectedRowId?: string;
+  workbenchActionBusy?: "" | "apply" | "export";
   workflowInputs: Record<string, unknown>;
 };
 
@@ -106,8 +109,10 @@ type GuideNodeData = {
   meta?: string;
   nodeId: string;
   notice?: { text: string; tone: "idle" | "ready" | "warn" | "danger"; title?: string };
+  onApplyPlan?: () => void;
   onLoadMore?: () => void;
   onChooseWorkFolder?: () => void;
+  onExportPlan?: () => void;
   onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
   onRequestSafeRun?: () => void;
@@ -137,6 +142,7 @@ type GuideNodeData = {
   title: string;
   tone: "idle" | "ready" | "warn" | "danger";
   visibleCount?: number;
+  workbenchActionBusy?: "" | "apply" | "export";
 };
 
 type GuideNode = Node<GuideNodeData, "guideNode">;
@@ -180,7 +186,9 @@ export function WorkflowGuideCanvas({
   dataOriginLabel = "",
   dirtyNodeIds = [],
   job,
+  onApplyPlan,
   onChooseWorkFolder,
+  onExportPlan,
   onRefreshPreview,
   onRequestSafeRun,
   onRunFrom,
@@ -204,6 +212,7 @@ export function WorkflowGuideCanvas({
   runLog,
   selectedNodeId = "pdf_source",
   selectedRowId = "",
+  workbenchActionBusy = "",
   workflowInputs,
 }: WorkflowGuideCanvasProps) {
   const [visibleLimit, setVisibleLimit] = useState(PAGE_CHUNK_SIZE);
@@ -231,7 +240,9 @@ export function WorkflowGuideCanvas({
     drawingRegion,
     isoPath,
     jobRunning,
+    onApplyPlan,
     onChooseWorkFolder,
+    onExportPlan,
     onLoadMore: () => setVisibleLimit((current) => Math.min(rows.length, current + PAGE_CHUNK_SIZE)),
     onRefreshPreview,
     onRequestSafeRun,
@@ -265,6 +276,7 @@ export function WorkflowGuideCanvas({
     threshold,
     visibleLimit,
     visibleRows,
+    workbenchActionBusy,
     workflowInputs,
     workFolder,
   }), [
@@ -272,7 +284,9 @@ export function WorkflowGuideCanvas({
     drawingRegion,
     isoPath,
     jobRunning,
+    onApplyPlan,
     onChooseWorkFolder,
+    onExportPlan,
     onRefreshPreview,
     onRequestSafeRun,
     onRunFrom,
@@ -305,6 +319,7 @@ export function WorkflowGuideCanvas({
     threshold,
     visibleLimit,
     visibleRows,
+    workbenchActionBusy,
     workflowInputs,
     workFolder,
   ]);
@@ -692,16 +707,30 @@ function SummaryBody({ data }: { data: GuideNodeData }) {
 }
 
 function ActionBody({ data }: { data: GuideNodeData }) {
+  const isExport = data.nodeId === "export_csv";
+  const readyCount = Number(data.rows.find((row) => row.label === "可更名" || row.label === "列數")?.value ?? 0);
+  const busy = data.workbenchActionBusy === (isExport ? "export" : "apply");
+  const disabled = busy || (isExport ? !data.onExportPlan : !data.onApplyPlan || readyCount <= 0);
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
-      <button className="action-button nodrag" type="button" onClick={(event) => {
-        event.stopPropagation();
-        data.onRunNode?.(data.nodeId);
-      }}>
-        <SearchCheck size={13} />
-        <span>{data.nodeId === "export_csv" ? "匯出草稿" : "預覽更名"}</span>
+      <button
+        className={isExport ? "action-button nodrag" : "launch-button nodrag"}
+        disabled={disabled}
+        type="button"
+        title={isExport ? "匯出目前命名草稿 CSV。" : "開啟套用確認；確認後才會實際改名 PDF。"}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (isExport) {
+            data.onExportPlan?.();
+          } else {
+            data.onApplyPlan?.();
+          }
+        }}
+      >
+        {isExport ? <SearchCheck size={13} /> : <AlertTriangle size={13} />}
+        <span>{busy ? "處理中" : isExport ? "匯出草稿 CSV" : "開啟套用確認"}</span>
       </button>
     </div>
   );
@@ -758,7 +787,7 @@ function Crop({ children, image, title }: { children?: ReactNode; image?: string
 
 type BuildGuideGraphArgs = Pick<
   WorkflowGuideCanvasProps,
-  "onChooseWorkFolder" | "onPageRoiInputChange" | "onRefreshPreview" | "onRequestSafeRun" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "requestSafeRunEnabled" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
+  "onApplyPlan" | "onChooseWorkFolder" | "onExportPlan" | "onPageRoiInputChange" | "onRefreshPreview" | "onRequestSafeRun" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "requestSafeRunEnabled" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workbenchActionBusy" | "workflowInputs"
 > & {
   dirty: Set<string>;
   drawingRegion: IsoRegion;
@@ -824,7 +853,9 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     icon,
     kind,
     nodeId,
+    onApplyPlan: args.onApplyPlan,
     onChooseWorkFolder: args.onChooseWorkFolder,
+    onExportPlan: args.onExportPlan,
     onLoadMore: args.onLoadMore,
     onPageRoiInputChange: args.onPageRoiInputChange,
     onRefreshPreview: args.onRefreshPreview,
@@ -850,6 +881,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     threshold: args.threshold,
     title,
     tone,
+    workbenchActionBusy: args.workbenchActionBusy,
   });
 
   addNode({

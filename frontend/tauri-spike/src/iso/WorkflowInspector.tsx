@@ -931,7 +931,9 @@ export function WorkflowInspector({
               dataOriginLabel={displayPlanOrigin}
               dirtyNodeIds={dirtyNodeIds}
               job={job}
+              onApplyPlan={() => void applyWorkbenchPlan()}
               onRefreshPreview={refreshGuidePreview}
+              onExportPlan={() => void exportWorkbenchPlan()}
               onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
               onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
               onRunPageTrial={(rowId) => void runPageTrial(rowId)}
@@ -955,6 +957,7 @@ export function WorkflowInspector({
               runLog={runLog}
               selectedNodeId={activeCanvasNodeId}
               selectedRowId={selectedGuideRowId}
+              workbenchActionBusy={workbenchActionBusy}
               workflowInputs={safeInputs}
             />
           )}
