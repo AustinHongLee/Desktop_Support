@@ -942,6 +942,7 @@ export function WorkflowInspector({
               onRunPageTrial={(rowId) => void runPageTrial(rowId)}
               onPageRoiInputChange={handlePageRoiInputChange}
               onChooseWorkFolder={onChooseWorkFolder}
+              onRequestSafeRun={() => void openAndRequestSafeRun()}
               onSelectNode={setSelectedCanvasNodeId}
               onSelectRow={setSelectedGuideRowId}
               onWorkflowInputChange={handleWorkflowInputChange}
@@ -954,6 +955,7 @@ export function WorkflowInspector({
               previewBusy={nodePreviewBusy}
               previewError={previewErrorForCanvas}
               previewLoadingBySourcePath={nodePreviewLoading}
+              requestSafeRunEnabled={Boolean(hasPdfSource && hasIsoSource) && !safeRunBusy && !isWorkflowJobRunning(job)}
               rerunEnabled={canRerun}
               runLog={runLog}
               selectedNodeId={activeCanvasNodeId}

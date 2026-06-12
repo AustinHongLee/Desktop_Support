@@ -36,6 +36,7 @@ type WorkflowGuideCanvasProps = {
   onChooseWorkFolder?: () => void;
   onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
+  onRequestSafeRun?: () => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
   onRunPageTrial?: (rowId: string) => void;
@@ -51,6 +52,7 @@ type WorkflowGuideCanvasProps = {
   previewError?: string;
   previewBySourcePath?: Record<string, IsoPreviewPayload>;
   previewLoadingBySourcePath?: Record<string, boolean>;
+  requestSafeRunEnabled?: boolean;
   rerunEnabled?: boolean;
   runLog: IsoNodeWorkflowRunLog | null;
   selectedNodeId?: string;
@@ -108,6 +110,7 @@ type GuideNodeData = {
   onChooseWorkFolder?: () => void;
   onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
+  onRequestSafeRun?: () => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
   onRunPageTrial?: (rowId: string) => void;
@@ -120,6 +123,7 @@ type GuideNodeData = {
   preview: IsoPreviewPayload | null;
   previewBusy: boolean;
   previewError: string;
+  requestSafeRunEnabled: boolean;
   portIn: string;
   portOut: string;
   rows: Array<{ label: string; tone?: "idle" | "ready" | "warn" | "danger"; value: string }>;
@@ -176,6 +180,7 @@ export function WorkflowGuideCanvas({
   job,
   onChooseWorkFolder,
   onRefreshPreview,
+  onRequestSafeRun,
   onRunFrom,
   onRunNode,
   onRunPageTrial,
@@ -192,6 +197,7 @@ export function WorkflowGuideCanvas({
   previewBusy = false,
   previewError = "",
   previewLoadingBySourcePath = {},
+  requestSafeRunEnabled = false,
   rerunEnabled = false,
   runLog,
   selectedNodeId = "pdf_source",
@@ -226,6 +232,7 @@ export function WorkflowGuideCanvas({
     onChooseWorkFolder,
     onLoadMore: () => setVisibleLimit((current) => Math.min(rows.length, current + PAGE_CHUNK_SIZE)),
     onRefreshPreview,
+    onRequestSafeRun,
     onRunFrom,
     onRunNode,
     onRunPageTrial,
@@ -245,6 +252,7 @@ export function WorkflowGuideCanvas({
     previewBusy,
     previewError,
     previewLoadingBySourcePath,
+    requestSafeRunEnabled,
     rerunEnabled,
     rows,
     runLog,
@@ -264,6 +272,7 @@ export function WorkflowGuideCanvas({
     jobRunning,
     onChooseWorkFolder,
     onRefreshPreview,
+    onRequestSafeRun,
     onRunFrom,
     onRunNode,
     onRunPageTrial,
@@ -283,6 +292,7 @@ export function WorkflowGuideCanvas({
     previewBusy,
     previewError,
     previewLoadingBySourcePath,
+    requestSafeRunEnabled,
     rerunEnabled,
     rows,
     runLog,
@@ -422,6 +432,7 @@ function NodeHeader({ data }: { data: GuideNodeData }) {
 
 function SourceBody({ data }: { data: GuideNodeData }) {
   const hasReadyWorkFolder = data.rows.some((row) => row.label === "工作資料夾" && row.tone === "ready");
+  const canStart = hasReadyWorkFolder && data.requestSafeRunEnabled && Boolean(data.onRequestSafeRun);
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
@@ -438,15 +449,45 @@ function SourceBody({ data }: { data: GuideNodeData }) {
         <FolderOpen size={13} />
         <span>{hasReadyWorkFolder ? "更換工作區" : "選工作區"}</span>
       </button>
+      <button
+        className="action-button nodrag"
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          data.onRequestSafeRun?.();
+        }}
+        disabled={!canStart}
+        title={hasReadyWorkFolder ? "開始載入 ISO、分割 PDF，並產生後續判讀結果。" : "請先選工作區。"}
+      >
+        <RefreshCcw size={13} />
+        <span>開始整理流程</span>
+      </button>
     </div>
   );
 }
 
 function ConfigBody({ data }: { data: GuideNodeData }) {
+  const showSplitAction = data.nodeId === "split" && data.title === "分割工具";
+  const canStartSplit = showSplitAction && data.requestSafeRunEnabled && Boolean(data.onRequestSafeRun);
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
+      {showSplitAction ? (
+        <button
+          className="action-button nodrag"
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onRequestSafeRun?.();
+          }}
+          disabled={!canStartSplit}
+          title="從工作區來源開始跑安全流程，會建立拆頁資料夾並接著產生命名草稿。"
+        >
+          <Layers3 size={13} />
+          <span>開始分割 PDF</span>
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -722,7 +763,7 @@ function Crop({ children, image, title }: { children?: ReactNode; image?: string
 
 type BuildGuideGraphArgs = Pick<
   WorkflowGuideCanvasProps,
-  "onChooseWorkFolder" | "onPageRoiInputChange" | "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
+  "onChooseWorkFolder" | "onPageRoiInputChange" | "onRefreshPreview" | "onRequestSafeRun" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "requestSafeRunEnabled" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
 > & {
   dirty: Set<string>;
   drawingRegion: IsoRegion;
@@ -779,6 +820,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     onLoadMore: args.onLoadMore,
     onPageRoiInputChange: args.onPageRoiInputChange,
     onRefreshPreview: args.onRefreshPreview,
+    onRequestSafeRun: args.jobRunning ? undefined : args.onRequestSafeRun,
     onRunFrom: args.rerunEnabled && !args.jobRunning ? args.onRunFrom : undefined,
     onRunNode: args.rerunEnabled && !args.jobRunning ? args.onRunNode : undefined,
     onRunPageTrial: args.jobRunning ? undefined : args.onRunPageTrial,
@@ -789,6 +831,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     preview: args.preview,
     previewBusy: Boolean(args.previewBusy),
     previewError: args.previewError || "",
+    requestSafeRunEnabled: Boolean(args.requestSafeRunEnabled) && !args.jobRunning,
     portIn: portLabel(kind, "in"),
     portOut: portLabel(kind, "out"),
     rows,
