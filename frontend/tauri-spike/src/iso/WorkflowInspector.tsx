@@ -57,7 +57,7 @@ import { WorkflowCanvas } from "./WorkflowCanvas";
 import { WorkflowRunPlanPanel } from "./components/WorkflowRunPlanPanel";
 import { NodeDetailPanel } from "./workbench/NodeDetailPanel";
 import { NodeWorkbench } from "./workbench/NodeWorkbench";
-import { WorkflowGuideCanvas, type IsoPageRoiDraft, type IsoPageTrial } from "./workbench/WorkflowGuideCanvas";
+import { WorkflowGuideCanvas, type IsoPageTrial } from "./workbench/WorkflowGuideCanvas";
 import { buildNodeCardSummaries } from "./workbench/nodeCards";
 
 const SAFE_WORKFLOW_PATH = "launcher/plugins/iso_tools/workflow/workflows/iso_pdf_safe_poc.workflow.json";
@@ -74,6 +74,7 @@ type WorkflowInspectorProps = {
   setGateVerdict?: (verdict: IsoSwitchoverGateVerdict | null) => void;
   shadowFlagEnabled?: boolean;
   setShadowFlagEnabled?: (enabled: boolean) => void;
+  onChooseWorkFolder?: () => void;
 };
 
 type PreviewLoadOptions = {
@@ -93,6 +94,7 @@ export function WorkflowInspector({
   setGateVerdict,
   shadowFlagEnabled,
   setShadowFlagEnabled,
+  onChooseWorkFolder,
 }: WorkflowInspectorProps) {
   const [expanded, setExpanded] = useState(true);
   const [loaded, setLoaded] = useState(false);
@@ -117,7 +119,6 @@ export function WorkflowInspector({
   const previewFailedRef = useRef(new Set<string>());
   const previewInFlightRef = useRef(new Map<string, number>());
   const previewRequestIdRef = useRef(0);
-  const [pageRoiDrafts, setPageRoiDrafts] = useState<Record<string, IsoPageRoiDraft>>({});
   const [pageTrials, setPageTrials] = useState<Record<string, IsoPageTrial>>({});
   const [pageTrialBusyId, setPageTrialBusyId] = useState("");
   const [overlayInputs, setOverlayInputs] = useState<Record<string, unknown>>({});
@@ -163,7 +164,7 @@ export function WorkflowInspector({
   const selectedCanvasNode = canvasDetailNodes.find((node) => node.node_id === activeCanvasNodeId) ?? null;
   const selectedCanvasSpec = selectedCanvasNode ? specByType.get(selectedCanvasNode.node_type) : undefined;
   const selectedCanvasLog = selectedCanvasNode ? runLog?.nodes?.[selectedCanvasNode.node_id] : undefined;
-  const selectedRun = runs.find((run) => run.run_id === selectedRunId) ?? runs[0] ?? null;
+  const selectedRun = selectedRunId ? runs.find((run) => run.run_id === selectedRunId) ?? null : runs[0] ?? null;
   const summary = job?.result?.side_effect_summary ?? selectedRun?.side_effect_summary ?? runLog?.side_effect_summary;
   const blockedCount = summary?.blocked?.length ?? 0;
   const executedCount = summary?.executed?.length ?? 0;
@@ -220,7 +221,6 @@ export function WorkflowInspector({
     setNodePreviewLoading({});
     previewFailedRef.current.clear();
     previewInFlightRef.current.clear();
-    setPageRoiDrafts({});
     setPageTrials({});
     setPageTrialBusyId("");
   }, [baseInputsKey]);
@@ -236,7 +236,6 @@ export function WorkflowInspector({
     setNodePreviewCache((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
     setNodePreviewFailed((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
     setNodePreviewLoading((previous) => Object.fromEntries(Object.entries(previous).filter(([sourcePath]) => allowed.has(sourcePath))));
-    setPageRoiDrafts((previous) => Object.fromEntries(Object.entries(previous).filter(([rowId]) => previewCacheRows.some((row) => row.id === rowId))));
     for (const sourcePath of Array.from(previewFailedRef.current)) {
       if (!allowed.has(sourcePath)) {
         previewFailedRef.current.delete(sourcePath);
@@ -492,28 +491,42 @@ export function WorkflowInspector({
   }
 
   function handlePageRoiInputChange(rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) {
-    setPageRoiDrafts((previous) => {
-      const current = previous[rowId] ?? {};
-      const next: IsoPageRoiDraft = { ...current };
+    const normalizedValue = (() => {
       if (field === "serial_region") {
-        next.serialRegion = regionOrDefault(value, DEFAULT_SERIAL_REGION);
-      } else if (field === "drawing_region") {
-        next.drawingRegion = regionOrDefault(value, DEFAULT_DRAWING_REGION);
-      } else {
-        const numeric = numberInput(value);
-        next.confidenceThreshold = numeric === "" ? current.confidenceThreshold : numeric;
+        return regionOrDefault(value, DEFAULT_SERIAL_REGION);
       }
-      return { ...previous, [rowId]: next };
-    });
-    setDirtyNodeIds((previous) => mergeUnique(previous, [`roi:${rowId}`, `batch_detect:${rowId}`, "pilot", "roi_dist", "export_csv", "apply_rename"]));
+      if (field === "drawing_region") {
+        return regionOrDefault(value, DEFAULT_DRAWING_REGION);
+      }
+      const numeric = numberInput(value);
+      const current = numberInput(safeInputs.confidence_threshold ?? displayPlan?.source.confidence_threshold);
+      return numeric === "" ? current || 0.7 : numeric;
+    })();
+    setOverlayInputs((previous) => ({ ...previous, [field]: normalizedValue }));
+    setPageTrials({});
+    setDirtyNodeIds((previous) => mergeUnique(previous, dirtyNodesFrom("roi_calib")));
   }
 
-  function pageSerialRegion(rowId: string): IsoRegion {
-    return regionOrDefault(pageRoiDrafts[rowId]?.serialRegion ?? safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
+  function clearPageDirty(rowId: string) {
+    const pageDirtyIds = new Set([`roi:${rowId}`, `batch_detect:${rowId}`]);
+    setDirtyNodeIds((previous) => previous.filter((nodeId) => !pageDirtyIds.has(nodeId)));
   }
 
-  function pageDrawingRegion(rowId: string): IsoRegion {
-    return regionOrDefault(pageRoiDrafts[rowId]?.drawingRegion ?? safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
+  async function clearWorkflowDirtyIfTerminal(next: IsoNodeWorkflowJobPayload) {
+    if (isWorkflowJobRunning(next) || !next.workflow_run_id) {
+      return;
+    }
+    await refreshRuns(next.workflow_run_id);
+    setProjectionRunId(next.workflow_run_id);
+    setDirtyNodeIds([]);
+  }
+
+  function pageSerialRegion(): IsoRegion {
+    return regionOrDefault(safeInputs.serial_region ?? displayPlan?.source.serial_region, DEFAULT_SERIAL_REGION);
+  }
+
+  function pageDrawingRegion(): IsoRegion {
+    return regionOrDefault(safeInputs.drawing_region ?? displayPlan?.source.drawing_region, DEFAULT_DRAWING_REGION);
   }
 
   async function loadPreviewForRow(row: IsoPlanRow, options: PreviewLoadOptions = {}): Promise<IsoPreviewPayload | null> {
@@ -552,8 +565,8 @@ export function WorkflowInspector({
       const payload = await loadIsoPreview({
         source_path: sourcePath,
         detect_serial: Boolean(options.detectSerial),
-        serial_region: pageSerialRegion(row.id),
-        drawing_region: pageDrawingRegion(row.id),
+        serial_region: pageSerialRegion(),
+        drawing_region: pageDrawingRegion(),
       });
       if (previewInFlightRef.current.get(sourcePath) !== requestId) {
         return payload;
@@ -625,6 +638,7 @@ export function WorkflowInspector({
           updatedAt: new Date().toISOString(),
         },
       }));
+      clearPageDirty(rowId);
     } catch (caught) {
       setNodePreviewError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -646,6 +660,7 @@ export function WorkflowInspector({
       });
       updateJob(next);
       setSelectedCanvasNodeId(engineNodeId);
+      await clearWorkflowDirtyIfTerminal(next);
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -665,6 +680,7 @@ export function WorkflowInspector({
       });
       updateJob(next);
       setSelectedCanvasNodeId(engineNodeId);
+      await clearWorkflowDirtyIfTerminal(next);
     } catch (caught) {
       setRunError(caught instanceof Error ? caught.message : String(caught));
     }
@@ -878,7 +894,7 @@ export function WorkflowInspector({
           </div>
         ) : null}
 
-        {job ? (
+        {job && isWorkflowJobRunning(job) ? (
           <div style={styles.jobPanel}>
             <div style={styles.jobHead}>
               <div>
@@ -900,16 +916,11 @@ export function WorkflowInspector({
 
         <NodeWorkbench
           header={(
-            <div style={styles.metrics}>
-              <Metric icon={<Braces size={16} />} label="型錄" value={nodeCatalog ? `${nodeCatalog.node_count}` : "-"} />
-              <Metric
-                icon={graph?.valid ? <CircleCheck size={16} /> : <CircleAlert size={16} />}
-                label="驗證"
-                value={graph ? (graph.valid ? "通過" : `${graph.issues.length}`) : "-"}
-                tone={graph?.valid === false ? "warn" : "ready"}
-              />
-              <Metric icon={<Route size={16} />} label="拓撲" value={graph?.topology?.length ? `${graph.topology.length}` : "-"} />
-              <Metric icon={<ShieldCheck size={16} />} label="副作用" value={`${executedCount} / ${blockedCount}`} tone={blockedCount ? "warn" : "ready"} />
+            <div style={styles.nodeStatusStrip}>
+              <span style={styles.nodeStatusChip}><Braces size={13} />型錄 {nodeCatalog ? `${nodeCatalog.node_count}` : "-"}</span>
+              <span style={graph?.valid === false ? styles.nodeStatusChipWarn : styles.nodeStatusChip}><CircleCheck size={13} />驗證 {graph ? (graph.valid ? "通過" : `${graph.issues.length}`) : "-"}</span>
+              <span style={styles.nodeStatusChip}><Route size={13} />拓撲 {graph?.topology?.length ? `${graph.topology.length}` : "-"}</span>
+              <span style={blockedCount ? styles.nodeStatusChipWarn : styles.nodeStatusChip}><ShieldCheck size={13} />副作用 {executedCount} / {blockedCount}</span>
             </div>
           )}
           canvas={(
@@ -917,15 +928,18 @@ export function WorkflowInspector({
               dataOriginLabel={displayPlanOrigin}
               dirtyNodeIds={dirtyNodeIds}
               job={job}
+              onApplyPlan={() => void applyWorkbenchPlan()}
               onRefreshPreview={refreshGuidePreview}
+              onExportPlan={() => void exportWorkbenchPlan()}
               onRunFrom={(nodeId) => void rerunWorkflowFrom(nodeId)}
               onRunNode={(nodeId) => void rerunWorkflowNode(nodeId)}
               onRunPageTrial={(rowId) => void runPageTrial(rowId)}
               onPageRoiInputChange={handlePageRoiInputChange}
+              onChooseWorkFolder={onChooseWorkFolder}
+              onRequestSafeRun={() => void openAndRequestSafeRun()}
               onSelectNode={setSelectedCanvasNodeId}
               onSelectRow={setSelectedGuideRowId}
               onWorkflowInputChange={handleWorkflowInputChange}
-              pageRoiDrafts={pageRoiDrafts}
               pageTrialBusyId={pageTrialBusyId}
               pageTrials={pageTrials}
               plan={displayPlan}
@@ -934,10 +948,12 @@ export function WorkflowInspector({
               previewBusy={nodePreviewBusy}
               previewError={previewErrorForCanvas}
               previewLoadingBySourcePath={nodePreviewLoading}
+              requestSafeRunEnabled={Boolean(hasPdfSource && hasIsoSource) && !safeRunBusy && !isWorkflowJobRunning(job)}
               rerunEnabled={canRerun}
               runLog={runLog}
               selectedNodeId={activeCanvasNodeId}
               selectedRowId={selectedGuideRowId}
+              workbenchActionBusy={workbenchActionBusy}
               workflowInputs={safeInputs}
             />
           )}
@@ -1979,8 +1995,8 @@ const styles = {
     borderTop: "1px solid rgba(255,255,255,0.08)",
     display: "flex",
     flexDirection: "column",
-    gap: 12,
-    padding: 12,
+    gap: 8,
+    padding: 9,
     minWidth: 0,
   },
   toolbar: {
@@ -2078,6 +2094,43 @@ const styles = {
     gridTemplateColumns: "auto 1fr",
     padding: "10px 12px",
     minWidth: 0,
+  },
+  nodeStatusStrip: {
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 6,
+    minWidth: 0,
+  },
+  nodeStatusChip: {
+    alignItems: "center",
+    background: "rgba(255,255,255,0.028)",
+    border: "1px solid rgba(47,245,200,0.16)",
+    borderRadius: 999,
+    color: "rgba(220,252,244,0.72)",
+    display: "inline-flex",
+    fontSize: 11,
+    fontWeight: 900,
+    gap: 5,
+    lineHeight: 1,
+    minHeight: 24,
+    padding: "4px 8px",
+    whiteSpace: "nowrap",
+  },
+  nodeStatusChipWarn: {
+    alignItems: "center",
+    background: "rgba(255,209,102,0.055)",
+    border: "1px solid rgba(255,209,102,0.26)",
+    borderRadius: 999,
+    color: "#ffd166",
+    display: "inline-flex",
+    fontSize: 11,
+    fontWeight: 900,
+    gap: 5,
+    lineHeight: 1,
+    minHeight: 24,
+    padding: "4px 8px",
+    whiteSpace: "nowrap",
   },
   grid: {
     display: "grid",

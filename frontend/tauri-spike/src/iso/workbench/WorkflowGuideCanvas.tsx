@@ -27,20 +27,24 @@ import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from
 import type { IsoNodeWorkflowJobPayload, IsoNodeWorkflowRunLog, IsoPlanRow, IsoPreviewPayload, IsoRegion, IsoWorkflowPlan } from "../../isoWorkflow";
 import { compactPath, DEFAULT_DRAWING_REGION, DEFAULT_SERIAL_REGION } from "../helpers";
 import { RoiOverlay } from "../components/RoiOverlay";
+import { LiveCrop } from "./LiveCrop";
 
 type WorkflowGuideCanvasProps = {
   dataOriginLabel?: string;
   dirtyNodeIds?: string[];
   job: IsoNodeWorkflowJobPayload | null;
+  onApplyPlan?: () => void;
+  onChooseWorkFolder?: () => void;
+  onExportPlan?: () => void;
   onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
+  onRequestSafeRun?: () => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
   onRunPageTrial?: (rowId: string) => void;
   onSelectNode?: (nodeId: string) => void;
   onSelectRow?: (rowId: string) => void;
   onWorkflowInputChange?: (nodeId: string, field: string, value: unknown) => void;
-  pageRoiDrafts?: Record<string, IsoPageRoiDraft>;
   pageTrialBusyId?: string;
   pageTrials?: Record<string, IsoPageTrial>;
   plan: IsoWorkflowPlan | null;
@@ -49,10 +53,12 @@ type WorkflowGuideCanvasProps = {
   previewError?: string;
   previewBySourcePath?: Record<string, IsoPreviewPayload>;
   previewLoadingBySourcePath?: Record<string, boolean>;
+  requestSafeRunEnabled?: boolean;
   rerunEnabled?: boolean;
   runLog: IsoNodeWorkflowRunLog | null;
   selectedNodeId?: string;
   selectedRowId?: string;
+  workbenchActionBusy?: "" | "apply" | "export";
   workflowInputs: Record<string, unknown>;
 };
 
@@ -62,12 +68,6 @@ export type IsoPageTrial = {
   serial: string;
   sourcePath: string;
   updatedAt: string;
-};
-
-export type IsoPageRoiDraft = {
-  confidenceThreshold?: number;
-  drawingRegion?: IsoRegion;
-  serialRegion?: IsoRegion;
 };
 
 type WorkflowNodeKind =
@@ -102,9 +102,13 @@ type GuideNodeData = {
   meta?: string;
   nodeId: string;
   notice?: { text: string; tone: "idle" | "ready" | "warn" | "danger"; title?: string };
+  onApplyPlan?: () => void;
   onLoadMore?: () => void;
+  onChooseWorkFolder?: () => void;
+  onExportPlan?: () => void;
   onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
+  onRequestSafeRun?: () => void;
   onRunFrom?: (nodeId: string) => void;
   onRunNode?: (nodeId: string) => void;
   onRunPageTrial?: (rowId: string) => void;
@@ -117,6 +121,7 @@ type GuideNodeData = {
   preview: IsoPreviewPayload | null;
   previewBusy: boolean;
   previewError: string;
+  requestSafeRunEnabled: boolean;
   portIn: string;
   portOut: string;
   rows: Array<{ label: string; tone?: "idle" | "ready" | "warn" | "danger"; value: string }>;
@@ -130,12 +135,17 @@ type GuideNodeData = {
   title: string;
   tone: "idle" | "ready" | "warn" | "danger";
   visibleCount?: number;
+  workbenchActionBusy?: "" | "apply" | "export";
 };
 
 type GuideNode = Node<GuideNodeData, "guideNode">;
 
+type GuideCanvasNode = GuideNode;
+
 const PAGE_CHUNK_SIZE = 10;
 const DEFAULT_VIEWPORT = { x: 86, y: 54, zoom: 0.58 };
+const PREVIEW_NODE_GAP_Y = 90;
+const PREVIEW_TO_PAGE_GAP_Y = 210;
 const GUIDE_LAYOUT = {
   actionX: 3540,
   branchX: 360,
@@ -148,8 +158,8 @@ const GUIDE_LAYOUT = {
   sourceX: 0,
   isoY: 30,
   pdfY: 430,
-  rowGapY: 640,
-  rowStartY: 300,
+  rowGapY: 820,
+  rowStartY: 900,
   sourceY: 270,
 } as const;
 
@@ -157,7 +167,11 @@ export function WorkflowGuideCanvas({
   dataOriginLabel = "",
   dirtyNodeIds = [],
   job,
+  onApplyPlan,
+  onChooseWorkFolder,
+  onExportPlan,
   onRefreshPreview,
+  onRequestSafeRun,
   onRunFrom,
   onRunNode,
   onRunPageTrial,
@@ -165,7 +179,6 @@ export function WorkflowGuideCanvas({
   onSelectRow,
   onPageRoiInputChange,
   onWorkflowInputChange,
-  pageRoiDrafts = {},
   pageTrialBusyId = "",
   pageTrials = {},
   plan,
@@ -174,10 +187,12 @@ export function WorkflowGuideCanvas({
   previewBusy = false,
   previewError = "",
   previewLoadingBySourcePath = {},
+  requestSafeRunEnabled = false,
   rerunEnabled = false,
   runLog,
   selectedNodeId = "pdf_source",
   selectedRowId = "",
+  workbenchActionBusy = "",
   workflowInputs,
 }: WorkflowGuideCanvasProps) {
   const [visibleLimit, setVisibleLimit] = useState(PAGE_CHUNK_SIZE);
@@ -205,8 +220,12 @@ export function WorkflowGuideCanvas({
     drawingRegion,
     isoPath,
     jobRunning,
+    onApplyPlan,
+    onChooseWorkFolder,
+    onExportPlan,
     onLoadMore: () => setVisibleLimit((current) => Math.min(rows.length, current + PAGE_CHUNK_SIZE)),
     onRefreshPreview,
+    onRequestSafeRun,
     onRunFrom,
     onRunNode,
     onRunPageTrial,
@@ -214,7 +233,6 @@ export function WorkflowGuideCanvas({
     onSelectRow,
     onPageRoiInputChange,
     onWorkflowInputChange,
-    pageRoiDrafts,
     pageTrialBusyId,
     pageTrials,
     pageFolder,
@@ -226,6 +244,7 @@ export function WorkflowGuideCanvas({
     previewBusy,
     previewError,
     previewLoadingBySourcePath,
+    requestSafeRunEnabled,
     rerunEnabled,
     rows,
     runLog,
@@ -236,6 +255,7 @@ export function WorkflowGuideCanvas({
     threshold,
     visibleLimit,
     visibleRows,
+    workbenchActionBusy,
     workflowInputs,
     workFolder,
   }), [
@@ -243,7 +263,11 @@ export function WorkflowGuideCanvas({
     drawingRegion,
     isoPath,
     jobRunning,
+    onApplyPlan,
+    onChooseWorkFolder,
+    onExportPlan,
     onRefreshPreview,
+    onRequestSafeRun,
     onRunFrom,
     onRunNode,
     onRunPageTrial,
@@ -251,7 +275,6 @@ export function WorkflowGuideCanvas({
     onSelectRow,
     onPageRoiInputChange,
     onWorkflowInputChange,
-    pageRoiDrafts,
     pageTrialBusyId,
     pageTrials,
     pageFolder,
@@ -263,6 +286,7 @@ export function WorkflowGuideCanvas({
     previewBusy,
     previewError,
     previewLoadingBySourcePath,
+    requestSafeRunEnabled,
     rerunEnabled,
     rows,
     runLog,
@@ -273,6 +297,7 @@ export function WorkflowGuideCanvas({
     threshold,
     visibleLimit,
     visibleRows,
+    workbenchActionBusy,
     workflowInputs,
     workFolder,
   ]);
@@ -282,14 +307,7 @@ export function WorkflowGuideCanvas({
       <div style={styles.toolbar}>
         <div style={styles.toolbarText}>
           <span>ComfyUI 風格節點畫布</span>
-          <strong>工作區分叉 · ISO / PDF 匯流 · 每頁 ROI · 判讀輸出</strong>
-          <div style={styles.flowLegend}>
-            <span style={styles.lanePill}>來源</span>
-            <span style={styles.lanePill}>設定</span>
-            <span style={styles.lanePill}>處理</span>
-            <span style={styles.lanePill}>結果</span>
-            <span style={styles.lanePill}>輸出</span>
-          </div>
+          <strong>工作區分叉 · ISO/PDF 匯流 · 每頁 ROI · 判讀輸出</strong>
           <div style={styles.edgeLegend}>
             <span style={styles.edgeLegendItem}><i style={{ ...styles.edgeDot, background: edgeColor("table") }} />表格</span>
             <span style={styles.edgeLegendItem}><i style={{ ...styles.edgeDot, background: edgeColor("pdf") }} />PDF / 頁面</span>
@@ -312,7 +330,7 @@ export function WorkflowGuideCanvas({
         </div>
       </div>
       <div style={styles.canvasShell}>
-        <ReactFlow<GuideNode, Edge>
+        <ReactFlow<GuideCanvasNode, Edge>
           key={viewResetKey}
           nodes={graph.nodes}
           edges={graph.edges}
@@ -324,6 +342,9 @@ export function WorkflowGuideCanvas({
           onlyRenderVisibleElements
           deleteKeyCode={null}
           onNodeClick={(_event, node) => {
+            if (node.type !== "guideNode") {
+              return;
+            }
             node.data.onSelectNode?.(node.data.nodeId);
             if (node.data.row) {
               node.data.onSelectRow?.(node.data.row.id);
@@ -380,19 +401,63 @@ function NodeHeader({ data }: { data: GuideNodeData }) {
 }
 
 function SourceBody({ data }: { data: GuideNodeData }) {
+  const hasReadyWorkFolder = data.rows.some((row) => row.label === "工作資料夾" && row.tone === "ready");
+  const canStart = hasReadyWorkFolder && data.requestSafeRunEnabled && Boolean(data.onRequestSafeRun);
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
+      <button
+        className="action-button nodrag"
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          data.onChooseWorkFolder?.();
+        }}
+        disabled={!data.onChooseWorkFolder}
+      >
+        <FolderOpen size={13} />
+        <span>{hasReadyWorkFolder ? "更換工作區" : "選工作區"}</span>
+      </button>
+      <button
+        className="action-button nodrag"
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          data.onRequestSafeRun?.();
+        }}
+        disabled={!canStart}
+        title={hasReadyWorkFolder ? "開始載入 ISO、分割 PDF，並產生後續判讀結果。" : "請先選工作區。"}
+      >
+        <RefreshCcw size={13} />
+        <span>開始整理流程</span>
+      </button>
     </div>
   );
 }
 
 function ConfigBody({ data }: { data: GuideNodeData }) {
+  const showSplitAction = data.nodeId === "split" && data.title === "分割工具";
+  const canStartSplit = showSplitAction && data.requestSafeRunEnabled && Boolean(data.onRequestSafeRun);
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
+      {showSplitAction ? (
+        <button
+          className="action-button nodrag"
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onRequestSafeRun?.();
+          }}
+          disabled={!canStartSplit}
+          title="從工作區來源開始跑安全流程，會建立拆頁資料夾並接著產生命名草稿。"
+        >
+          <Layers3 size={13} />
+          <span>開始分割 PDF</span>
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -457,6 +522,7 @@ function RoiBody({ data }: { data: GuideNodeData }) {
           {lowConfidence ? "低信心" : trial ? "已有試判" : "待試判"}
         </em>
       </div>
+      <span style={styles.sharedRoiNotice}>ROI 為全部頁共用；調整任一頁會讓批次判讀與更名結果待重跑。</span>
       <div
         className="nodrag"
         style={styles.roiPreview}
@@ -517,8 +583,12 @@ function RoiBody({ data }: { data: GuideNodeData }) {
           <span>{data.pageTrialBusy ? "判讀中" : trial ? `${trial.serial || "未取得"} (${Math.round(trial.confidence * 100)}%)` : "尚未執行"}</span>
         </div>
         <div style={styles.cropGrid}>
-          <Crop title="流水號裁切" image={selected ? data.preview?.serial_crop.image : ""} />
-          <Crop title="圖號裁切" image={selected ? data.preview?.drawing_crop.image : ""} />
+          <Crop title="流水號裁切">
+            <LiveCrop image={selected?.page.image} region={data.serialRegion} />
+          </Crop>
+          <Crop title="圖號裁切">
+            <LiveCrop image={selected?.page.image} region={data.drawingRegion} />
+          </Crop>
         </div>
         <button
           className="action-button"
@@ -529,14 +599,6 @@ function RoiBody({ data }: { data: GuideNodeData }) {
           <span>重設目前 ROI</span>
         </button>
         <div style={styles.actionGrid}>
-          <button className="action-button" type="button" disabled={!row || !data.onRefreshPreview} title="只重新整理本頁預覽與裁切，不執行文字判讀。" onClick={() => {
-            if (row) {
-              data.onRefreshPreview?.(row.id);
-            }
-          }}>
-            <Eye size={13} />
-            <span>只更新預覽</span>
-          </button>
           <button className="action-button" type="button" disabled={!row || data.pageTrialBusy || !data.onRunPageTrial} title="只對目前頁做一次判讀，結果先留在畫面上，不改批次結果。" onClick={() => {
             if (row) {
               data.onRunPageTrial?.(row.id);
@@ -577,6 +639,12 @@ function ResultBody({ data }: { data: GuideNodeData }) {
           <span>{Math.round(data.preview.vision.confidence * 100)}%</span>
         </div>
       ) : null}
+      {data.active && data.preview ? (
+        <div style={styles.resultEvidence}>
+          <Crop title="判讀時流水號" image={data.preview.serial_crop.image} />
+          <Crop title="判讀時圖號" image={data.preview.drawing_crop.image} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -600,16 +668,36 @@ function SummaryBody({ data }: { data: GuideNodeData }) {
 }
 
 function ActionBody({ data }: { data: GuideNodeData }) {
+  const isExport = data.nodeId === "export_csv";
+  const readyCount = Number(data.rows.find((row) => row.label === "可更名" || row.label === "列數")?.value ?? 0);
+  const busy = data.workbenchActionBusy === (isExport ? "export" : "apply");
+  const dirtyNeedsRerun = Boolean(data.dirty);
+  const disabled = busy || (dirtyNeedsRerun ? !data.onRunFrom : isExport ? !data.onExportPlan : !data.onApplyPlan || readyCount <= 0);
+  const label = busy ? "處理中" : dirtyNeedsRerun ? "先重跑下游" : isExport ? "匯出草稿 CSV" : "開啟套用確認";
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
-      <button className="action-button nodrag" type="button" onClick={(event) => {
-        event.stopPropagation();
-        data.onRunNode?.(data.nodeId);
-      }}>
-        <SearchCheck size={13} />
-        <span>{data.nodeId === "export_csv" ? "匯出草稿" : "預覽更名"}</span>
+      <button
+        className={isExport ? "action-button nodrag" : "launch-button nodrag"}
+        disabled={disabled}
+        type="button"
+        title={dirtyNeedsRerun ? "目前參數已變更，需先重跑判讀、Pilot 與命名結果。" : isExport ? "匯出目前命名草稿 CSV。" : "開啟套用確認；確認後才會實際改名 PDF。"}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (dirtyNeedsRerun) {
+            data.onRunFrom?.("batch_detect");
+            return;
+          }
+          if (isExport) {
+            data.onExportPlan?.();
+          } else {
+            data.onApplyPlan?.();
+          }
+        }}
+      >
+        {dirtyNeedsRerun ? <RefreshCcw size={13} /> : isExport ? <SearchCheck size={13} /> : <AlertTriangle size={13} />}
+        <span>{label}</span>
       </button>
     </div>
   );
@@ -655,18 +743,18 @@ function Notice({ notice }: { notice?: GuideNodeData["notice"] }) {
   );
 }
 
-function Crop({ image, title }: { image?: string; title: string }) {
+function Crop({ children, image, title }: { children?: ReactNode; image?: string; title: string }) {
   return (
     <div style={styles.crop}>
       <span>{title}</span>
-      {image ? <img src={image} alt={title} /> : <div />}
+      {children ?? (image ? <img src={image} alt={title} style={styles.cropImage} /> : <div />)}
     </div>
   );
 }
 
 type BuildGuideGraphArgs = Pick<
   WorkflowGuideCanvasProps,
-  "onPageRoiInputChange" | "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
+  "onApplyPlan" | "onChooseWorkFolder" | "onExportPlan" | "onPageRoiInputChange" | "onRefreshPreview" | "onRequestSafeRun" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "requestSafeRunEnabled" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workbenchActionBusy" | "workflowInputs"
 > & {
   dirty: Set<string>;
   drawingRegion: IsoRegion;
@@ -685,9 +773,20 @@ type BuildGuideGraphArgs = Pick<
   workFolder: string;
 };
 
-function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: GuideNode[] } {
-  const nodes: GuideNode[] = [];
+type RuntimeGuideLayout = {
+  isoPreviewHeight: number;
+  isoPreviewRows: GuideNodeData["rows"];
+  isoPreviewY: number;
+  rowStartY: number;
+  splitPreviewHeight: number;
+  splitPreviewRows: GuideNodeData["rows"];
+  splitPreviewY: number;
+};
+
+function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: GuideCanvasNode[] } {
+  const nodes: GuideCanvasNode[] = [];
   const edges: Edge[] = [];
+  const layout = buildRuntimeLayout(args);
   const addNode = (node: Omit<GuideNode, "type">) => {
     nodes.push({ ...node, type: "guideNode" });
   };
@@ -711,9 +810,13 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     icon,
     kind,
     nodeId,
+    onApplyPlan: args.onApplyPlan,
+    onChooseWorkFolder: args.onChooseWorkFolder,
+    onExportPlan: args.onExportPlan,
     onLoadMore: args.onLoadMore,
     onPageRoiInputChange: args.onPageRoiInputChange,
     onRefreshPreview: args.onRefreshPreview,
+    onRequestSafeRun: args.jobRunning ? undefined : args.onRequestSafeRun,
     onRunFrom: args.rerunEnabled && !args.jobRunning ? args.onRunFrom : undefined,
     onRunNode: args.rerunEnabled && !args.jobRunning ? args.onRunNode : undefined,
     onRunPageTrial: args.jobRunning ? undefined : args.onRunPageTrial,
@@ -724,6 +827,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     preview: args.preview,
     previewBusy: Boolean(args.previewBusy),
     previewError: args.previewError || "",
+    requestSafeRunEnabled: Boolean(args.requestSafeRunEnabled) && !args.jobRunning,
     portIn: portLabel(kind, "in"),
     portOut: portLabel(kind, "out"),
     rows,
@@ -734,6 +838,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     threshold: args.threshold,
     title,
     tone,
+    workbenchActionBusy: args.workbenchActionBusy,
   });
 
   addNode({
@@ -744,7 +849,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       meta: "流程入口",
       notice: args.workFolder || args.pdfPath || args.isoPath
         ? { text: "來源已連到下游節點", tone: "ready", title: "工作區會同時餵給 ISO 清單與合併 PDF 分支。" }
-        : { text: "從這裡開始：點選此卡設定工作資料夾", tone: "warn", title: "選好工作資料夾後，ISO 清單與 PDF 分支會依序亮起。" },
+        : { text: "從這裡開始：點選此卡設定工作區。", tone: "warn", title: "選好工作區後，ISO 清單與 PDF 分支會依序亮起。" },
       portIn: "使用者選擇",
       portOut: "來源路徑",
     },
@@ -760,7 +865,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       ]),
       notice: args.isoPath || args.source?.iso_list
         ? undefined
-        : { text: "等待工作區提供 ISO 清單", tone: "idle" },
+        : { text: args.workFolder ? "工作區內找不到 ISO 清單，請在來源卡換工作區或到工作台指定檔案。" : "先在左側來源卡選工作區，找到後會自動載入 ISO 清單。", tone: args.workFolder ? "warn" : "idle" },
       portIn: "清單檔",
       portOut: "表格資料",
     },
@@ -807,9 +912,9 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   });
   addNode({
     id: "iso_preview",
-    position: { x: GUIDE_LAYOUT.pageX, y: GUIDE_LAYOUT.isoY + 185 },
+    position: { x: GUIDE_LAYOUT.pageX, y: layout.isoPreviewY },
     data: {
-      ...common("load_table", "listPreview", "ISO 預覽", <Eye size={17} />, args.source?.record_count ? "ready" : "idle", isoPreviewRows(args.source)),
+      ...common("load_table", "listPreview", "ISO 預覽", <Eye size={17} />, args.source?.record_count ? "ready" : "idle", layout.isoPreviewRows),
       notice: args.source?.record_count ? undefined : { text: "載入後會列出前幾筆清單欄位", tone: "idle" },
       portIn: "命名規則",
       portOut: "ISO 候選",
@@ -827,7 +932,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       ]),
       notice: args.pdfPath || args.source?.combine_pdf
         ? undefined
-        : { text: "等待工作區提供合併 PDF", tone: "idle" },
+        : { text: args.workFolder ? "工作區內找不到合併 PDF，請在來源卡換工作區或到工作台指定檔案。" : "先在左側來源卡選工作區，找到後會自動帶入合併 PDF。", tone: args.workFolder ? "warn" : "idle" },
       portIn: "PDF 檔",
       portOut: "合併頁面",
     },
@@ -842,16 +947,16 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
       ]),
       notice: args.source?.page_folder || args.pageFolder
         ? { text: "拆頁檔可沿用或重新產生", tone: "ready" }
-        : { text: "會寫入單頁 PDF 到拆頁資料夾", tone: "warn" },
+        : { text: args.pdfPath || args.source?.combine_pdf ? "按「開始分割 PDF」後，這裡會寫入單頁 PDF 到拆頁資料夾。" : "先讓合併 PDF 卡找到檔案，再回到這張卡分割。", tone: "warn" },
       portIn: "合併頁面",
       portOut: "單頁 PDF",
     },
   });
   addNode({
     id: "split_preview",
-    position: { x: GUIDE_LAYOUT.pageX, y: GUIDE_LAYOUT.pdfY },
+    position: { x: GUIDE_LAYOUT.pageX, y: layout.splitPreviewY },
     data: {
-      ...common("split", "listPreview", "拆頁預覽", <Eye size={17} />, args.rows.length ? "ready" : "idle", args.rows.slice(0, 5).map((row) => ({ label: `P${row.page}`, value: row.source_name }))),
+      ...common("split", "listPreview", "拆頁預覽", <Eye size={17} />, args.rows.length ? "ready" : "idle", layout.splitPreviewRows),
       notice: args.rows.length ? undefined : { text: "分割完成後會列出前幾頁", tone: "idle" },
       portIn: "單頁 PDF",
       portOut: "頁面卡",
@@ -871,18 +976,18 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   if (!args.visibleRows.length) {
     addNode({
       id: "page_waiting",
-      position: { x: GUIDE_LAYOUT.pageX + 390, y: GUIDE_LAYOUT.pdfY },
+      position: { x: GUIDE_LAYOUT.pageX + 390, y: layout.rowStartY },
       data: {
         ...common("split", "page", "P001 頁面", <FileText size={17} />, "idle", [
           { label: "來源", value: "等待拆頁" },
           { label: "狀態", value: "準備顯示前 10 頁", tone: "idle" },
         ]),
-        notice: { text: "合併 PDF 分割後，這裡會展開頁面卡", tone: "idle" },
+        notice: { text: "合併 PDF 分割後，這裡會展開頁面卡。", tone: "idle" },
       },
     });
     addNode({
       id: "roi_waiting",
-      position: { x: GUIDE_LAYOUT.roiX, y: GUIDE_LAYOUT.pdfY - 120 },
+      position: { x: GUIDE_LAYOUT.roiX, y: layout.rowStartY - 110 },
       data: {
         ...common(
           "roi_calib",
@@ -897,7 +1002,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     });
     addNode({
       id: "result_waiting",
-      position: { x: GUIDE_LAYOUT.resultX, y: GUIDE_LAYOUT.pdfY },
+      position: { x: GUIDE_LAYOUT.resultX, y: layout.rowStartY },
       data: {
         ...common("batch_detect", "result", "P001 判讀結果", <SearchCheck size={17} />, "idle", [
           { label: "流水號", value: "待判讀", tone: "idle" },
@@ -908,7 +1013,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     });
     addNode({
       id: "output_waiting",
-      position: { x: GUIDE_LAYOUT.outputX, y: GUIDE_LAYOUT.pdfY },
+      position: { x: GUIDE_LAYOUT.outputX, y: layout.rowStartY },
       data: {
         ...common("batch_detect", "output", "P001 命名合成", <FileText size={17} />, "idle", [
           { label: "ISO 圖號", value: "等待清單", tone: "idle" },
@@ -924,15 +1029,14 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   }
 
   args.visibleRows.forEach((row, index) => {
-    const y = GUIDE_LAYOUT.rowStartY + index * GUIDE_LAYOUT.rowGapY;
+    const y = layout.rowStartY + index * GUIDE_LAYOUT.rowGapY;
     const pageId = `page_${row.page}`;
     const roiId = `roi_${row.page}`;
     const resultId = `result_${row.page}`;
     const outputId = `output_${row.page}`;
-    const pageDraft = args.pageRoiDrafts?.[row.id] ?? {};
-    const rowSerialRegion = pageDraft.serialRegion ?? args.serialRegion;
-    const rowDrawingRegion = pageDraft.drawingRegion ?? args.drawingRegion;
-    const rowThreshold = pageDraft.confidenceThreshold ?? args.threshold;
+    const rowSerialRegion = args.serialRegion;
+    const rowDrawingRegion = args.drawingRegion;
+    const rowThreshold = args.threshold;
     const rowDirty = args.dirty.has(`roi:${row.id}`) || args.dirty.has(`batch_detect:${row.id}`);
     const globalPreviewMatches = args.preview?.source_path === row.source_path;
     const rowPreview = args.previewBySourcePath?.[row.source_path] ?? (globalPreviewMatches ? args.preview : null);
@@ -979,7 +1083,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
           { label: "信心", value: row.confidence ? `${Math.round(row.confidence * 100)}%` : "未判讀", tone: lowConfidence ? "warn" : row.confidence ? "ready" : "idle" },
           { label: "訊息", value: row.vision_message || "-" },
         ]),
-        notice: trialNotice(args.pageTrials?.[row.id], row),
+        notice: staleResultNotice(args.dirty.has("roi_calib") || args.dirty.has("batch_detect") || rowDirty, args.pageTrials?.[row.id], row),
       },
     });
     addNode({
@@ -1054,7 +1158,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   if (args.visibleLimit < args.rows.length) {
     addNode({
       id: "load_more",
-      position: { x: GUIDE_LAYOUT.pageX + 390, y: GUIDE_LAYOUT.rowStartY + args.visibleRows.length * GUIDE_LAYOUT.rowGapY },
+      position: { x: GUIDE_LAYOUT.pageX + 390, y: layout.rowStartY + args.visibleRows.length * GUIDE_LAYOUT.rowGapY },
       data: {
         ...common("split", "more", "更多頁面", <MoreHorizontal size={17} />, "idle", []),
         rowCount: args.rows.length,
@@ -1065,6 +1169,31 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
   }
 
   return { edges, nodes };
+}
+
+function buildRuntimeLayout(args: BuildGuideGraphArgs): RuntimeGuideLayout {
+  const isoPreviewRowsValue = isoPreviewRows(args.source);
+  const splitPreviewRowsValue = args.rows.slice(0, 5).map((row) => ({ label: `P${row.page}`, value: row.source_name }));
+  const isoPreviewY = GUIDE_LAYOUT.isoY + 185;
+  const isoPreviewHeight = listPreviewNodeHeight(isoPreviewRowsValue.length, !args.source?.record_count);
+  const splitPreviewY = Math.max(GUIDE_LAYOUT.pdfY, isoPreviewY + isoPreviewHeight + PREVIEW_NODE_GAP_Y);
+  const splitPreviewHeight = listPreviewNodeHeight(splitPreviewRowsValue.length, !args.rows.length);
+  const rowStartY = Math.max(GUIDE_LAYOUT.rowStartY, splitPreviewY + splitPreviewHeight + PREVIEW_TO_PAGE_GAP_Y);
+  return {
+    isoPreviewHeight,
+    isoPreviewRows: isoPreviewRowsValue,
+    isoPreviewY,
+    rowStartY,
+    splitPreviewHeight,
+    splitPreviewRows: splitPreviewRowsValue,
+    splitPreviewY,
+  };
+}
+
+function listPreviewNodeHeight(rowCount: number, hasNotice: boolean): number {
+  const visibleRows = Math.max(1, rowCount);
+  const noticeHeight = hasNotice ? 42 : 0;
+  return Math.max(220, 108 + noticeHeight + visibleRows * 58);
 }
 
 function nodeWidth(size: WorkflowNodeSize): number {
@@ -1221,6 +1350,17 @@ function trialNotice(trial: IsoPageTrial | undefined, row: IsoPlanRow): GuideNod
   };
 }
 
+function staleResultNotice(dirty: boolean, trial: IsoPageTrial | undefined, row: IsoPlanRow): GuideNodeData["notice"] | undefined {
+  if (dirty) {
+    return {
+      text: "結果基於舊 ROI/參數，請先重跑下游。",
+      tone: "warn",
+      title: "ROI、欄位或格式已變更，目前顯示的是上一次批次結果。",
+    };
+  }
+  return trialNotice(trial, row);
+}
+
 function regionConfigured(region: IsoRegion, fallback: IsoRegion): boolean {
   return (
     Math.abs(region.left - fallback.left) > 0.005 ||
@@ -1319,7 +1459,7 @@ const styles = {
   actionGrid: {
     display: "grid",
     gap: 6,
-    gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     minWidth: 0,
   },
   canvasShell: {
@@ -1348,27 +1488,32 @@ const styles = {
     gridTemplateColumns: "1fr 1fr",
     minWidth: 0,
   },
+  cropImage: {
+    display: "block",
+    maxHeight: 120,
+    objectFit: "contain",
+    width: "100%",
+  },
   edgeDot: {
     borderRadius: 999,
     display: "inline-block",
-    height: 7,
-    width: 18,
+    height: 5,
+    width: 14,
   },
   edgeLegend: {
     alignItems: "center",
     display: "flex",
     flexWrap: "wrap",
-    gap: 7,
-    marginTop: 3,
+    gap: 6,
     minWidth: 0,
   },
   edgeLegendItem: {
     alignItems: "center",
     color: "rgba(220,252,244,0.58)",
     display: "inline-flex",
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: 900,
-    gap: 5,
+    gap: 4,
     whiteSpace: "nowrap",
   },
   handle: {
@@ -1377,14 +1522,6 @@ const styles = {
     height: 9,
     zIndex: 5,
     width: 9,
-  },
-  flowLegend: {
-    alignItems: "center",
-    display: "flex",
-    flexWrap: "wrap",
-    gap: 6,
-    marginTop: 4,
-    minWidth: 0,
   },
   keyRow: {
     background: "rgba(0,0,0,0.18)",
@@ -1399,15 +1536,6 @@ const styles = {
     display: "grid",
     gap: 6,
     minWidth: 0,
-  },
-  lanePill: {
-    background: "rgba(47,245,200,0.07)",
-    border: "1px solid rgba(47,245,200,0.18)",
-    borderRadius: 999,
-    color: "rgba(220,252,244,0.70)",
-    fontSize: 11,
-    fontWeight: 900,
-    padding: "3px 7px",
   },
   moreHint: {
     color: "rgba(220,235,228,0.62)",
@@ -1580,6 +1708,18 @@ const styles = {
     minWidth: 0,
     padding: "7px 8px",
   },
+  sharedRoiNotice: {
+    background: "rgba(255,209,102,0.08)",
+    border: "1px solid rgba(255,209,102,0.22)",
+    borderRadius: 7,
+    color: "#ffd166",
+    display: "block",
+    fontSize: 11,
+    fontWeight: 900,
+    gridColumn: "1 / -1",
+    lineHeight: 1.35,
+    padding: "6px 8px",
+  },
   roiTrialBox: {
     alignItems: "center",
     background: "rgba(47,245,200,0.07)",
@@ -1593,6 +1733,12 @@ const styles = {
     gridTemplateColumns: "auto auto minmax(0, 1fr)",
     minWidth: 0,
     padding: "7px 8px",
+  },
+  resultEvidence: {
+    display: "grid",
+    gap: 6,
+    gridTemplateColumns: "1fr 1fr",
+    minWidth: 0,
   },
   segment: {
     background: "rgba(255,255,255,0.035)",
@@ -1618,13 +1764,13 @@ const styles = {
     gridTemplateColumns: "1fr 1fr",
   },
   shell: {
-    background: "rgba(3,10,8,0.72)",
-    border: "1px solid rgba(47,245,200,0.22)",
-    borderRadius: 10,
+    background: "rgba(3,10,8,0.58)",
+    border: "1px solid rgba(47,245,200,0.16)",
+    borderRadius: 8,
     display: "grid",
-    gap: 10,
+    gap: 6,
     minWidth: 0,
-    padding: 10,
+    padding: 7,
   },
   sliderRow: {
     alignItems: "center",
@@ -1646,33 +1792,35 @@ const styles = {
   },
   toolbar: {
     alignItems: "center",
-    background: "rgba(47,245,200,0.07)",
-    border: "1px solid rgba(47,245,200,0.16)",
-    borderRadius: 9,
+    background: "rgba(47,245,200,0.035)",
+    border: "1px solid rgba(47,245,200,0.10)",
+    borderRadius: 7,
     display: "flex",
-    gap: 12,
+    gap: 8,
     justifyContent: "space-between",
     minWidth: 0,
-    padding: "9px 11px",
+    padding: "6px 8px",
   },
   toolbarActions: {
     alignItems: "center",
     display: "flex",
     flexWrap: "wrap",
-    gap: 7,
+    gap: 6,
     justifyContent: "flex-end",
   },
   toolbarPill: {
     border: "1px solid rgba(47,245,200,0.22)",
     borderRadius: 999,
     color: "#2ff5c8",
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 900,
-    padding: "5px 9px",
+    padding: "3px 7px",
   },
   toolbarText: {
-    display: "grid",
-    gap: 2,
+    alignItems: "center",
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 8,
     minWidth: 0,
   },
   trialReadyBox: {

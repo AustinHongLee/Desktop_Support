@@ -1765,6 +1765,7 @@ export function IsoBoard() {
           setGateVerdict={setGateVerdict}
           shadowFlagEnabled={shadowFlagEnabled}
           setShadowFlagEnabled={setShadowFlagEnabled}
+          onChooseWorkFolder={chooseWorkFolder}
           registerSafeRun={(runner) => {
             workflowSafeRunRef.current = runner;
             if (pendingWorkflowVerify) {
