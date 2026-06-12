@@ -33,6 +33,7 @@ type WorkflowGuideCanvasProps = {
   dataOriginLabel?: string;
   dirtyNodeIds?: string[];
   job: IsoNodeWorkflowJobPayload | null;
+  onChooseWorkFolder?: () => void;
   onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
   onRunFrom?: (nodeId: string) => void;
@@ -104,6 +105,7 @@ type GuideNodeData = {
   nodeId: string;
   notice?: { text: string; tone: "idle" | "ready" | "warn" | "danger"; title?: string };
   onLoadMore?: () => void;
+  onChooseWorkFolder?: () => void;
   onPageRoiInputChange?: (rowId: string, field: "drawing_region" | "serial_region" | "confidence_threshold", value: unknown) => void;
   onRefreshPreview?: (rowId: string) => void;
   onRunFrom?: (nodeId: string) => void;
@@ -172,6 +174,7 @@ export function WorkflowGuideCanvas({
   dataOriginLabel = "",
   dirtyNodeIds = [],
   job,
+  onChooseWorkFolder,
   onRefreshPreview,
   onRunFrom,
   onRunNode,
@@ -220,6 +223,7 @@ export function WorkflowGuideCanvas({
     drawingRegion,
     isoPath,
     jobRunning,
+    onChooseWorkFolder,
     onLoadMore: () => setVisibleLimit((current) => Math.min(rows.length, current + PAGE_CHUNK_SIZE)),
     onRefreshPreview,
     onRunFrom,
@@ -258,6 +262,7 @@ export function WorkflowGuideCanvas({
     drawingRegion,
     isoPath,
     jobRunning,
+    onChooseWorkFolder,
     onRefreshPreview,
     onRunFrom,
     onRunNode,
@@ -416,10 +421,23 @@ function NodeHeader({ data }: { data: GuideNodeData }) {
 }
 
 function SourceBody({ data }: { data: GuideNodeData }) {
+  const hasReadyWorkFolder = data.rows.some((row) => row.label === "工作資料夾" && row.tone === "ready");
   return (
     <div style={styles.nodeBody}>
       <Notice notice={data.notice} />
       <KeyRows rows={data.rows} />
+      <button
+        className="action-button nodrag"
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          data.onChooseWorkFolder?.();
+        }}
+        disabled={!data.onChooseWorkFolder}
+      >
+        <FolderOpen size={13} />
+        <span>{hasReadyWorkFolder ? "更換工作區" : "選工作區"}</span>
+      </button>
     </div>
   );
 }
@@ -704,7 +722,7 @@ function Crop({ children, image, title }: { children?: ReactNode; image?: string
 
 type BuildGuideGraphArgs = Pick<
   WorkflowGuideCanvasProps,
-  "onPageRoiInputChange" | "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
+  "onChooseWorkFolder" | "onPageRoiInputChange" | "onRefreshPreview" | "onRunFrom" | "onRunNode" | "onRunPageTrial" | "onSelectNode" | "onSelectRow" | "onWorkflowInputChange" | "pageRoiDrafts" | "pageTrialBusyId" | "pageTrials" | "plan" | "preview" | "previewBusy" | "previewError" | "previewBySourcePath" | "previewLoadingBySourcePath" | "rerunEnabled" | "runLog" | "selectedNodeId" | "selectedRowId" | "workflowInputs"
 > & {
   dirty: Set<string>;
   drawingRegion: IsoRegion;
@@ -757,6 +775,7 @@ function buildGuideGraph(args: BuildGuideGraphArgs): { edges: Edge[]; nodes: Gui
     icon,
     kind,
     nodeId,
+    onChooseWorkFolder: args.onChooseWorkFolder,
     onLoadMore: args.onLoadMore,
     onPageRoiInputChange: args.onPageRoiInputChange,
     onRefreshPreview: args.onRefreshPreview,
